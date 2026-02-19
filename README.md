@@ -23,7 +23,7 @@ NanoClaw gives you the same core functionality in a codebase you can understand 
 ## Quick Start
 
 ```bash
-git clone https://github.com/gavrielc/nanoclaw.git
+git clone https://github.com/qwibitai/nanoclaw.git
 cd nanoclaw
 claude
 ```
