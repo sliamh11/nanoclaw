@@ -296,86 +296,20 @@ if (registeredGroups[chatJid]) {
 }
 ```
 
-### Step 6: Fix Orphan Container Cleanup (CRITICAL)
-
-**This step is essential.** When the NanoClaw service restarts (e.g., `launchctl kickstart -k`), the running container is detached but NOT killed. The new service instance spawns a fresh container, but the orphan keeps running and shares the same IPC mount directory. Both containers race to read IPC input files, causing the new container to randomly miss messages — making it appear like the agent doesn't respond.
-
-The existing cleanup code in `ensureContainerSystemRunning()` in `src/index.ts` uses `container ls --format {{.Names}}` which **silently fails** on Apple Container (only `json` and `table` are valid format options). The catch block swallows the error, so orphans are never cleaned up.
-
-Find the orphan cleanup block in `ensureContainerSystemRunning()` (the section starting with `// Kill and clean up orphaned NanoClaw containers from previous runs`) and replace it with:
-
-```typescript
-  // Kill and clean up orphaned NanoClaw containers from previous runs
-  try {
-    const listJson = execSync('container ls -a --format json', {
-      stdio: ['pipe', 'pipe', 'pipe'],
-      encoding: 'utf-8',
-    });
-    const containers = JSON.parse(listJson) as Array<{ configuration: { id: string }; status: string }>;
-    const nanoclawContainers = containers.filter(
-      (c) => c.configuration.id.startsWith('nanoclaw-'),
-    );
-    const running = nanoclawContainers
-      .filter((c) => c.status === 'running')
-      .map((c) => c.configuration.id);
-    if (running.length > 0) {
-      execSync(`container stop ${running.join(' ')}`, { stdio: 'pipe' });
-      logger.info({ count: running.length }, 'Stopped orphaned containers');
-    }
-    const allNames = nanoclawContainers.map((c) => c.configuration.id);
-    if (allNames.length > 0) {
-      execSync(`container rm ${allNames.join(' ')}`, { stdio: 'pipe' });
-      logger.info({ count: allNames.length }, 'Cleaned up stopped containers');
-    }
-  } catch {
-    // No containers or cleanup not supported
-  }
-```
-
-### Step 7: Build and Restart
+### Step 6: Build and Restart
 
 ```bash
 npm run build
-```
-
-Before restarting the service, kill any orphaned containers manually to ensure a clean slate:
-
-```bash
-container ls -a --format json | python3 -c "
-import sys, json
-data = json.load(sys.stdin)
-nc = [c['configuration']['id'] for c in data if c['configuration']['id'].startswith('nanoclaw-')]
-if nc: print(' '.join(nc))
-" | xargs -r container stop 2>/dev/null
-container ls -a --format json | python3 -c "
-import sys, json
-data = json.load(sys.stdin)
-nc = [c['configuration']['id'] for c in data if c['configuration']['id'].startswith('nanoclaw-')]
-if nc: print(' '.join(nc))
-" | xargs -r container rm 2>/dev/null
-echo "Orphaned containers cleaned"
-```
-
-Now restart the service:
-
-```bash
 launchctl kickstart -k gui/$(id -u)/com.nanoclaw
 ```
 
-Verify it started with exactly one (or zero, before first message) nanoclaw container:
+Verify it started:
 
 ```bash
 sleep 3 && launchctl list | grep nanoclaw
-container ls -a --format json | python3 -c "
-import sys, json
-data = json.load(sys.stdin)
-nc = [c for c in data if c['configuration']['id'].startswith('nanoclaw-')]
-print(f'{len(nc)} nanoclaw container(s)')
-for c in nc: print(f'  {c[\"configuration\"][\"id\"]} - {c[\"status\"]}')
-"
 ```
 
-### Step 8: Test Voice Transcription
+### Step 7: Test Voice Transcription
 
 Tell the user:
 
@@ -430,41 +364,6 @@ The architecture supports multiple providers. To add Groq, Deepgram, or local Wh
 ---
 
 ## Troubleshooting
-
-### Agent doesn't respond to voice messages (or any messages after a voice note)
-
-**Most likely cause: orphaned containers.** When the service restarts, the previous container keeps running and races to consume IPC messages. Check:
-
-```bash
-container ls -a --format json | python3 -c "
-import sys, json
-data = json.load(sys.stdin)
-nc = [c for c in data if c['configuration']['id'].startswith('nanoclaw-')]
-print(f'{len(nc)} nanoclaw container(s):')
-for c in nc: print(f'  {c[\"configuration\"][\"id\"]} - {c[\"status\"]}')
-"
-```
-
-If you see more than one running container, kill the orphans:
-
-```bash
-# Stop all nanoclaw containers, then restart the service
-container ls -a --format json | python3 -c "
-import sys, json
-data = json.load(sys.stdin)
-running = [c['configuration']['id'] for c in data if c['configuration']['id'].startswith('nanoclaw-') and c['status'] == 'running']
-if running: print(' '.join(running))
-" | xargs -r container stop 2>/dev/null
-container ls -a --format json | python3 -c "
-import sys, json
-data = json.load(sys.stdin)
-nc = [c['configuration']['id'] for c in data if c['configuration']['id'].startswith('nanoclaw-')]
-if nc: print(' '.join(nc))
-" | xargs -r container rm 2>/dev/null
-launchctl kickstart -k gui/$(id -u)/com.nanoclaw
-```
-
-**Root cause:** The `ensureContainerSystemRunning()` function previously used `container ls --format {{.Names}}` which silently fails on Apple Container (only `json` and `table` formats are supported). Step 6 of this skill fixes this. If you haven't applied Step 6, the orphan problem will recur on every restart.
 
 ### "Transcription unavailable" or "Transcription failed"
 
