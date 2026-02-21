@@ -7,6 +7,7 @@
 </p>
 
 <p align="center">
+  <a href="https://nanoclaw.dev">nanoclaw.dev</a>&nbsp; • &nbsp;
   <a href="README.md">English</a>&nbsp; • &nbsp;
   <a href="https://discord.gg/VDdww8qS42"><img src="https://img.shields.io/discord/1470188214710046894?label=Discord&logo=discord&v=2" alt="Discord" valign="middle"></a>&nbsp; • &nbsp;
   <a href="repo-tokens"><img src="repo-tokens/badge.svg" alt="34.9k tokens, 17% of context window" valign="middle"></a>
@@ -18,7 +19,7 @@
 
 [OpenClaw](https://github.com/openclaw/openclaw) 是一个令人印象深刻的项目，愿景宏大。但我无法安心使用一个我不了解却能访问我个人隐私的软件。OpenClaw 有 52+ 个模块、8 个配置管理文件、45+ 个依赖项，以及为 15 个渠道提供商设计的抽象层。其安全性是应用级别的（通过白名单、配对码实现），而非操作系统级别的隔离。所有东西都在一个共享内存的 Node 进程中运行。
 
-NanoClaw 用一个你能在 8 分钟内理解的代码库，为您提供了同样的核心功能。只有一个进程，少数几个文件。智能体（Agent）运行在具有文件系统隔离的真实 Linux 容器中，而不是依赖于权限检查。
+NanoClaw 用一个您能在 8 分钟内理解的代码库，为您提供了同样的核心功能。只有一个进程，少数几个文件。智能体（Agent）运行在具有文件系统隔离的真实 Linux 容器中，而不是依赖于权限检查。
 
 ## 快速开始
 
@@ -86,21 +87,6 @@ claude
 或者运行 `/customize` 进行引导式修改。
 
 代码库足够小，Claude 可以安全地修改它。
-
-## Skills系统的命令行工具（Skills System CLI） (实验性功能)
-
-新的**确定性**技能系统（Skills System）**底层操作**已作为本地命令提供：
-
-```bash
-npm run skills:init -- --core-version 0.5.0 --base-source .
-npm run skills:apply -- --skill whatsapp --version 1.2.0 --files-modified src/server.ts
-npm run skills:update-preview
-npm run skills:update-stage -- --target-core-version 0.6.0 --base-source /path/to/new/core
-npm run skills:update-commit
-# or: npm run skills:update-rollback
-```
-
-这些命令操作 `.nanoclaw/state.yaml`、`.nanoclaw/state.next.yaml`、`.nanoclaw/base/`、`.nanoclaw/base.next/` 和 `.nanoclaw/backup/` 文件。
 
 ## 贡献
 
