@@ -26,14 +26,17 @@ JUDGE_MODEL = os.environ.get("EVOLUTION_JUDGE_MODEL", "models/gemini-3.1-flash-l
 
 # ── Reflexion ─────────────────────────────────────────────────────────────────
 
-# Interactions scoring below this threshold trigger reflection generation.
+# Interactions scoring below this threshold trigger corrective reflection generation.
 REFLECTION_THRESHOLD = float(os.environ.get("EVOLUTION_REFLECTION_THRESHOLD", "0.6"))
+# Interactions scoring above this threshold trigger positive pattern extraction.
+POSITIVE_THRESHOLD = float(os.environ.get("EVOLUTION_POSITIVE_THRESHOLD", "0.85"))
 MAX_REFLECTIONS_PER_QUERY = int(os.environ.get("EVOLUTION_MAX_REFLECTIONS", "3"))
 REFLECTION_DEDUP_L2 = float(os.environ.get("EVOLUTION_REFLECTION_DEDUP_L2", "0.4"))
 
 # ── DSPy Optimizer ────────────────────────────────────────────────────────────
 
 DSPY_MIN_SAMPLES = int(os.environ.get("EVOLUTION_DSPY_MIN_SAMPLES", "20"))
+DSPY_MIN_DOMAIN_SAMPLES = int(os.environ.get("EVOLUTION_DSPY_MIN_DOMAIN_SAMPLES", "10"))
 DSPY_MAX_BOOTSTRAPPED = int(os.environ.get("EVOLUTION_DSPY_MAX_BOOTSTRAPPED", "4"))
 DSPY_MAX_LABELED = int(os.environ.get("EVOLUTION_DSPY_MAX_LABELED", "8"))
 DSPY_NUM_CANDIDATES = int(os.environ.get("EVOLUTION_DSPY_NUM_CANDIDATES", "4"))

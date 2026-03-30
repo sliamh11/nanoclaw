@@ -12,6 +12,7 @@ from typing import Optional
 from ..config import (
     DSPY_MAX_BOOTSTRAPPED,
     DSPY_MAX_LABELED,
+    DSPY_MIN_DOMAIN_SAMPLES,
     DSPY_MIN_SAMPLES,
     DSPY_NUM_CANDIDATES,
     JUDGE_MODEL,
@@ -105,22 +106,57 @@ def optimize(
     group_folder: Optional[str] = None,
     min_samples: int = DSPY_MIN_SAMPLES,
     model: str = JUDGE_MODEL,
+    domain: Optional[str] = None,
 ) -> Optional[str]:
     """
     Run DSPy MIPROv2 optimization on logged interactions.
+    When domain is specified, uses weighted inclusion: primary pool (domain-specific)
+    plus secondary pool (top cross-domain interactions) for generalization.
     Returns the artifact ID on success, None if insufficient samples.
     """
     _require_dspy()
     import dspy
 
+    if domain:
+        min_samples = DSPY_MIN_DOMAIN_SAMPLES
+
     # Load scored interactions across all eval suites (runtime + backfill)
-    interactions = get_recent(
-        group_folder=group_folder,
-        limit=200,
-        min_score=0.0,
-        eval_suite=None,
-    )
-    scored = [i for i in interactions if i.get("judge_score") is not None]
+    if domain:
+        # Primary pool: domain-specific interactions
+        primary = get_recent(
+            group_folder=group_folder,
+            limit=200,
+            min_score=0.0,
+            eval_suite=None,
+            domain=domain,
+        )
+        primary = [i for i in primary if i.get("judge_score") is not None]
+
+        # Secondary pool: top cross-domain interactions for generalization
+        all_interactions = get_recent(
+            group_folder=group_folder,
+            limit=200,
+            min_score=0.7,  # Only high-quality cross-domain
+            eval_suite=None,
+        )
+        primary_ids = {i["id"] for i in primary}
+        secondary = [
+            i for i in all_interactions
+            if i.get("judge_score") is not None and i["id"] not in primary_ids
+        ]
+        # Cap secondary at half of min_samples to keep domain data dominant
+        secondary = sorted(secondary, key=lambda x: x.get("judge_score", 0), reverse=True)
+        secondary = secondary[:min_samples // 2]
+
+        scored = primary + secondary
+    else:
+        interactions = get_recent(
+            group_folder=group_folder,
+            limit=200,
+            min_score=0.0,
+            eval_suite=None,
+        )
+        scored = [i for i in interactions if i.get("judge_score") is not None]
 
     if len(scored) < min_samples:
         print(
@@ -184,9 +220,10 @@ def optimize(
             pass
     optimized_score = sum(opt_scores) / len(opt_scores) if opt_scores else baseline
 
-    # Save artifact
+    # Save artifact — domain-keyed if domain-specific optimization
+    artifact_module = f"{module}:{domain}" if domain else module
     aid = save_artifact(
-        module=module,
+        module=artifact_module,
         content=prompt_content,
         baseline_score=baseline,
         optimized_score=optimized_score,
@@ -195,7 +232,7 @@ def optimize(
 
     delta = optimized_score - baseline
     print(
-        f"[evolution] Optimized {module}: "
+        f"[evolution] Optimized {artifact_module}: "
         f"baseline={baseline:.3f} → {optimized_score:.3f} "
         f"({'+'if delta>=0 else ''}{delta:.3f}) | artifact={aid[:8]}"
     )
