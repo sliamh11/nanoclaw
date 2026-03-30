@@ -86,9 +86,92 @@ def generate_reflection(
     return text, category
 
 
+_POSITIVE_PROMPT = """
+You are analyzing an AI assistant interaction that received a HIGH quality score.
+Extract the key pattern that made this response excellent, so it can be replicated.
+
+## Interaction
+
+**User prompt:**
+{prompt}
+
+**Assistant response:**
+{response}
+
+**Tools used:** {tools}
+
+**Quality score:** {score:.2f} / 1.0
+**Score breakdown:** {dims}
+**Judge rationale:** {rationale}
+
+## Instructions
+
+Write a reflection in exactly this format:
+- **What worked:** (1 sentence — be specific about the technique/approach)
+- **Pattern to replicate:** (1-2 sentences — generalizable principle)
+- **Category:** one of: tool_use | reasoning | style | positive_pattern
+
+Keep the whole reflection under 100 words. Focus on what is replicable in future interactions.
+"""
+
+
+def generate_positive_reflection(
+    prompt: str,
+    response: str,
+    score: float,
+    dims: Optional[dict] = None,
+    rationale: str = "",
+    tools_used: Optional[list[str]] = None,
+    model: str = JUDGE_MODEL,
+) -> tuple[str, str]:
+    """
+    Generate a positive pattern reflection for a high-scoring interaction.
+    Returns (content, category).
+    """
+    from google import genai
+
+    client = genai.Client(api_key=load_api_key())
+    formatted = _POSITIVE_PROMPT.format(
+        prompt=prompt[:1000],
+        response=(response or "")[:1000],
+        tools=", ".join(tools_used or []) or "none",
+        score=score,
+        dims=json.dumps(dims or {}),
+        rationale=rationale or "no rationale provided",
+    )
+
+    models_to_try = [model] + [m for m in GEN_MODELS if m != model]
+    last_exc = None
+    text = ""
+    for m in models_to_try:
+        try:
+            resp = client.models.generate_content(model=m, contents=formatted)
+            text = resp.text.strip()
+            break
+        except Exception as exc:
+            last_exc = exc
+            if "429" in str(exc) or "quota" in str(exc).lower():
+                continue
+            raise
+
+    if not text:
+        raise RuntimeError(f"All Gemini models failed generating positive reflection. Last: {last_exc}")
+
+    category = _extract_positive_category(text)
+    return text, category
+
+
 def _extract_category(text: str) -> str:
     lower = text.lower()
     for cat in ("tool_use", "safety", "reasoning", "style"):
         if cat in lower:
             return cat
     return "reasoning"
+
+
+def _extract_positive_category(text: str) -> str:
+    lower = text.lower()
+    for cat in ("tool_use", "reasoning", "style"):
+        if cat in lower:
+            return cat
+    return "positive_pattern"

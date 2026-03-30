@@ -27,7 +27,9 @@ import {
 import { detectAuthMode } from './credential-proxy.js';
 import { validateAdditionalMounts } from './mount-security.js';
 import { RegisteredGroup } from './types.js';
+import { detectAndLoad } from './domain-presets.js';
 import { getReflections, logInteraction } from './evolution-client.js';
+import { detectUserSignal } from './user-signal.js';
 
 // SYNC-REQUIRED: Duplicated in container/agent-runner/src/index.ts.
 // Cannot be shared via import — agent-runner is a separate package inside an isolated container.
@@ -283,6 +285,14 @@ export async function runContainerAgent(
   );
   if (reflectionsBlock) {
     input = { ...input, prompt: `${reflectionsBlock}\n\n${input.prompt}` };
+  }
+
+  // Pre-dispatch: detect domain presets and inject into prompt.
+  // detectAndLoad returns empty when presets/ doesn't exist or no keywords match.
+  const userSignal = detectUserSignal(input.prompt);
+  const { domains, presetBlock } = detectAndLoad(input.prompt);
+  if (presetBlock) {
+    input = { ...input, prompt: `${presetBlock}\n\n${input.prompt}` };
   }
 
   const groupDir = resolveGroupFolderPath(group.folder);
@@ -608,6 +618,8 @@ export async function runContainerAgent(
             groupFolder: group.folder,
             latencyMs: duration,
             sessionId: input.sessionId,
+            domainPresets: domains.length > 0 ? domains : undefined,
+            userSignal: userSignal ?? undefined,
           });
           resolve({
             status: 'success',
@@ -655,6 +667,8 @@ export async function runContainerAgent(
           groupFolder: group.folder,
           latencyMs: duration,
           sessionId: input.sessionId ?? output.newSessionId,
+          domainPresets: domains.length > 0 ? domains : undefined,
+          userSignal: userSignal ?? undefined,
         });
 
         resolve(output);

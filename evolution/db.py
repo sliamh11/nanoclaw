@@ -90,6 +90,21 @@ def _migrate(db: sqlite3.Connection) -> None:
     except Exception:
         pass  # Already exists or vec0 not available
 
+    # Domain presets and user signal columns (added in v1.3)
+    for col, coltype in [
+        ("domain_presets", "TEXT"),    # JSON array: '["marketing","writing"]'
+        ("user_signal", "TEXT"),       # "positive"|"negative"|null
+    ]:
+        try:
+            db.execute(f"ALTER TABLE interactions ADD COLUMN {col} {coltype}")
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+
+    db.execute("""
+        CREATE INDEX IF NOT EXISTS ix_interactions_domain
+            ON interactions(domain_presets) WHERE domain_presets IS NOT NULL
+    """)
+
     db.commit()
 
 

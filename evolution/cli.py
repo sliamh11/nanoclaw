@@ -24,14 +24,17 @@ if __name__ == "__main__" and __package__ is None:
     __package__ = "evolution"  # type: ignore
 
 
-def cmd_status(group_folder: Optional[str] = None) -> None:
+def cmd_status(group_folder: Optional[str] = None, domain: Optional[str] = None, compare: bool = False) -> None:
     from .ilog.interaction_log import get_recent, score_trend
     from .optimizer.artifacts import list_artifacts
     from .db import open_db
 
     # Score trend
-    trend = score_trend(group_folder=group_folder, days=30)
-    print("\n=== Score Trend (last 30 days) ===")
+    trend = score_trend(group_folder=group_folder, days=30, domain=domain)
+    header = "Score Trend (last 30 days)"
+    if domain:
+        header += f" — domain: {domain}"
+    print(f"\n=== {header} ===")
     if trend:
         for row in trend[-10:]:
             bar = "█" * int(row["avg_score"] * 20)
@@ -39,15 +42,48 @@ def cmd_status(group_folder: Optional[str] = None) -> None:
     else:
         print("  No scored interactions yet.")
 
+    # Compare: with-preset vs without-preset scores
+    if compare and domain:
+        db = open_db()
+        with_preset = db.execute(
+            "SELECT AVG(judge_score) AS avg, COUNT(*) AS n FROM interactions "
+            "WHERE judge_score IS NOT NULL AND domain_presets LIKE ?",
+            (f'%"{domain}"%',),
+        ).fetchone()
+        without_preset = db.execute(
+            "SELECT AVG(judge_score) AS avg, COUNT(*) AS n FROM interactions "
+            "WHERE judge_score IS NOT NULL AND (domain_presets IS NULL OR domain_presets NOT LIKE ?)",
+            (f'%"{domain}"%',),
+        ).fetchone()
+        db.close()
+
+        print(f"\n=== Comparison: {domain} ===")
+        w_avg = with_preset["avg"] or 0
+        w_n = with_preset["n"] or 0
+        wo_avg = without_preset["avg"] or 0
+        wo_n = without_preset["n"] or 0
+        print(f"  With preset:    {w_avg:.3f}  (n={w_n})")
+        print(f"  Without preset: {wo_avg:.3f}  (n={wo_n})")
+        if w_n > 0 and wo_n > 0:
+            delta = w_avg - wo_avg
+            print(f"  Delta: {'+'if delta>=0 else ''}{delta:.3f}")
+
     # Reflection count
     db = open_db()
     total_refs = db.execute("SELECT COUNT(*) FROM reflections").fetchone()[0]
     helpful_refs = db.execute(
         "SELECT COUNT(*) FROM reflections WHERE times_helpful > 0"
     ).fetchone()[0]
+    # Per-category breakdown
+    cat_rows = db.execute(
+        "SELECT category, COUNT(*) AS n FROM reflections GROUP BY category ORDER BY n DESC"
+    ).fetchall()
     db.close()
     print(f"\n=== Reflections ===")
     print(f"  Total: {total_refs} | Helpful: {helpful_refs}")
+    if cat_rows:
+        cats = ", ".join(f"{r['category']}={r['n']}" for r in cat_rows)
+        print(f"  By category: {cats}")
 
     # Active artifacts
     artifacts = list_artifacts(limit=5)
@@ -101,7 +137,10 @@ def cmd_log_interaction(json_str: str) -> None:
     from .ilog.interaction_log import update_score
     from .reflexion.generator import generate_reflection
     from .reflexion.store import save_reflection
-    from .config import REFLECTION_THRESHOLD
+    from .config import REFLECTION_THRESHOLD, POSITIVE_THRESHOLD
+
+    domain_presets = params.get("domain_presets") or None
+    user_signal = params.get("user_signal") or None
 
     iid = log_interaction(
         prompt=params.get("prompt", ""),
@@ -111,6 +150,8 @@ def cmd_log_interaction(json_str: str) -> None:
         tools_used=params.get("tools_used"),
         session_id=params.get("session_id"),
         interaction_id=params.get("id"),
+        domain_presets=domain_presets if isinstance(domain_presets, list) else None,
+        user_signal=user_signal,
     )
 
     async def _judge_and_reflect():
@@ -145,6 +186,51 @@ def cmd_log_interaction(json_str: str) -> None:
                     interaction_id=iid,
                     group_folder=params.get("group_folder"),
                 )
+            elif result.score >= POSITIVE_THRESHOLD:
+                from .reflexion.generator import generate_positive_reflection
+                content, category = generate_positive_reflection(
+                    prompt=params.get("prompt", ""),
+                    response=params.get("response") or "",
+                    score=result.score,
+                    dims=dims,
+                    rationale=result.rationale,
+                    tools_used=params.get("tools_used"),
+                )
+                save_reflection(
+                    content=content,
+                    category=category,
+                    score_at_gen=result.score,
+                    interaction_id=iid,
+                    group_folder=params.get("group_folder"),
+                )
+
+            # User signal: generate a reflection for the *previous* interaction
+            if user_signal and params.get("session_id"):
+                from .ilog.interaction_log import get_previous_in_session
+                prev = get_previous_in_session(params["session_id"], iid)
+                if prev:
+                    if user_signal == "positive":
+                        from .reflexion.generator import generate_positive_reflection
+                        content, category = generate_positive_reflection(
+                            prompt=prev["prompt"],
+                            response=prev.get("response") or "",
+                            score=prev.get("judge_score") or 0.8,
+                            rationale=f"User explicitly praised this response",
+                        )
+                    else:
+                        content, category = generate_reflection(
+                            prompt=prev["prompt"],
+                            response=prev.get("response") or "",
+                            score=prev.get("judge_score") or 0.4,
+                            rationale=f"User explicitly rejected this response",
+                        )
+                    save_reflection(
+                        content=content,
+                        category=category,
+                        score_at_gen=prev.get("judge_score") or 0.5,
+                        interaction_id=prev["id"],
+                        group_folder=prev.get("group_folder"),
+                    )
         except Exception as exc:
             import traceback
             traceback.print_exc(file=sys.stderr)
@@ -190,18 +276,28 @@ def cmd_reflect(interaction_id: str) -> None:
     print(f"\n{content}")
 
 
-def cmd_optimize(module: str = "all") -> None:
+def cmd_optimize(module: str = "all", domain: Optional[str] = None) -> None:
     from .optimizer.dspy_optimizer import optimize
     from .optimizer.modules import MODULE_REGISTRY
 
     modules = list(MODULE_REGISTRY.keys()) if module == "all" else [module]
     for m in modules:
-        print(f"\nOptimizing module: {m}")
-        aid = optimize(module=m)
+        label = f"{m}:{domain}" if domain else m
+        print(f"\nOptimizing module: {label}")
+        aid = optimize(module=m, domain=domain)
         if aid:
             print(f"  Artifact saved: {aid}")
         else:
             print(f"  Skipped (insufficient samples or error)")
+
+
+def cmd_principles(domain: Optional[str] = None, top_k: int = 5) -> None:
+    from .reflexion.principles import extract_principles
+    result = extract_principles(domain=domain, top_k=top_k)
+    if result:
+        print(result)
+    else:
+        print("Not enough scored interactions to extract principles.")
 
 
 def cmd_serve() -> None:
@@ -216,6 +312,8 @@ def main() -> None:
     # status
     p_status = sub.add_parser("status", help="Show score trends and reflection stats")
     p_status.add_argument("--group", help="Filter by group folder")
+    p_status.add_argument("--domain", help="Filter by domain preset (e.g., marketing)")
+    p_status.add_argument("--compare", action="store_true", help="Compare with-preset vs without-preset scores")
 
     # get_reflections
     p_refs = sub.add_parser("get_reflections", help="Retrieve relevant reflections (JSON)")
@@ -233,6 +331,12 @@ def main() -> None:
     p_opt = sub.add_parser("optimize", help="Run DSPy optimizer")
     p_opt.add_argument("--module", default="all",
                        choices=["all", "qa", "tool_selection", "summarization"])
+    p_opt.add_argument("--domain", help="Optimize for a specific domain preset")
+
+    # principles
+    p_princ = sub.add_parser("principles", help="Extract top principles from scored interactions")
+    p_princ.add_argument("--domain", help="Filter by domain preset")
+    p_princ.add_argument("--top-k", type=int, default=5, help="Number of best/worst interactions to analyze")
 
     # serve
     sub.add_parser("serve", help="Start MCP stdio server")
@@ -252,7 +356,7 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.cmd == "status":
-        cmd_status(group_folder=args.group)
+        cmd_status(group_folder=args.group, domain=args.domain, compare=args.compare)
     elif args.cmd == "get_reflections":
         cmd_get_reflections(args.query_json)
     elif args.cmd == "log_interaction":
@@ -260,7 +364,9 @@ def main() -> None:
     elif args.cmd == "reflect":
         cmd_reflect(args.interaction_id)
     elif args.cmd == "optimize":
-        cmd_optimize(args.module)
+        cmd_optimize(args.module, domain=args.domain)
+    elif args.cmd == "principles":
+        cmd_principles(domain=args.domain, top_k=args.top_k)
     elif args.cmd == "serve":
         cmd_serve()
     elif args.cmd == "backfill":

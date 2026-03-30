@@ -26,6 +26,8 @@ export interface LogInteractionParams {
   latencyMs?: number;
   toolsUsed?: string[];
   sessionId?: string;
+  domainPresets?: string[];
+  userSignal?: string;
 }
 
 /**
@@ -70,6 +72,8 @@ export function logInteraction(params: LogInteractionParams): void {
     latency_ms: params.latencyMs,
     tools_used: params.toolsUsed ?? [],
     session_id: params.sessionId,
+    domain_presets: params.domainPresets ?? [],
+    user_signal: params.userSignal ?? null,
   });
 
   // Spawn detached so it survives even if the host process exits quickly

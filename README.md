@@ -17,8 +17,9 @@ A personal AI assistant that lives in your messaging apps, remembers everything,
 5. **Calendar** — Reads and creates Google Calendar events. Ask what's on your schedule, or tell it to book something.
 6. **Web & video** — Fetch YouTube transcripts, summarize videos, or browse the web — all from a chat message.
 7. **Scheduled tasks** — Set it to do things automatically on a schedule (daily summaries, weekly recaps, reminders).
-8. **Self-improvement** — Scores its own responses over time and automatically generates better answers for cases where it fell short. Uses DSPy to optimize its own system prompt once enough samples accumulate.
-9. **Sandboxed & secure** — Every conversation runs in an isolated Linux container. The AI can't access your host system beyond what you explicitly allow.
+8. **Self-improvement** — Scores its own responses over time and learns from both failures and successes. Low-scoring responses generate corrective reflections; high-scoring ones extract positive patterns. Uses DSPy to optimize its own system prompt per domain once enough samples accumulate.
+9. **Domain presets** — Lightweight topic-specific guidance (marketing, engineering, study, writing, strategy) that activates automatically based on your message. Presets are user-editable markdown files and improve over time through the self-improvement loop.
+10. **Sandboxed & secure** — Every conversation runs in an isolated Linux container. The AI can't access your host system beyond what you explicitly allow.
 
 ---
 
@@ -190,21 +191,29 @@ src/
   index.ts              # Orchestrator: state, message loop, agent invocation
   channels/             # WhatsApp and Telegram channel implementations
   container-runner.ts   # Spawns and streams agent containers
+  domain-presets.ts     # Keyword-based domain detection + preset loading
+  user-signal.ts        # Detects user feedback signals (positive/negative)
   task-scheduler.ts     # Runs scheduled tasks
   db.ts                 # SQLite operations
   router.ts             # Outbound message routing
   ipc.ts                # File-based IPC watcher
+presets/
+  marketing.md          # Marketing domain preset (AIDA, KPIs, output format)
+  engineering.md        # Engineering domain preset (debugging, architecture)
+  study.md              # Study domain preset (Feynman, retrieval practice)
+  writing.md            # Writing domain preset (structure, audience, clarity)
+  strategy.md           # Strategy domain preset (frameworks, trade-offs)
 scripts/
   memory_indexer.py     # Semantic memory: index, query, extract, wander
   stop_hook.py          # Auto-checkpoint on session end
   gcal.mjs              # Google Calendar MCP server
 evolution/
   judge/                # OllamaJudge + GeminiJudge (DeepEvalBaseLLM wrappers)
-  reflexion/            # Reflexion generator: critiques low-scoring responses
-  optimizer/            # DSPy optimizer: tunes system prompt from scored interactions
-  ilog/                 # Interaction log: stores and retrieves scored interactions
+  reflexion/            # Reflexion + positive patterns + principles extraction
+  optimizer/            # DSPy optimizer: per-domain prompt tuning
+  ilog/                 # Interaction log: domain-tagged scored interactions
   db.py                 # Evolution database (SQLite)
-  cli.py                # CLI: score, optimize, export
+  cli.py                # CLI: status, optimize, principles (with --domain)
 eval/
   conftest.py           # Fixtures: agent cache, parallel pre-warm, dynamic concurrency
   judge_model.py        # make_judge(): auto-detect Ollama → Gemini → ClaudeProxy
