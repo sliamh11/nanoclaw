@@ -169,14 +169,17 @@ Tell Claude Code directly ("change the trigger word to @Max", "make responses sh
 
 ## Comparison
 
-| | **Deus** | **Auto-GPT** | **OpenDevin** | **CrewAI** |
-|---|---|---|---|---|
-| **Container isolation** | Per-conversation Linux containers | No | Sandboxed runtime | No |
-| **Semantic memory** | SQLite-vec + tiered retrieval | Plugin-based | None | Short-term only |
-| **Self-improvement** | Scores responses, reflexion, DSPy prompt tuning | No | No | No |
-| **Messaging integration** | WhatsApp, Telegram, Slack, Discord, Gmail | None | None | None |
-| **Local-first** | All data on your machine | Cloud-dependent | Local possible | Cloud-dependent |
-| **Architecture** | Single Node.js process | Multi-agent loop | Client-server | Multi-agent framework |
+|  | **Deus** | **[OpenClaw](https://github.com/openclaw/openclaw)** | **[NemoClaw](https://github.com/NVIDIA/NemoClaw)** | **[ZeroClaw](https://github.com/zeroclaw-labs/zeroclaw)** | **Plain Claude** |
+|---|---|---|---|---|---|
+| **Channels** | 4 (WhatsApp, Telegram, Slack, Discord) | 10+ (Signal, iMessage, Teams...) | Via OpenClaw | 20+ | None |
+| **Agent isolation** | Container per conversation (default) | Opt-in Docker | Landlock + seccomp | Rust sandbox | None |
+| **Memory** | Semantic vector search + tiered retrieval | Markdown files | Via OpenClaw | Basic persistence | Conversation only |
+| **Self-improvement** | Judge → reflexion → DSPy optimization | No | No | No | No |
+| **Credential isolation** | Proxy injection (keys never in container) | Keys in env | Policy-controlled | Keys in env | N/A |
+| **LLM support** | Claude only | Any provider | Any (via OpenClaw) | Any | Claude only |
+| **Codebase** | ~9.5K lines | ~430K lines | OpenClaw wrapper | Single binary | N/A |
+
+**Deus optimizes for depth** (memory, self-improvement, security). **OpenClaw optimizes for breadth** (channels, community, model flexibility). See [docs/benchmarks.md](docs/benchmarks.md) for a detailed comparison.
 
 ---
 
