@@ -30,50 +30,13 @@ A personal AI assistant that lives in your messaging apps, remembers everything,
 
 ## Architecture
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                         YOU                                      │
-│            WhatsApp  ·  Telegram                                 │
-└───────────────────┬─────────────────────────────────────────────┘
-                    │ message
-                    ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                    HOST  (Node.js process)                        │
-│                                                                   │
-│   Channel Registry ──► SQLite ──► Message Loop                   │
-│                                        │                         │
-│                          Scheduler ────┤                         │
-│                          IPC Watcher ──┘                         │
-│                                        │ spawn                   │
-└────────────────────────────────────────┼────────────────────────┘
-                                         │
-                    ┌────────────────────▼────────────────────────┐
-                    │            CONTAINER  (Linux VM)             │
-                    │                                              │
-                    │   Claude Agent SDK                           │
-                    │        │                                     │
-                    │        ├── Google Calendar (MCP)             │
-                    │        ├── YouTube Transcript (MCP)          │
-                    │        └── Filesystem (mounted groups/)      │
-                    └──────────────────────────────────────────────┘
-                                         │ response
-                    ┌────────────────────▼────────────────────────┐
-                    │           MEMORY LAYER                       │
-                    │                                              │
-                    │   Session Logs ──► Memory Indexer            │
-                    │   (Obsidian vault)   (sqlite-vec + Gemini)   │
-                    │                         │                    │
-                    │              Tiered retrieval:               │
-                    │              warm (recency, free)            │
-                    │              cold (semantic + recency boost) │
-                    └──────────────────────────────────────────────┘
-```
+<p align="center">
+  <img src="assets/brand-production/diagrams/deus-channels-diagram.png" alt="Message flow: User → Host → Container → Response" width="700">
+</p>
 
-**Key points:**
 - One Node.js process on the host. No microservices.
 - Each conversation group runs in its own container with an isolated filesystem.
-- Memory is stored in a local SQLite vector database, optionally synced to an Obsidian vault.
-- An evolution loop scores every production interaction and generates reflections for low-scoring responses. Once enough samples accumulate, DSPy optimizes the system prompt automatically.
+- Domain detection activates topic-specific presets (marketing, engineering, study, etc.) that get injected into the agent's system prompt.
 
 ---
 
@@ -115,17 +78,14 @@ Start talking:
 
 ## Memory System
 
+<p align="center">
+  <img src="assets/brand-production/diagrams/deus-memory-system-diagram.png" alt="Memory tiers: Always Loaded → Warm → Cold" width="700">
+</p>
+
 | Command | What it does |
 |---|---|
 | `/compress` | Save the current session to the vault and update the semantic index |
 | `/resume` | Load core memory + warm tier (last 3 sessions, free) + cold tier (semantic search) |
-
-**Retrieval tiers:**
-
-| Tier | How it works | Cost |
-|---|---|---|
-| Warm | Last N sessions by date | Free — no embedding call |
-| Cold | Semantic search over all indexed sessions with recency boost | One Gemini embedding call |
 
 A stop hook auto-saves a checkpoint at the end of every Claude Code session with no LLM calls.
 
@@ -142,7 +102,21 @@ A stop hook auto-saves a checkpoint at the end of every Claude Code session with
 
 ---
 
+## Self-Improvement
+
+<p align="center">
+  <img src="assets/brand-production/diagrams/deus-optimization-loop-diagram.png" alt="Evolution loop: Score → Reflexion/Positive Pattern → Domain Principles → DSPy Optimizer" width="700">
+</p>
+
+Every production interaction is scored by a local judge (Ollama or Gemini). Low scores trigger corrective reflexions; high scores extract positive patterns. Both feed into per-domain principles that accumulate over time. Once enough samples exist, DSPy optimizes the system prompt automatically.
+
+---
+
 ## Security & Privacy
+
+<p align="center">
+  <img src="assets/brand-production/diagrams/deus-security-diagram.png" alt="Container isolation: Host vs Container security boundary" width="700">
+</p>
 
 - **Container isolation** — Every agent runs in a Linux container (Docker or Apple Container). Agents cannot access your host filesystem beyond explicitly mounted directories.
 - **No credentials in code** — All secrets live in `.env` files that are gitignored. The codebase is designed as if the repo is always public.
