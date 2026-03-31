@@ -307,56 +307,332 @@ SKILLEOF
   echo "$current_version" > "$marker"
 }
 
+# ─── Install /checkpoint skill (user-level, context-aware) ───
+
+_ensure_checkpoint_skill() {
+  local skill_dir="$DEUS_SKILLS_DIR/checkpoint"
+  local marker="$skill_dir/.deus-version"
+  local current_version="1"
+  if [ -f "$marker" ] && [ "$(cat "$marker")" = "$current_version" ]; then
+    return
+  fi
+  mkdir -p "$skill_dir"
+  cat > "$skill_dir/skill.md" <<'SKILLEOF'
+---
+name: checkpoint
+description: Save a mid-session checkpoint — for continuity between sessions of the same day
+user_invocable: true
+---
+
+# /checkpoint
+
+Context-aware mid-session checkpoint. Behavior adapts to home mode vs external project mode.
+
+## Detect mode
+
+Check if the current working directory is the Deus home directory (`~/deus`). If it is → **Home Mode**. Otherwise → **External Project Mode**.
+
+## Resolve vault path
+
+Read `~/.config/deus/config.json` and use the `vault_path` value. If the env var `DEUS_VAULT_PATH` is set, use that instead. All paths below use `$VAULT` to mean this resolved path.
+
+## Check memory level (External Project Mode only)
+
+Compute MD5 hash of the current working directory and read `~/.config/deus/projects/<hash>.json`.
+- If memory level is **restricted**: tell the user "Checkpoints are disabled for restricted projects (nothing persists between sessions)." and stop.
+- If memory level is **standard** or **full**: proceed normally.
+- Home mode: always proceed.
+
+## Step 1 — Write checkpoint
+
+Identify: what decisions or intermediate conclusions have been reached in this session that are NOT yet saved in a session log?
+
+Write to:
+$VAULT/Checkpoints/YYYY-MM-DD-HH.md
+(Use current date and 24h hour. Create the Checkpoints/ folder if it doesn't exist.)
+
+Use exactly this format:
+```markdown
+---
+type: checkpoint
+created: YYYY-MM-DDTHH:MM
+session_topic: short-slug
+project_path: "<working directory path, or '~/deus' for home mode>"
+decisions:
+  - "decision made so far (≤12 words)"
+in_progress:
+  - "what we are actively working on right now"
+next_action: "the exact next step to take after resuming"
+context_refs:
+  - "file path or resource name needed to continue"
+---
+
+## Mid-Session State
+3–5 sentences explaining where we are, what has been decided, and what comes next.
+Write as if explaining to yourself after a 30-minute break.
+```
+
+**External Project Mode additions:**
+- Always include `project_path` in frontmatter
+- In context_refs, include project-relative paths (not absolute)
+- If memory level is **standard**: do NOT include specific code snippets, file contents, or implementation details in the Mid-Session State — focus on decisions and what was tried
+
+Keep the checkpoint under 25 lines total. This is what /resume will load on the next session if it's the same day.
+
+## Step 2 — Confirm the checkpoint path was written.
+
+## Step 3 — Output context primer.
+
+Before running /compact, output the following block verbatim (filling in values from current session state). This is a "compaction seed" — structured content near the end of conversation that the compaction algorithm will preserve as high-signal.
+
+```
+---BEGIN CONTEXT PRIMER---
+## Active Task
+[1 sentence: what we are working on right now]
+
+## Session Decisions
+[Bulleted list: decisions made in THIS session, max 5]
+
+## Key Files
+[Bulleted list: file paths actively being modified or referenced]
+
+## Pending
+[Bulleted list: what still needs to be done, max 3 items]
+
+## Resume Hint
+[1 sentence: if resuming after compaction, start by doing X]
+---END CONTEXT PRIMER---
+```
+
+## Step 4 — Tell the user: "Checkpoint saved. Run /compact now to compact the context."
+SKILLEOF
+  echo "$current_version" > "$marker"
+}
+
+# ─── Install /compress skill (user-level, context-aware) ───
+
+_ensure_compress_skill() {
+  local skill_dir="$DEUS_SKILLS_DIR/compress"
+  local marker="$skill_dir/.deus-version"
+  local current_version="1"
+  if [ -f "$marker" ] && [ "$(cat "$marker")" = "$current_version" ]; then
+    return
+  fi
+  mkdir -p "$skill_dir"
+  cat > "$skill_dir/skill.md" <<'SKILLEOF'
+---
+name: compress
+description: Save this session to the Obsidian vault and update the semantic memory index
+user_invocable: true
+---
+
+# /compress
+
+Context-aware session saving. Behavior adapts to home mode vs external project mode.
+
+## Detect mode
+
+Check if the current working directory is the Deus home directory (`~/deus`). If it is → **Home Mode**. Otherwise → **External Project Mode**.
+
+## Resolve vault path
+
+Read `~/.config/deus/config.json` and use the `vault_path` value. If the env var `DEUS_VAULT_PATH` is set, use that instead. All paths below use `$VAULT` to mean this resolved path.
+
+## Check memory level (External Project Mode only)
+
+Compute MD5 hash of the current working directory and read `~/.config/deus/projects/<hash>.json`.
+- If memory level is **restricted**: tell the user "Session saving is disabled for restricted projects. Your work is preserved in git commits and Claude Code's native session transcript. Use /project-settings to change this." and stop.
+- If `save_summaries` is **false**: tell the user the same message and stop.
+- If memory level is **standard** or **full** with summaries enabled: proceed.
+- Home mode: always proceed.
+
+## Save session log
+
+Review the conversation and create a session log at:
+$VAULT/Session-Logs/YYYY-MM-DD/{topic}.md
+
+Create the YYYY-MM-DD folder if it doesn't exist. The filename should be the topic only (no date prefix), since the date is already in the folder name.
+
+Use this format:
+```markdown
+---
+type: session
+date: YYYY-MM-DD
+topics: [topic1, topic2]
+project_path: "<working directory path, or '~/deus' for home mode>"
+tldr: |
+  What happened (1 sentence). Key decision or outcome. Pending: X, Y.
+decisions:
+  - "chose X over Y: brief reason"
+  - "rejected approach A: brief reason"
+---
+
+<!-- Full details — only loaded on demand -->
+
+## Decisions Made
+- ...
+
+## Key Learnings
+- ...
+
+## Files Modified
+- ...
+
+## Pending Tasks
+- [ ] ...
+```
+
+**External Project Mode — standard memory level redaction:**
+- Do NOT include specific file paths, function names, or code snippets in the session log
+- Focus on decisions, architecture, and what was tried/learned
+- Files Modified section should use descriptions ("updated the auth middleware") not paths
+- The goal: someone reading this log should understand WHAT was decided and WHY, without leaking code details
+
+**External Project Mode — full memory level:**
+- No redaction needed — include full details as in home mode
+
+Rules for `decisions:` array:
+- Maximum 3 items. Only include decisions that affect future sessions.
+- Each item: quoted string, verb-first, ≤12 words.
+- Omit the key entirely if no future-relevant decisions were made.
+
+Keep `tldr` to 2–3 lines. Skip sections with no content.
+
+## Post-save steps
+
+After saving the session log:
+
+1. **Update vault CLAUDE.md** (home mode only):
+   Update the `pending:` block in $VAULT/CLAUDE.md
+
+2. **Index the session log** (always, if scripts are available):
+   Run: `python3 ~/deus/scripts/memory_indexer.py --add "<full path to saved log>"`
+   If the script fails, skip silently — the log is still saved.
+
+3. **Extract atomic facts** (always, if scripts are available):
+   Run: `python3 ~/deus/scripts/memory_indexer.py --extract "<full path to saved log>"`
+   If the script fails, skip silently.
+
+4. **Delete today's checkpoint** (always):
+   Run: `find "$VAULT/Checkpoints" -name "$(date +%Y-%m-%d)-*.md" -delete 2>/dev/null`
+
+5. **Pre-warm semantic cache** (always, background):
+   Run: `python3 ~/deus/scripts/memory_indexer.py --query "recent work ongoing tasks" --top 2 --recency-boost > ~/.deus/resume_semantic_cache.txt 2>/dev/null &`
+
+Confirm with the filename saved, number of pending tasks carried forward, indexing result, and atom extraction result.
+SKILLEOF
+  echo "$current_version" > "$marker"
+}
+
+# ─── Install /preserve skill (user-level, context-aware) ───
+
+_ensure_preserve_skill() {
+  local skill_dir="$DEUS_SKILLS_DIR/preserve"
+  local marker="$skill_dir/.deus-version"
+  local current_version="1"
+  if [ -f "$marker" ] && [ "$(cat "$marker")" = "$current_version" ]; then
+    return
+  fi
+  mkdir -p "$skill_dir"
+  cat > "$skill_dir/skill.md" <<'SKILLEOF'
+---
+name: preserve
+description: Scan this conversation and silently save anything worth permanent memory
+user_invocable: true
+---
+
+# /preserve
+
+Context-aware memory preservation. Behavior adapts to home mode vs external project mode.
+
+## Detect mode
+
+Check if the current working directory is the Deus home directory (`~/deus`). If it is → **Home Mode**. Otherwise → **External Project Mode**.
+
+## Resolve vault path
+
+Read `~/.config/deus/config.json` and use the `vault_path` value. If the env var `DEUS_VAULT_PATH` is set, use that instead. All paths below use `$VAULT` to mean this resolved path.
+
+## Check memory level (External Project Mode only)
+
+Compute MD5 hash of the current working directory and read `~/.config/deus/projects/<hash>.json`.
+- If memory level is **restricted**: tell the user "Memory preservation is disabled for restricted projects." and stop.
+- If memory level is **standard** or **full**: proceed, but with different scopes (see below).
+- Home mode: always proceed.
+
+## What to preserve
+
+Scan the conversation for:
+- Preferences or habits the user revealed
+- Decisions made with lasting effect
+- Things the user corrected or clarified
+- Facts worth knowing in future sessions
+
+Do not preserve one-off requests or temporary context.
+
+**External Project Mode — standard:**
+Only preserve USER preferences and behavioral corrections — things that are about the user, not the project. Skip project-specific architecture decisions, code patterns, or team info (those belong in Claude Code's auto-memory, not the vault).
+
+**External Project Mode — full:**
+Preserve both user preferences AND project-relevant decisions. Include project context where it helps future sessions.
+
+## Where to save
+
+Save findings to: $VAULT/CLAUDE.md
+
+Add findings using the same compact key:value format as the file — no prose bullets.
+One line per insight.
+
+If CLAUDE.md exceeds 200 lines, archive old content to:
+$VAULT/CLAUDE-Archive.md
+
+Confirm briefly what was added, or say nothing was worth preserving if nothing qualified.
+SKILLEOF
+  echo "$current_version" > "$marker"
+}
+
 case "$1" in
-  on)
-    launchctl load "$PLIST" 2>/dev/null
-    launchctl kickstart -k "gui/$(id -u)/com.deus" 2>/dev/null
-    echo "Deus started."
-    ;;
-  off)
-    launchctl unload "$PLIST" 2>/dev/null
-    echo "Deus stopped."
-    ;;
-  restart)
-    launchctl unload "$PLIST" 2>/dev/null
-    launchctl load "$PLIST" 2>/dev/null
-    launchctl kickstart -k "gui/$(id -u)/com.deus" 2>/dev/null
-    echo "Deus restarted."
-    ;;
-  status)
-    if launchctl list | grep -q "com.deus"; then
-      echo "Deus is running."
-    else
-      echo "Deus is stopped."
-    fi
-    ;;
-  logs)
-    tail -f "$HOME/deus/logs/deus.log"
-    ;;
   auth)
     TOKEN=$(python3 -c 'import sys,json; print(json.load(open(sys.argv[1]))["claudeAiOauth"]["accessToken"])' "$HOME/.claude/.credentials.json" 2>/dev/null)
     if [ -z "$TOKEN" ]; then
       echo "Error: could not read token from ~/.claude/.credentials.json"
       exit 1
     fi
-    (umask 077 && echo "CLAUDE_CODE_OAUTH_TOKEN=$TOKEN" > "$HOME/deus/.env")
+    # Upsert token in .env without destroying other keys
+    _ENV_FILE="$HOME/deus/.env"
+    if [ -f "$_ENV_FILE" ] && grep -q '^CLAUDE_CODE_OAUTH_TOKEN=' "$_ENV_FILE"; then
+      (umask 077 && sed -i '' "s|^CLAUDE_CODE_OAUTH_TOKEN=.*|CLAUDE_CODE_OAUTH_TOKEN=$TOKEN|" "$_ENV_FILE")
+    else
+      (umask 077 && echo "CLAUDE_CODE_OAUTH_TOKEN=$TOKEN" >> "$_ENV_FILE")
+    fi
     launchctl kickstart -k "gui/$(id -u)/com.deus" 2>/dev/null
     echo "Auth token refreshed and Deus restarted."
     ;;
-  "")
+  home|"")
     TOKEN=$(python3 -c 'import sys,json; print(json.load(open(sys.argv[1]))["claudeAiOauth"]["accessToken"])' "$HOME/.claude/.credentials.json" 2>/dev/null)
     if [ -z "$TOKEN" ]; then
       echo "Error: could not read token from ~/.claude/.credentials.json"
       exit 1
     fi
-    (umask 077 && echo "CLAUDE_CODE_OAUTH_TOKEN=$TOKEN" > "$HOME/deus/.env")
+    # Upsert token in .env without destroying other keys
+    _ENV_FILE="$HOME/deus/.env"
+    if [ -f "$_ENV_FILE" ] && grep -q '^CLAUDE_CODE_OAUTH_TOKEN=' "$_ENV_FILE"; then
+      (umask 077 && sed -i '' "s|^CLAUDE_CODE_OAUTH_TOKEN=.*|CLAUDE_CODE_OAUTH_TOKEN=$TOKEN|" "$_ENV_FILE")
+    else
+      (umask 077 && echo "CLAUDE_CODE_OAUTH_TOKEN=$TOKEN" >> "$_ENV_FILE")
+    fi
     launchctl kickstart -k "gui/$(id -u)/com.deus" 2>/dev/null
     export CLAUDE_CODE_OAUTH_TOKEN="$TOKEN"
     # Resolve vault path from config (DEUS_VAULT_PATH env var → ~/.config/deus/config.json)
     VAULT="${DEUS_VAULT_PATH:-$(python3 -c "import json; from pathlib import Path; print(json.loads(Path('~/.config/deus/config.json').expanduser().read_text()).get('vault_path',''))" 2>/dev/null)}"
 
     DEUS_HOME="$HOME/deus"
-    CURRENT_DIR="$(pwd)"
+    # "deus home" forces home mode regardless of cwd
+    if [ "$1" = "home" ]; then
+      CURRENT_DIR="$DEUS_HOME"
+    else
+      CURRENT_DIR="$(pwd)"
+    fi
 
     # ─── SHARED CONTEXT LOADING ───
     # Full vault + memory + sessions loaded identically regardless of mode.
@@ -419,12 +695,17 @@ case "$1" in
       # Ensure skills are installed
       _ensure_project_settings_skill
       _ensure_resume_skill
+      _ensure_checkpoint_skill
+      _ensure_compress_skill
+      _ensure_preserve_skill
 
       # Check for existing project config or run onboarding
       PROJECT_CONFIG=$(_read_project_config "$CURRENT_DIR")
+      JUST_ONBOARDED="false"
       if [ -z "$PROJECT_CONFIG" ]; then
         _run_onboarding "$CURRENT_DIR"
         PROJECT_CONFIG=$(_read_project_config "$CURRENT_DIR")
+        JUST_ONBOARDED="true"
       else
         _update_project_access "$CURRENT_DIR"
       fi
@@ -471,8 +752,9 @@ $GIT_STASH")"
 
       # Determine if this is a first-run or returning session
       IS_RETURNING="false"
-      LAST_ACCESSED=$(echo "$PROJECT_CONFIG" | python3 -c "import sys,json; print(json.load(sys.stdin).get('last_accessed',''))" 2>/dev/null)
-      [ -n "$LAST_ACCESSED" ] && IS_RETURNING="true"
+      if [ "$JUST_ONBOARDED" = "false" ]; then
+        IS_RETURNING="true"
+      fi
 
       if [ "$IS_RETURNING" = "true" ]; then
         STARTUP_GREETING="Greet the user with a brief project status based on the git state provided above. Format:
@@ -489,7 +771,7 @@ Then ask what they'd like to work on. Use /resume for a deeper context reload."
 
 $MEMORY_INSTRUCTION
 
-Available commands: /project-settings (data handling) | /resume (deep context reload)
+Available commands: /resume (deep context reload) | /checkpoint (save mid-session state) | /compress (save session to vault) | /preserve (save lasting insights) | /project-settings (data handling)
 
 $GIT_CONTEXT
 
@@ -510,9 +792,12 @@ $STARTUP_INSTRUCTION"
     fi
 
     # ─── HOME MODE ───
-    # Ensure /resume skill is available globally (home mode uses project command,
-    # but the skill provides the external-project-aware version for other dirs)
+    # Ensure skills are available globally (home mode uses project commands,
+    # but the skills provide external-project-aware versions for other dirs)
     _ensure_resume_skill
+    _ensure_checkpoint_skill
+    _ensure_compress_skill
+    _ensure_preserve_skill
 
     # Running from ~/deus — full startup with catch-me-up greeting.
     STARTUP_INSTRUCTION="STARTUP INSTRUCTION: Context from the memory vault has been pre-loaded above. Catch the user up using exactly this format:
@@ -531,6 +816,10 @@ $STARTUP_INSTRUCTION" "Catch me up."
     fi
     ;;
   *)
-    echo "Usage: deus [on|off|restart|status|logs|auth]"
+    echo "Usage: deus [home|auth]"
+    echo ""
+    echo "  deus        Launch in current directory (external project mode if not ~/deus)"
+    echo "  deus home   Launch in home mode (~/deus) regardless of current directory"
+    echo "  deus auth   Refresh OAuth token and restart background services"
     ;;
 esac
