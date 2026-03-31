@@ -9,7 +9,7 @@ First, resolve the vault path by reading `~/.config/deus/config.json` and using 
 
 2. Based on likely task context, also read:
    - Study session → $VAULT/STUDY.md
-   - NanoClaw / tools / infra session → $VAULT/INFRA.md
+   - Deus / tools / infra session → $VAULT/INFRA.md
    - If unclear → read both (they're small, ~10 lines each)
 
 3. Check for a mid-session checkpoint from today:
