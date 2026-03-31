@@ -51,6 +51,26 @@ vi.mock('./mount-security.js', () => ({
   validateAdditionalMounts: vi.fn(() => []),
 }));
 
+// Mock evolution-client (spawns Python subprocess with 3s timeout — incompatible with fake timers)
+vi.mock('./evolution-client.js', () => ({
+  getReflections: vi.fn(async () => ''),
+  logInteraction: vi.fn(),
+}));
+
+// Mock domain-presets and user-signal (synchronous, but no presets/ dir in test)
+vi.mock('./domain-presets.js', () => ({
+  detectAndLoad: vi.fn(() => ({ domains: [], presetBlock: '' })),
+}));
+
+vi.mock('./user-signal.js', () => ({
+  detectUserSignal: vi.fn(() => null),
+}));
+
+// Mock project-registry
+vi.mock('./project-registry.js', () => ({
+  getProjectById: vi.fn(() => null),
+}));
+
 // Create a controllable fake ChildProcess
 function createFakeProcess() {
   const proc = new EventEmitter() as EventEmitter & {
