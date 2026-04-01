@@ -24,23 +24,22 @@ Create a clean, modern architecture diagram showing the message flow in an AI as
 
 The flow is left-to-right with these stages:
 
-1. USER (left side) — show icons for WhatsApp, Telegram, Slack, Discord, and Gmail as input channels
+1. USER (left side) — show icons for WhatsApp and Telegram as primary input channels. Add a small label "(+Slack, Discord, Gmail via skills)" beneath them to indicate optional channels.
 2. Arrow labeled "message" →
 3. HOST (Node.js) — a rounded box containing:
    - "Channel Registry" at top
    - "SQLite" in middle
    - "Message Loop" below
-   - "Domain Detector" branching off (detects topic via keywords: marketing, engineering, study, etc.)
-   - "Reflection Retrieval" step: fetches relevant past reflections and prepends them to prompt
-4. Arrow labeled "spawn container" →
+   - "Pre-dispatch" step (inside host, before spawning): two sub-steps shown vertically:
+     a. "Reflection Retrieval" — fetches relevant past reflections, prepends to prompt
+     b. "Domain Detector" — detects topic via keywords, attaches as metadata only (does NOT modify prompt)
+4. Arrow labeled "spawn container (prompt + reflections)" →
 5. CONTAINER (Linux VM) — a rounded box with dashed border containing:
    - "Claude Agent SDK" at top
-   - Below it, three tool boxes: "Calendar (MCP)", "YouTube (MCP)", "Filesystem"
-   - A small label: "reflections prepended to prompt"
-   - Another label: "domain tags attached as metadata (not in prompt)"
-6. Arrow labeled "response" →
-7. Back to USER
-8. Below the response arrow, a small "Credential Proxy (:3001)" box with arrow labeled "tokens injected at runtime" pointing into the container
+   - Below it, two tool boxes: "Calendar (gcal)" and "Filesystem"
+   - A small label: "YouTube, Obsidian, etc. via optional skills"
+6. Container → "Credential Proxy (:3001)" → external "Claude API" (shown to the right of container, outside both zones). This is the OUTBOUND path for Claude API calls — the proxy injects real credentials so the container never holds secrets. Label this arrow "tokens injected outbound".
+7. Separate return arrow: CONTAINER → HOST → USER labeled "response". This is the user-facing response path — it does NOT go through the credential proxy.
 
 Keep it minimal. No decorative elements. White background. The diagram should be self-explanatory without needing the README text.
 
@@ -106,8 +105,8 @@ Show a circular flow with these stages connected by arrows:
    - Score < 0.6 → "Reflexion" (teal) — generates a corrective reflection (deduplicated via L2 distance < 0.4)
    - Score ≥ 0.85 → "Positive Pattern" (teal) — extracts what worked well
 7. → "times_helpful" — if retrieved reflections correlate with high scores, mark them as helpful (feedback loop arrow back to step 2)
-8. → "Domain Principles" (auto-triggered, 24h cooldown per domain) — accumulated learnings per domain
-9. → "DSPy Optimizer" (auto-triggered every 50 new interactions) — optimizes the system prompt. User-praised interactions receive 2x weight.
+8. → "Domain Principles" (auto-triggered when N=5 new scored interactions exist per domain) — accumulated learnings per domain
+9. → "DSPy Optimizer" (auto-triggered every 50 new scored interactions) — optimizes the system prompt. User-praised interactions receive 2x weight.
 10. Arrow back to step 3, showing the optimized prompt feeding into the next response
 
 In the center of the loop, show: "Continuous self-improvement" as a label.
@@ -136,7 +135,7 @@ LEFT ZONE — "Host" (orange accent):
   - "Credential Proxy (:3001)" box
   - "SQLite databases" box
   - "Mount Security Validator" box (validates additional mounts against allowlist)
-  - "Obsidian vault" box (labeled "optional mount")
+  - "Obsidian vault" box (labeled "optional mount, read-write")
 
 RIGHT ZONE — "Container" (teal accent, dashed border):
   - "Claude Agent SDK" box
@@ -149,7 +148,7 @@ RIGHT ZONE — "Container" (teal accent, dashed border):
 
 Arrows crossing the boundary:
   - "Credential Proxy" → Container: arrow labeled "tokens injected at runtime"
-  - Container → Host: arrow labeled "IPC response files"
+  - Container → "Node.js Process": arrow labeled "IPC response files"
 
 Small callout boxes:
   - "Docker, Apple Container, or Podman runtime"
