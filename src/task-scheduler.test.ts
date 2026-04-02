@@ -231,7 +231,10 @@ describe('startSchedulerLoop execution path', () => {
       getSessions: () => overrides.sessions ?? {},
       queue: { enqueueTask, notifyIdle, closeStdin } as any,
       onProcess: () => {},
-      sendMessage,
+      sendMessage: sendMessage as unknown as (
+        jid: string,
+        text: string,
+      ) => Promise<void>,
     };
   }
 
@@ -254,7 +257,7 @@ describe('startSchedulerLoop execution path', () => {
 
     expect(enqueueTask).toHaveBeenCalledTimes(2);
     const enqueuedIds = enqueueTask.mock.calls.map(
-      (call: [string, string, unknown]) => call[1],
+      (call: any[]) => call[1] as string,
     );
     expect(enqueuedIds).toContain('task-a');
     expect(enqueuedIds).toContain('task-b');
@@ -284,7 +287,9 @@ describe('startSchedulerLoop execution path', () => {
         _group: unknown,
         _input: unknown,
         _onProcess: unknown,
-        onOutput: (o: import('./container-runner.js').ContainerOutput) => Promise<void>,
+        onOutput: (
+          o: import('./container-runner.js').ContainerOutput,
+        ) => Promise<void>,
       ) => {
         await onOutput({ status: 'success', result: 'streamed answer' });
         return { status: 'success', result: 'streamed answer' };
@@ -307,7 +312,9 @@ describe('startSchedulerLoop execution path', () => {
         _group: unknown,
         _input: unknown,
         _onProcess: unknown,
-        onOutput: (o: import('./container-runner.js').ContainerOutput) => Promise<void>,
+        onOutput: (
+          o: import('./container-runner.js').ContainerOutput,
+        ) => Promise<void>,
       ) => {
         await onOutput({ status: 'success', result: null });
         return { status: 'success', result: null };
@@ -327,10 +334,7 @@ describe('startSchedulerLoop execution path', () => {
 
     mockRunContainerAgent.mockRejectedValue(new Error('container exploded'));
 
-    const logTaskRunSpy = vi.spyOn(
-      await import('./db.js'),
-      'logTaskRun',
-    );
+    const logTaskRunSpy = vi.spyOn(await import('./db.js'), 'logTaskRun');
 
     startSchedulerLoop(makeDeps());
     await vi.advanceTimersByTimeAsync(10);
@@ -399,7 +403,10 @@ describe('startSchedulerLoop execution path', () => {
   it('passes undefined sessionId for isolated context tasks', async () => {
     createTask(makeTask({ id: 'task-isolated', context_mode: 'isolated' }));
 
-    mockRunContainerAgent.mockResolvedValue({ status: 'success', result: null });
+    mockRunContainerAgent.mockResolvedValue({
+      status: 'success',
+      result: null,
+    });
 
     startSchedulerLoop(makeDeps());
     await vi.advanceTimersByTimeAsync(10);
@@ -417,7 +424,10 @@ describe('startSchedulerLoop execution path', () => {
   it('passes group sessionId for group context tasks', async () => {
     createTask(makeTask({ id: 'task-group', context_mode: 'group' }));
 
-    mockRunContainerAgent.mockResolvedValue({ status: 'success', result: null });
+    mockRunContainerAgent.mockResolvedValue({
+      status: 'success',
+      result: null,
+    });
 
     const sessions = { testgroup: 'session-abc-123' };
     startSchedulerLoop(makeDeps({ sessions }));

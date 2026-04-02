@@ -24,7 +24,7 @@ Create a clean, modern architecture diagram showing the message flow in an AI as
 
 The flow is left-to-right with these stages:
 
-1. USER (left side) — show icons for WhatsApp and Telegram as primary input channels. Add a small label "(+Slack, Discord, Gmail via skills)" beneath them to indicate optional channels.
+1. USER (left side) — show icons for WhatsApp and Telegram as primary input channels. Add a small label "(+Slack, Discord, Gmail via skills)" beneath them to indicate optional channels installed via skills.
 2. Arrow labeled "message" →
 3. HOST (Node.js) — a rounded box containing:
    - "Channel Registry" at top
@@ -151,7 +151,7 @@ Arrows crossing the boundary:
   - Container → "Node.js Process": arrow labeled "IPC response files"
 
 Small callout boxes:
-  - "Docker, Apple Container, or Podman runtime"
+  - "Docker runtime (cross-platform)"
   - "Each conversation = separate container"
   - "Main group can message any group; non-main restricted to own JID"
 

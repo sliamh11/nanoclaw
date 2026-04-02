@@ -20,7 +20,6 @@ This lock-in is a deliberate trade-off: the Claude Agent SDK provides session ma
 ## macOS Preference
 
 While Linux is supported, several features work best on macOS:
-- **Apple Container** — macOS-native container runtime (lighter than Docker)
 - **Whisper transcription** — Metal acceleration on Apple Silicon
 - **Obsidian vault sync** — assumes local filesystem access
 

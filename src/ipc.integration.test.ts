@@ -19,7 +19,14 @@ import type { RegisteredGroup } from './types.js';
 
 // Mock the project-registry to avoid real FS + allowlist operations
 vi.mock('./project-registry.js', () => ({
-  registerProject: vi.fn(() => ({ id: 'proj-test', name: 'Test', path: '/tmp/proj', type: null, readonly: false, created_at: '' })),
+  registerProject: vi.fn(() => ({
+    id: 'proj-test',
+    name: 'Test',
+    path: '/tmp/proj',
+    type: null,
+    readonly: false,
+    created_at: '',
+  })),
   associateProject: vi.fn(),
   dissociateProject: vi.fn(),
   removeProject: vi.fn(),
@@ -330,7 +337,9 @@ describe('IPC authorization logic (replicated from startIpcWatcher)', () => {
 
   it('main group can send to any chat JID', () => {
     expect(isMessageAuthorized('whatsapp_main', true, 'other@g.us')).toBe(true);
-    expect(isMessageAuthorized('whatsapp_main', true, 'unknown@g.us')).toBe(true);
+    expect(isMessageAuthorized('whatsapp_main', true, 'unknown@g.us')).toBe(
+      true,
+    );
   });
 
   it('non-main can send to its own JID only', () => {
@@ -342,6 +351,8 @@ describe('IPC authorization logic (replicated from startIpcWatcher)', () => {
   });
 
   it('non-main cannot send to unregistered JID', () => {
-    expect(isMessageAuthorized('other-group', false, 'unknown@g.us')).toBe(false);
+    expect(isMessageAuthorized('other-group', false, 'unknown@g.us')).toBe(
+      false,
+    );
   });
 });
