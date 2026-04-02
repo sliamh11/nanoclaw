@@ -167,7 +167,7 @@ export function hasContainerImage(): boolean {
   const runtime = process.env.CONTAINER_RUNTIME || 'docker';
   const bin = runtime === 'container' ? 'container' : 'docker';
   try {
-    execSync(`${bin} image inspect deus-agent 2>/dev/null`, {
+    execSync(`${bin} image inspect deus-agent`, {
       stdio: 'pipe',
       timeout: 5000,
     });
@@ -186,7 +186,7 @@ export function countRegisteredGroups(): number {
     // Dynamic import avoidance: use execSync to query without loading better-sqlite3
     // into the main process before initDatabase() runs.
     const result = execSync(
-      `sqlite3 "${dbPath}" "SELECT COUNT(*) FROM registered_groups;" 2>/dev/null`,
+      `sqlite3 "${dbPath}" "SELECT COUNT(*) FROM registered_groups;"`,
       { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 5000 },
     );
     return parseInt(result.trim(), 10) || 0;
