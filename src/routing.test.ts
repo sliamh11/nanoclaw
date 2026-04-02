@@ -1,11 +1,10 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 
 import { _initTestDatabase, getAllChats, storeChatMetadata } from './db.js';
-import { getAvailableGroups, _setRegisteredGroups } from './index.js';
+import { getAvailableGroups } from './router-state.js';
 
 beforeEach(() => {
   _initTestDatabase();
-  _setRegisteredGroups({});
 });
 
 // --- JID ownership patterns ---
@@ -50,7 +49,7 @@ describe('getAvailableGroups', () => {
       true,
     );
 
-    const groups = getAvailableGroups();
+    const groups = getAvailableGroups({});
     expect(groups).toHaveLength(2);
     expect(groups.map((g) => g.jid)).toContain('group1@g.us');
     expect(groups.map((g) => g.jid)).toContain('group2@g.us');
@@ -67,7 +66,7 @@ describe('getAvailableGroups', () => {
       true,
     );
 
-    const groups = getAvailableGroups();
+    const groups = getAvailableGroups({});
     expect(groups).toHaveLength(1);
     expect(groups[0].jid).toBe('group@g.us');
   });
@@ -88,16 +87,16 @@ describe('getAvailableGroups', () => {
       true,
     );
 
-    _setRegisteredGroups({
+    const registeredGroups = {
       'reg@g.us': {
         name: 'Registered',
         folder: 'registered',
         trigger: '@Deus',
         added_at: '2024-01-01T00:00:00.000Z',
       },
-    });
+    };
 
-    const groups = getAvailableGroups();
+    const groups = getAvailableGroups(registeredGroups);
     const reg = groups.find((g) => g.jid === 'reg@g.us');
     const unreg = groups.find((g) => g.jid === 'unreg@g.us');
 
@@ -128,7 +127,7 @@ describe('getAvailableGroups', () => {
       true,
     );
 
-    const groups = getAvailableGroups();
+    const groups = getAvailableGroups({});
     expect(groups[0].jid).toBe('new@g.us');
     expect(groups[1].jid).toBe('mid@g.us');
     expect(groups[2].jid).toBe('old@g.us');
@@ -158,13 +157,13 @@ describe('getAvailableGroups', () => {
       true,
     );
 
-    const groups = getAvailableGroups();
+    const groups = getAvailableGroups({});
     expect(groups).toHaveLength(1);
     expect(groups[0].jid).toBe('group@g.us');
   });
 
   it('returns empty array when no chats exist', () => {
-    const groups = getAvailableGroups();
+    const groups = getAvailableGroups({});
     expect(groups).toHaveLength(0);
   });
 });
