@@ -16,7 +16,11 @@ import { readEnvFile } from './env.js';
 
 const DEUS_CONFIG_PATH = path.join(CONFIG_DIR, 'config.json');
 const MEMORY_DB_PATH = path.join(HOME_DIR, '.deus', 'memory.db');
-const CLAUDE_CREDENTIALS_PATH = path.join(HOME_DIR, '.claude', '.credentials.json');
+const CLAUDE_CREDENTIALS_PATH = path.join(
+  HOME_DIR,
+  '.claude',
+  '.credentials.json',
+);
 
 /** Check if ~/.claude/.credentials.json has a valid OAuth access token. */
 function hasClaudeCredentialsFile(): boolean {

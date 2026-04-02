@@ -59,7 +59,11 @@ describe('loadMountAllowlist', () => {
   it('returns null when allowedRoots is not an array', () => {
     mockExistsSync.mockReturnValue(true);
     mockReadFileSync.mockReturnValue(
-      JSON.stringify({ allowedRoots: 'bad', blockedPatterns: [], nonMainReadOnly: true }),
+      JSON.stringify({
+        allowedRoots: 'bad',
+        blockedPatterns: [],
+        nonMainReadOnly: true,
+      }),
     );
     expect(loadMountAllowlist()).toBeNull();
   });
@@ -67,7 +71,11 @@ describe('loadMountAllowlist', () => {
   it('returns null when blockedPatterns is not an array', () => {
     mockExistsSync.mockReturnValue(true);
     mockReadFileSync.mockReturnValue(
-      JSON.stringify({ allowedRoots: [], blockedPatterns: 'bad', nonMainReadOnly: true }),
+      JSON.stringify({
+        allowedRoots: [],
+        blockedPatterns: 'bad',
+        nonMainReadOnly: true,
+      }),
     );
     expect(loadMountAllowlist()).toBeNull();
   });
@@ -75,7 +83,11 @@ describe('loadMountAllowlist', () => {
   it('returns null when nonMainReadOnly is not a boolean', () => {
     mockExistsSync.mockReturnValue(true);
     mockReadFileSync.mockReturnValue(
-      JSON.stringify({ allowedRoots: [], blockedPatterns: [], nonMainReadOnly: 'yes' }),
+      JSON.stringify({
+        allowedRoots: [],
+        blockedPatterns: [],
+        nonMainReadOnly: 'yes',
+      }),
     );
     expect(loadMountAllowlist()).toBeNull();
   });
@@ -84,7 +96,9 @@ describe('loadMountAllowlist', () => {
     mockExistsSync.mockReturnValue(true);
     mockReadFileSync.mockReturnValue(
       JSON.stringify({
-        allowedRoots: [{ path: '/home/testuser/projects', allowReadWrite: true }],
+        allowedRoots: [
+          { path: '/home/testuser/projects', allowReadWrite: true },
+        ],
         blockedPatterns: [],
         nonMainReadOnly: false,
       }),
@@ -120,11 +134,17 @@ describe('loadMountAllowlist', () => {
 // ── validateMount ──────────────────────────────────────────────────────────
 
 describe('validateMount', () => {
-  function setupAllowlist(extra: Partial<{
-    allowedRoots: { path: string; allowReadWrite: boolean; description?: string }[];
-    blockedPatterns: string[];
-    nonMainReadOnly: boolean;
-  }> = {}) {
+  function setupAllowlist(
+    extra: Partial<{
+      allowedRoots: {
+        path: string;
+        allowReadWrite: boolean;
+        description?: string;
+      }[];
+      blockedPatterns: string[];
+      nonMainReadOnly: boolean;
+    }> = {},
+  ) {
     mockExistsSync.mockImplementation((p: fs.PathLike) => {
       // allowlist file exists
       if (String(p).includes('mount-allowlist')) return true;
@@ -134,7 +154,11 @@ describe('validateMount', () => {
     mockReadFileSync.mockReturnValue(
       JSON.stringify({
         allowedRoots: [
-          { path: '/home/testuser/projects', allowReadWrite: true, description: 'Dev projects' },
+          {
+            path: '/home/testuser/projects',
+            allowReadWrite: true,
+            description: 'Dev projects',
+          },
         ],
         blockedPatterns: [],
         nonMainReadOnly: false,
@@ -147,7 +171,10 @@ describe('validateMount', () => {
 
   it('blocks all mounts when no allowlist exists', () => {
     mockExistsSync.mockReturnValue(false);
-    const result = validateMount({ hostPath: '/home/testuser/projects/myapp' }, true);
+    const result = validateMount(
+      { hostPath: '/home/testuser/projects/myapp' },
+      true,
+    );
     expect(result.allowed).toBe(false);
     expect(result.reason).toContain('No mount allowlist');
   });
@@ -230,7 +257,9 @@ describe('validateMount', () => {
     });
     mockReadFileSync.mockReturnValue(
       JSON.stringify({
-        allowedRoots: [{ path: '/home/testuser/projects', allowReadWrite: true }],
+        allowedRoots: [
+          { path: '/home/testuser/projects', allowReadWrite: true },
+        ],
         blockedPatterns: [],
         nonMainReadOnly: false,
       }),
@@ -285,7 +314,9 @@ describe('validateAdditionalMounts', () => {
     mockExistsSync.mockReturnValue(true);
     mockReadFileSync.mockReturnValue(
       JSON.stringify({
-        allowedRoots: [{ path: '/home/testuser/projects', allowReadWrite: false }],
+        allowedRoots: [
+          { path: '/home/testuser/projects', allowReadWrite: false },
+        ],
         blockedPatterns: [],
         nonMainReadOnly: false,
       }),

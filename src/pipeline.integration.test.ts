@@ -13,14 +13,7 @@
  *   4. IPC processTaskIpc task creation → DB storage (IPC layer)
  *   5. Full pipeline: store → queue → mock agent → send
  */
-import {
-  afterEach,
-  beforeEach,
-  describe,
-  expect,
-  it,
-  vi,
-} from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // ── Mocks ────────────────────────────────────────────────────────────────
 
@@ -49,9 +42,17 @@ vi.mock('./logger.js', () => ({
 vi.mock('./container-runner.js', () => ({
   runContainerAgent: vi.fn(async (_group, _input, _onProcess, onOutput) => {
     if (onOutput) {
-      await onOutput({ status: 'success', result: 'Pipeline test response', newSessionId: 'sess-pipeline' });
+      await onOutput({
+        status: 'success',
+        result: 'Pipeline test response',
+        newSessionId: 'sess-pipeline',
+      });
     }
-    return { status: 'success', result: 'Pipeline test response', newSessionId: 'sess-pipeline' };
+    return {
+      status: 'success',
+      result: 'Pipeline test response',
+      newSessionId: 'sess-pipeline',
+    };
   }),
   writeTasksSnapshot: vi.fn(),
   writeGroupsSnapshot: vi.fn(),
@@ -64,7 +65,13 @@ vi.mock('./evolution-client.js', () => ({
 }));
 
 vi.mock('./mount-security.js', () => ({
-  validateMount: vi.fn(() => ({ allowed: true, reason: 'ok', realHostPath: '/tmp', resolvedContainerPath: 'test', effectiveReadonly: true })),
+  validateMount: vi.fn(() => ({
+    allowed: true,
+    reason: 'ok',
+    realHostPath: '/tmp',
+    resolvedContainerPath: 'test',
+    effectiveReadonly: true,
+  })),
   validateAdditionalMounts: vi.fn(() => []),
 }));
 
@@ -226,7 +233,11 @@ describe('DB pipeline: storeMessage → getMessagesSince', () => {
       timestamp: '2024-01-01T00:00:02.000Z',
     });
 
-    const msgs = getMessagesSince('main@g.us', '2024-01-01T00:00:01.000Z', 'Deus');
+    const msgs = getMessagesSince(
+      'main@g.us',
+      '2024-01-01T00:00:01.000Z',
+      'Deus',
+    );
     expect(msgs).toHaveLength(1);
     expect(msgs[0].content).toBe('New message');
   });
@@ -285,7 +296,12 @@ describe('runContainerAgent mock: response handling', () => {
     const group = MAIN_GROUP;
     const output = await runContainerAgent(
       group,
-      { prompt: 'Test prompt', groupFolder: 'main', chatJid: 'main@g.us', isMain: true },
+      {
+        prompt: 'Test prompt',
+        groupFolder: 'main',
+        chatJid: 'main@g.us',
+        isMain: true,
+      },
       () => {},
     );
     expect(output.status).toBe('success');
@@ -293,21 +309,51 @@ describe('runContainerAgent mock: response handling', () => {
   });
 
   it('mock invokes onOutput callback when provided', async () => {
-    mockRunContainerAgent.mockImplementation(async (_group, _input, _onProcess, onOutput) => {
-      if (onOutput) {
-        await onOutput({ status: 'success', result: 'Streamed response', newSessionId: 'sess-1' });
-      }
-      return { status: 'success', result: 'Streamed response', newSessionId: 'sess-1' };
-    });
+    mockRunContainerAgent.mockImplementation(
+      async (_group, _input, _onProcess, onOutput) => {
+        if (onOutput) {
+          await onOutput({
+            status: 'success',
+            result: 'Streamed response',
+            newSessionId: 'sess-1',
+          });
+        }
+        return {
+          status: 'success',
+          result: 'Streamed response',
+          newSessionId: 'sess-1',
+        };
+      },
+    );
 
     const onOutput = vi.fn(async () => {});
-    await runContainerAgent(MAIN_GROUP, { prompt: 'Hi', groupFolder: 'main', chatJid: 'main@g.us', isMain: true }, () => {}, onOutput);
-    expect(onOutput).toHaveBeenCalledWith(expect.objectContaining({ result: 'Streamed response' }));
+    await runContainerAgent(
+      MAIN_GROUP,
+      { prompt: 'Hi', groupFolder: 'main', chatJid: 'main@g.us', isMain: true },
+      () => {},
+      onOutput,
+    );
+    expect(onOutput).toHaveBeenCalledWith(
+      expect.objectContaining({ result: 'Streamed response' }),
+    );
   });
 
   it('can simulate container error', async () => {
-    mockRunContainerAgent.mockResolvedValue({ status: 'error', result: null, error: 'Container crashed' });
-    const output = await runContainerAgent(MAIN_GROUP, { prompt: 'Test', groupFolder: 'main', chatJid: 'main@g.us', isMain: true }, () => {});
+    mockRunContainerAgent.mockResolvedValue({
+      status: 'error',
+      result: null,
+      error: 'Container crashed',
+    });
+    const output = await runContainerAgent(
+      MAIN_GROUP,
+      {
+        prompt: 'Test',
+        groupFolder: 'main',
+        chatJid: 'main@g.us',
+        isMain: true,
+      },
+      () => {},
+    );
     expect(output.status).toBe('error');
     expect(output.error).toContain('crashed');
   });
@@ -352,13 +398,28 @@ describe('IPC pipeline: schedule_task → DB', () => {
     );
     expect(getTaskById('pipeline-lifecycle')!.status).toBe('active');
 
-    await processTaskIpc({ type: 'pause_task', taskId: 'pipeline-lifecycle' }, 'whatsapp_main', true, ipcDeps);
+    await processTaskIpc(
+      { type: 'pause_task', taskId: 'pipeline-lifecycle' },
+      'whatsapp_main',
+      true,
+      ipcDeps,
+    );
     expect(getTaskById('pipeline-lifecycle')!.status).toBe('paused');
 
-    await processTaskIpc({ type: 'resume_task', taskId: 'pipeline-lifecycle' }, 'whatsapp_main', true, ipcDeps);
+    await processTaskIpc(
+      { type: 'resume_task', taskId: 'pipeline-lifecycle' },
+      'whatsapp_main',
+      true,
+      ipcDeps,
+    );
     expect(getTaskById('pipeline-lifecycle')!.status).toBe('active');
 
-    await processTaskIpc({ type: 'cancel_task', taskId: 'pipeline-lifecycle' }, 'whatsapp_main', true, ipcDeps);
+    await processTaskIpc(
+      { type: 'cancel_task', taskId: 'pipeline-lifecycle' },
+      'whatsapp_main',
+      true,
+      ipcDeps,
+    );
     expect(getTaskById('pipeline-lifecycle')).toBeUndefined();
   });
 });
@@ -387,20 +448,38 @@ describe('Full pipeline simulation', () => {
       if (output.result) sent.push(output.result);
     });
 
-    mockRunContainerAgent.mockImplementation(async (_g, _input, _onProcess, onOutputCb) => {
-      if (onOutputCb) await onOutputCb({ status: 'success', result: 'Got it!', newSessionId: undefined });
-      return { status: 'success', result: 'Got it!', newSessionId: undefined };
-    });
+    mockRunContainerAgent.mockImplementation(
+      async (_g, _input, _onProcess, onOutputCb) => {
+        if (onOutputCb)
+          await onOutputCb({
+            status: 'success',
+            result: 'Got it!',
+            newSessionId: undefined,
+          });
+        return {
+          status: 'success',
+          result: 'Got it!',
+          newSessionId: undefined,
+        };
+      },
+    );
 
     const output = await runContainerAgent(
       MAIN_GROUP,
-      { prompt: 'msg content', groupFolder: 'main', chatJid: 'main@g.us', isMain: true },
+      {
+        prompt: 'msg content',
+        groupFolder: 'main',
+        chatJid: 'main@g.us',
+        isMain: true,
+      },
       () => {},
       onOutput,
     );
 
     expect(output.status).toBe('success');
-    expect(onOutput).toHaveBeenCalledWith(expect.objectContaining({ result: 'Got it!' }));
+    expect(onOutput).toHaveBeenCalledWith(
+      expect.objectContaining({ result: 'Got it!' }),
+    );
     expect(sent[0]).toBe('Got it!');
   });
 

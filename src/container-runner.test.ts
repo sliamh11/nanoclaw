@@ -156,12 +156,10 @@ vi.mock('./container-runtime.js', () => ({
   CONTAINER_HOST_GATEWAY: 'host.docker.internal',
   CONTAINER_RUNTIME_BIN: 'docker',
   hostGatewayArgs: vi.fn(() => []),
-  readonlyMountArgs: vi.fn(
-    (hostPath: string, containerPath: string) => [
-      '-v',
-      `${hostPath}:${containerPath}:ro`,
-    ],
-  ),
+  readonlyMountArgs: vi.fn((hostPath: string, containerPath: string) => [
+    '-v',
+    `${hostPath}:${containerPath}:ro`,
+  ]),
 }));
 
 describe('container-runner timeout behavior', () => {
@@ -313,7 +311,9 @@ function parseMountsFromSpawnArgs(
 async function runAndCaptureMounts(
   group: RegisteredGroup,
   isMain: boolean,
-): Promise<Array<{ hostPath: string; containerPath: string; readonly: boolean }>> {
+): Promise<
+  Array<{ hostPath: string; containerPath: string; readonly: boolean }>
+> {
   fakeProc = createFakeProcess();
   // Wire up the spawn mock BEFORE running so it returns the new proc
   vi.mocked(childProcess.spawn).mockReturnValue(
@@ -354,13 +354,17 @@ describe('buildVolumeMounts — main group', () => {
     fsMocked.readdirSync.mockReset();
     fsMocked.readdirSync.mockReturnValue([]);
     fsMocked.statSync.mockReset();
-    fsMocked.statSync.mockReturnValue({ isDirectory: () => false } as ReturnType<typeof fsMod.statSync>);
+    fsMocked.statSync.mockReturnValue({
+      isDirectory: () => false,
+    } as ReturnType<typeof fsMod.statSync>);
     if ('cpSync' in fsMocked) {
       (fsMocked as Record<string, ReturnType<typeof vi.fn>>).cpSync = vi.fn();
     }
 
     vi.mocked(getProjectById).mockReturnValue(undefined);
-    vi.mocked(childProcess.spawn).mockReturnValue(fakeProc as ReturnType<typeof childProcess.spawn>);
+    vi.mocked(childProcess.spawn).mockReturnValue(
+      fakeProc as ReturnType<typeof childProcess.spawn>,
+    );
   });
 
   it('mounts project root read-only at /workspace/project', async () => {
@@ -459,18 +463,26 @@ describe('buildVolumeMounts — main group', () => {
 
     fakeProc = createFakeProcess();
     setImmediate(() => fakeProc.emit('close', 0));
-    vi.mocked(childProcess.spawn).mockReturnValue(fakeProc as ReturnType<typeof childProcess.spawn>);
+    vi.mocked(childProcess.spawn).mockReturnValue(
+      fakeProc as ReturnType<typeof childProcess.spawn>,
+    );
 
     await runContainerAgent(
       group,
-      { prompt: 'test', groupFolder: group.folder, chatJid: 'x@g.us', isMain: true },
+      {
+        prompt: 'test',
+        groupFolder: group.folder,
+        chatJid: 'x@g.us',
+        isMain: true,
+      },
       () => {},
     );
 
     const writeFileCalls = fsMocked.writeFileSync.mock.calls;
     const settingsCall = writeFileCalls.find(
       (args) =>
-        typeof args[0] === 'string' && (args[0] as string).endsWith('settings.json'),
+        typeof args[0] === 'string' &&
+        (args[0] as string).endsWith('settings.json'),
     );
     expect(settingsCall).toBeDefined();
 
@@ -489,7 +501,8 @@ describe('buildVolumeMounts — main group', () => {
       return false;
     });
     fsMocked.readdirSync.mockImplementation((p: unknown) => {
-      if (p === skillsSrc) return ['pdf-skill' as unknown as import('fs').Dirent];
+      if (p === skillsSrc)
+        return ['pdf-skill' as unknown as import('fs').Dirent];
       return [];
     });
     fsMocked.statSync.mockImplementation((p: unknown) => {
@@ -512,11 +525,18 @@ describe('buildVolumeMounts — main group', () => {
 
     fakeProc = createFakeProcess();
     setImmediate(() => fakeProc.emit('close', 0));
-    vi.mocked(childProcess.spawn).mockReturnValue(fakeProc as ReturnType<typeof childProcess.spawn>);
+    vi.mocked(childProcess.spawn).mockReturnValue(
+      fakeProc as ReturnType<typeof childProcess.spawn>,
+    );
 
     await runContainerAgent(
       group,
-      { prompt: 'test', groupFolder: group.folder, chatJid: 'x@g.us', isMain: true },
+      {
+        prompt: 'test',
+        groupFolder: group.folder,
+        chatJid: 'x@g.us',
+        isMain: true,
+      },
       () => {},
     );
 
@@ -541,10 +561,14 @@ describe('buildVolumeMounts — non-main group', () => {
     fsMocked.readdirSync.mockReset();
     fsMocked.readdirSync.mockReturnValue([]);
     fsMocked.statSync.mockReset();
-    fsMocked.statSync.mockReturnValue({ isDirectory: () => false } as ReturnType<typeof fsMod.statSync>);
+    fsMocked.statSync.mockReturnValue({
+      isDirectory: () => false,
+    } as ReturnType<typeof fsMod.statSync>);
 
     vi.mocked(getProjectById).mockReturnValue(undefined);
-    vi.mocked(childProcess.spawn).mockReturnValue(fakeProc as ReturnType<typeof childProcess.spawn>);
+    vi.mocked(childProcess.spawn).mockReturnValue(
+      fakeProc as ReturnType<typeof childProcess.spawn>,
+    );
   });
 
   it('does NOT mount project root', async () => {
@@ -635,11 +659,18 @@ describe('buildVolumeMounts — non-main group', () => {
 
     fakeProc = createFakeProcess();
     setImmediate(() => fakeProc.emit('close', 0));
-    vi.mocked(childProcess.spawn).mockReturnValue(fakeProc as ReturnType<typeof childProcess.spawn>);
+    vi.mocked(childProcess.spawn).mockReturnValue(
+      fakeProc as ReturnType<typeof childProcess.spawn>,
+    );
 
     await runContainerAgent(
       group,
-      { prompt: 'test', groupFolder: group.folder, chatJid: 'x@g.us', isMain: false },
+      {
+        prompt: 'test',
+        groupFolder: group.folder,
+        chatJid: 'x@g.us',
+        isMain: false,
+      },
       () => {},
     );
 
@@ -681,10 +712,14 @@ describe('buildVolumeMounts — external project mounts', () => {
     fsMocked.readdirSync.mockReset();
     fsMocked.readdirSync.mockReturnValue([]);
     fsMocked.statSync.mockReset();
-    fsMocked.statSync.mockReturnValue({ isDirectory: () => false } as ReturnType<typeof fsMod.statSync>);
+    fsMocked.statSync.mockReturnValue({
+      isDirectory: () => false,
+    } as ReturnType<typeof fsMod.statSync>);
     fsMocked.realpathSync.mockReset?.();
 
-    vi.mocked(childProcess.spawn).mockReturnValue(fakeProc as ReturnType<typeof childProcess.spawn>);
+    vi.mocked(childProcess.spawn).mockReturnValue(
+      fakeProc as ReturnType<typeof childProcess.spawn>,
+    );
   });
 
   it('mounts real project path when realpath matches registered path', async () => {
@@ -700,7 +735,9 @@ describe('buildVolumeMounts — external project mounts', () => {
     });
 
     fsMocked.existsSync.mockImplementation((p: unknown) => p === PROJECT_PATH);
-    fsMocked.realpathSync = vi.fn().mockReturnValue(PROJECT_PATH) as typeof fsMod.realpathSync;
+    fsMocked.realpathSync = vi
+      .fn()
+      .mockReturnValue(PROJECT_PATH) as typeof fsMod.realpathSync;
 
     const group: RegisteredGroup = {
       name: 'App Group',
@@ -736,7 +773,9 @@ describe('buildVolumeMounts — external project mounts', () => {
     });
 
     fsMocked.existsSync.mockImplementation((p: unknown) => p === PROJECT_PATH);
-    fsMocked.realpathSync = vi.fn().mockReturnValue(SYMLINK_TARGET) as typeof fsMod.realpathSync;
+    fsMocked.realpathSync = vi
+      .fn()
+      .mockReturnValue(SYMLINK_TARGET) as typeof fsMod.realpathSync;
 
     const group: RegisteredGroup = {
       name: 'App Group',
@@ -801,7 +840,9 @@ describe('buildVolumeMounts — external project mounts', () => {
     });
 
     fsMocked.existsSync.mockImplementation((p: unknown) => p === PROJECT_PATH);
-    fsMocked.realpathSync = vi.fn().mockReturnValue(PROJECT_PATH) as typeof fsMod.realpathSync;
+    fsMocked.realpathSync = vi
+      .fn()
+      .mockReturnValue(PROJECT_PATH) as typeof fsMod.realpathSync;
 
     const group: RegisteredGroup = {
       name: 'App Group',
@@ -836,7 +877,9 @@ describe('buildVolumeMounts — sensitive file shadowing', () => {
     fsMocked.readdirSync.mockReturnValue([]);
     fsMocked.statSync.mockReset();
 
-    vi.mocked(childProcess.spawn).mockReturnValue(fakeProc as ReturnType<typeof childProcess.spawn>);
+    vi.mocked(childProcess.spawn).mockReturnValue(
+      fakeProc as ReturnType<typeof childProcess.spawn>,
+    );
 
     // Default project setup for all shadowing tests
     vi.mocked(getProjectById).mockReturnValue({
@@ -847,7 +890,9 @@ describe('buildVolumeMounts — sensitive file shadowing', () => {
       readonly: false,
       created_at: new Date().toISOString(),
     });
-    fsMocked.realpathSync = vi.fn().mockReturnValue(PROJECT_PATH) as typeof fsMod.realpathSync;
+    fsMocked.realpathSync = vi
+      .fn()
+      .mockReturnValue(PROJECT_PATH) as typeof fsMod.realpathSync;
   });
 
   it('shadows .env file in the project with /dev/null', async () => {
@@ -859,7 +904,9 @@ describe('buildVolumeMounts — sensitive file shadowing', () => {
       if (s === `${PROJECT_PATH}/.env`) return true;
       return false;
     });
-    fsMocked.statSync.mockReturnValue({ isDirectory: () => false } as ReturnType<typeof fsMod.statSync>);
+    fsMocked.statSync.mockReturnValue({
+      isDirectory: () => false,
+    } as ReturnType<typeof fsMod.statSync>);
 
     const group: RegisteredGroup = {
       name: 'App',
@@ -890,7 +937,8 @@ describe('buildVolumeMounts — sensitive file shadowing', () => {
       return false;
     });
     fsMocked.statSync.mockImplementation((p: unknown) => {
-      if (p === awsDir) return { isDirectory: () => true } as ReturnType<typeof fsMod.statSync>;
+      if (p === awsDir)
+        return { isDirectory: () => true } as ReturnType<typeof fsMod.statSync>;
       return { isDirectory: () => false } as ReturnType<typeof fsMod.statSync>;
     });
 
@@ -925,7 +973,8 @@ describe('buildVolumeMounts — sensitive file shadowing', () => {
       return false;
     });
     fsMocked.statSync.mockImplementation((p: unknown) => {
-      if (p === secretsDir) return { isDirectory: () => true } as ReturnType<typeof fsMod.statSync>;
+      if (p === secretsDir)
+        return { isDirectory: () => true } as ReturnType<typeof fsMod.statSync>;
       return { isDirectory: () => false } as ReturnType<typeof fsMod.statSync>;
     });
 
@@ -939,11 +988,18 @@ describe('buildVolumeMounts — sensitive file shadowing', () => {
 
     fakeProc = createFakeProcess();
     setImmediate(() => fakeProc.emit('close', 0));
-    vi.mocked(childProcess.spawn).mockReturnValue(fakeProc as ReturnType<typeof childProcess.spawn>);
+    vi.mocked(childProcess.spawn).mockReturnValue(
+      fakeProc as ReturnType<typeof childProcess.spawn>,
+    );
 
     await runContainerAgent(
       group,
-      { prompt: 'test', groupFolder: group.folder, chatJid: 'x@g.us', isMain: true },
+      {
+        prompt: 'test',
+        groupFolder: group.folder,
+        chatJid: 'x@g.us',
+        isMain: true,
+      },
       () => {},
     );
 
@@ -965,10 +1021,14 @@ describe('buildVolumeMounts — agent-runner source mount', () => {
     fsMocked.readdirSync.mockReset();
     fsMocked.readdirSync.mockReturnValue([]);
     fsMocked.statSync.mockReset();
-    fsMocked.statSync.mockReturnValue({ isDirectory: () => false } as ReturnType<typeof fsMod.statSync>);
+    fsMocked.statSync.mockReturnValue({
+      isDirectory: () => false,
+    } as ReturnType<typeof fsMod.statSync>);
 
     vi.mocked(getProjectById).mockReturnValue(undefined);
-    vi.mocked(childProcess.spawn).mockReturnValue(fakeProc as ReturnType<typeof childProcess.spawn>);
+    vi.mocked(childProcess.spawn).mockReturnValue(
+      fakeProc as ReturnType<typeof childProcess.spawn>,
+    );
   });
 
   it('mounts agent-runner source read-only at /app/src', async () => {
@@ -1005,11 +1065,18 @@ describe('buildVolumeMounts — agent-runner source mount', () => {
 
     fakeProc = createFakeProcess();
     setImmediate(() => fakeProc.emit('close', 0));
-    vi.mocked(childProcess.spawn).mockReturnValue(fakeProc as ReturnType<typeof childProcess.spawn>);
+    vi.mocked(childProcess.spawn).mockReturnValue(
+      fakeProc as ReturnType<typeof childProcess.spawn>,
+    );
 
     await runContainerAgent(
       group,
-      { prompt: 'test', groupFolder: group.folder, chatJid: 'x@g.us', isMain: true },
+      {
+        prompt: 'test',
+        groupFolder: group.folder,
+        chatJid: 'x@g.us',
+        isMain: true,
+      },
       () => {},
     );
 

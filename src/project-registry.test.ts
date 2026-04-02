@@ -51,9 +51,17 @@ beforeEach(() => {
   vi.resetAllMocks();
   // Default: paths exist, are directories, realpathSync returns same path
   mockExistsSync.mockReturnValue(false);
-  mockStatSync.mockReturnValue({ isDirectory: () => true } as ReturnType<typeof fs.statSync>);
+  mockStatSync.mockReturnValue({ isDirectory: () => true } as ReturnType<
+    typeof fs.statSync
+  >);
   vi.mocked(fs.realpathSync).mockImplementation((p: fs.PathLike) => String(p));
-  mockValidateMount.mockReturnValue({ allowed: true, reason: 'ok', realHostPath: '/tmp/project', resolvedContainerPath: 'project', effectiveReadonly: false });
+  mockValidateMount.mockReturnValue({
+    allowed: true,
+    reason: 'ok',
+    realHostPath: '/tmp/project',
+    resolvedContainerPath: 'project',
+    effectiveReadonly: false,
+  });
   mockGetProjectByPath.mockReturnValue(null);
 });
 
@@ -115,7 +123,9 @@ describe('detectProjectType', () => {
   });
 
   it('detects TypeScript project from package.json + tsconfig.json', () => {
-    setupFiles(['package.json', 'tsconfig.json'], { dependencies: { vitest: '1.0' } });
+    setupFiles(['package.json', 'tsconfig.json'], {
+      dependencies: { vitest: '1.0' },
+    });
     const result = detectProjectType('/tmp/project');
     expect(result?.language).toBe('typescript');
     expect(result?.testRunner).toBe('vitest');
