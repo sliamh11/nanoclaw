@@ -23,7 +23,7 @@ All notable changes to Deus will be documented in this file.
 - Dynamic concurrency (machine-adaptive worker counts)
 
 ### Changed
-- Configurable container runtime (Docker, Apple Container, Podman)
+- Docker container runtime (cross-platform, default runtime)
 
 ---
 

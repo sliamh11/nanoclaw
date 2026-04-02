@@ -24,7 +24,7 @@ Instead of application-level permission systems trying to prevent agents from ac
 
 ### Built for One User
 
-This isn't a framework or a platform. It's working software for my specific needs. I use WhatsApp and Email, so it supports WhatsApp and Email. I don't use Telegram, so it doesn't support Telegram. I add the integrations I actually want, not every possible integration.
+This isn't a framework or a platform. It started as working software for one user's specific needs. Channels are added as skills — you run `/add-telegram`, `/add-slack`, etc. to extend your fork. The base install ships with WhatsApp. Everything else is opt-in.
 
 ### Customization = Code Changes
 
@@ -54,13 +54,8 @@ Skills to add or switch to different messaging platforms:
 - `/add-sms` - Add SMS via Twilio or similar
 - `/convert-to-telegram` - Replace WhatsApp with Telegram entirely
 
-### Container Runtime
-The project uses Docker by default (cross-platform). For macOS users who prefer Apple Container:
-- `/convert-to-apple-container` - Switch from Docker to Apple Container (macOS-only)
-
 ### Platform Support
-- `/setup-linux` - Make the full setup work on Linux (depends on Docker conversion)
-- `/setup-windows` - Windows support via WSL2 + Docker
+- `/setup-windows` - Windows support via Docker Desktop + WSL2 (planned — see Research/windows-support-implementation-plan.md)
 
 ---
 
