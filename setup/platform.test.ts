@@ -73,7 +73,7 @@ describe('hasSystemd', () => {
 describe('getServiceManager', () => {
   it('returns a valid service manager', () => {
     const result = getServiceManager();
-    expect(['launchd', 'systemd', 'none']).toContain(result);
+    expect(['launchd', 'systemd', 'nssm', 'servy', 'none']).toContain(result);
   });
 
   it('matches the detected platform', () => {
@@ -118,3 +118,4 @@ describe('getNodeMajorVersion', () => {
     expect(major!).toBeGreaterThanOrEqual(20);
   });
 });
+
