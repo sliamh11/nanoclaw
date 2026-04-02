@@ -225,12 +225,17 @@ describe('credential-proxy', () => {
       {
         method: 'POST',
         path: '/api/oauth/claude_cli/create_api_key',
-        headers: { 'content-type': 'application/json', authorization: 'Bearer placeholder' },
+        headers: {
+          'content-type': 'application/json',
+          authorization: 'Bearer placeholder',
+        },
       },
       '{}',
     );
 
-    expect(lastUpstreamHeaders['authorization']).toBe('Bearer creds-file-token');
+    expect(lastUpstreamHeaders['authorization']).toBe(
+      'Bearer creds-file-token',
+    );
   });
 
   it('OAuth mode: env CLAUDE_CODE_OAUTH_TOKEN takes priority over credentials file', async () => {
@@ -250,7 +255,10 @@ describe('credential-proxy', () => {
       {
         method: 'POST',
         path: '/api/oauth/claude_cli/create_api_key',
-        headers: { 'content-type': 'application/json', authorization: 'Bearer placeholder' },
+        headers: {
+          'content-type': 'application/json',
+          authorization: 'Bearer placeholder',
+        },
       },
       '{}',
     );
@@ -262,13 +270,19 @@ describe('credential-proxy', () => {
     // First call: token expiring in 2 min (within 5-min early-expire window)
     mockReadFileSync.mockReturnValueOnce(
       JSON.stringify({
-        claudeAiOauth: { accessToken: 'expiring-token', expiresAt: Date.now() + 2 * 60 * 1000 },
+        claudeAiOauth: {
+          accessToken: 'expiring-token',
+          expiresAt: Date.now() + 2 * 60 * 1000,
+        },
       }),
     );
     // Second call: refreshed token
     mockReadFileSync.mockReturnValueOnce(
       JSON.stringify({
-        claudeAiOauth: { accessToken: 'refreshed-token', expiresAt: Date.now() + 60 * 60 * 1000 },
+        claudeAiOauth: {
+          accessToken: 'refreshed-token',
+          expiresAt: Date.now() + 60 * 60 * 1000,
+        },
       }),
     );
 
@@ -279,7 +293,10 @@ describe('credential-proxy', () => {
       {
         method: 'POST',
         path: '/api/oauth/claude_cli/create_api_key',
-        headers: { 'content-type': 'application/json', authorization: 'Bearer placeholder' },
+        headers: {
+          'content-type': 'application/json',
+          authorization: 'Bearer placeholder',
+        },
       },
       '{}',
     );
@@ -291,7 +308,10 @@ describe('credential-proxy', () => {
       {
         method: 'POST',
         path: '/api/oauth/claude_cli/create_api_key',
-        headers: { 'content-type': 'application/json', authorization: 'Bearer placeholder' },
+        headers: {
+          'content-type': 'application/json',
+          authorization: 'Bearer placeholder',
+        },
       },
       '{}',
     );
@@ -308,7 +328,10 @@ describe('credential-proxy', () => {
       {
         method: 'POST',
         path: '/api/oauth/claude_cli/create_api_key',
-        headers: { 'content-type': 'application/json', authorization: 'Bearer placeholder' },
+        headers: {
+          'content-type': 'application/json',
+          authorization: 'Bearer placeholder',
+        },
       },
       '{}',
     );

@@ -54,7 +54,9 @@ export function _resetCredentialsCacheForTest(): void {
   credentialsCache = null;
 }
 
-function readCredentialsFile(): { token: string; expiresAt: number } | undefined {
+function readCredentialsFile():
+  | { token: string; expiresAt: number }
+  | undefined {
   try {
     const raw = readFileSync(CREDENTIALS_PATH, 'utf-8');
     const parsed = JSON.parse(raw) as {
@@ -75,11 +77,16 @@ function getDynamicOAuthToken(): string | undefined {
     const aboutToExpire =
       credentialsCache.tokenExpiresAt !== Infinity &&
       credentialsCache.tokenExpiresAt < now + EARLY_EXPIRE_WINDOW_MS;
-    if (cacheAge < CACHE_TTL_MS && !aboutToExpire) return credentialsCache.token;
+    if (cacheAge < CACHE_TTL_MS && !aboutToExpire)
+      return credentialsCache.token;
   }
   const creds = readCredentialsFile();
   if (!creds) return undefined;
-  credentialsCache = { token: creds.token, fetchedAt: now, tokenExpiresAt: creds.expiresAt };
+  credentialsCache = {
+    token: creds.token,
+    fetchedAt: now,
+    tokenExpiresAt: creds.expiresAt,
+  };
   return creds.token;
 }
 

@@ -22,12 +22,16 @@ describe('detectDomains', () => {
   });
 
   it('detects study domain from exam and homework keywords', () => {
-    const domains = detectDomains('I have an exam tomorrow and need help with homework problems.');
+    const domains = detectDomains(
+      'I have an exam tomorrow and need help with homework problems.',
+    );
     expect(domains).toContain('study');
   });
 
   it('detects writing domain from essay and draft keywords', () => {
-    const domains = detectDomains('Can you help me draft an essay and edit it?');
+    const domains = detectDomains(
+      'Can you help me draft an essay and edit it?',
+    );
     expect(domains).toContain('writing');
   });
 

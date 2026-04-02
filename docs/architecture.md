@@ -9,7 +9,7 @@ Deus is a personal AI assistant. A single Node.js host process orchestrates cont
 ```
 ┌──────────────────────────────────────────────────────────────────────────┐
 │                              USER                                        │
-│                 WhatsApp  ·  Telegram  ·  Slack  ·  Discord              │
+│          WhatsApp  ·  Telegram  ·  Slack  ·  Discord  ·  Gmail            │
 └────────────────────────────┬─────────────────────────────────────────────┘
                              │ message
                              ▼
@@ -136,7 +136,7 @@ Spawns containers and manages the stdin/stdout protocol.
 
 ### `container-runtime.ts` — Runtime Abstraction
 
-Abstracts Docker, Apple Container, and Podman behind a single interface. The runtime binary is set via `CONTAINER_RUNTIME` env var (default: `docker`).
+Docker runtime abstraction. The binary is set via `CONTAINER_RUNTIME` env var (default: `docker`), allowing power users to substitute an alternative runtime without code changes.
 
 Handles:
 - Runtime detection and health check (`ensureContainerRuntimeRunning`)
@@ -184,6 +184,8 @@ Two auth modes:
 - **OAuth**: container CLI exchanges a placeholder token for a temporary API key via the OAuth endpoint; proxy injects the real OAuth token on the exchange request
 
 Binds to `127.0.0.1` on macOS (Docker Desktop VM routes `host.docker.internal` to loopback) and to the `docker0` bridge IP on Linux.
+
+OAuth token resolution order: env file → `~/.claude/.credentials.json` (auto-refreshed by Claude Code CLI, read with 5-min cache).
 
 ### `startup-gate.ts` — Prerequisite Validation
 

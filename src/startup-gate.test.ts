@@ -166,7 +166,9 @@ describe('pad', () => {
   it('short text is padded to fill the box width', () => {
     const result = pad('Hello');
     // format: ║ <text><spaces> ║  → total inner = INNER chars, outer cols = INNER+4
-    expect(result).toBe('║ ' + 'Hello' + ' '.repeat(INNER - 'Hello'.length) + ' ║');
+    expect(result).toBe(
+      '║ ' + 'Hello' + ' '.repeat(INNER - 'Hello'.length) + ' ║',
+    );
   });
 
   it('text exactly at INNER chars is not truncated', () => {
@@ -228,7 +230,8 @@ describe('wrapHint', () => {
   });
 
   it('reassembles to the original text when lines are joined', () => {
-    const hint = 'The quick brown fox jumps over the lazy dog and keeps on running across the meadow';
+    const hint =
+      'The quick brown fox jumps over the lazy dog and keeps on running across the meadow';
     const lines = wrapHint(hint, 4);
     expect(lines.join(' ')).toBe(hint);
   });
@@ -237,13 +240,20 @@ describe('wrapHint', () => {
     const hint = 'aaaa bbbb cccc dddd eeee ffff gggg hhhh iiii jjjj kkkk';
     const linesSmallIndent = wrapHint(hint, 4);
     const linesLargeIndent = wrapHint(hint, 30);
-    expect(linesLargeIndent.length).toBeGreaterThanOrEqual(linesSmallIndent.length);
+    expect(linesLargeIndent.length).toBeGreaterThanOrEqual(
+      linesSmallIndent.length,
+    );
   });
 });
 
 describe('formatResult', () => {
   it('uses ✓ icon and single-line OK format for a passing result', () => {
-    const r: CheckResult = { name: 'My check', level: 'suggest', ok: true, hint: '' };
+    const r: CheckResult = {
+      name: 'My check',
+      level: 'suggest',
+      ok: true,
+      hint: '',
+    };
     const lines = formatResult(r);
     expect(lines).toHaveLength(1);
     expect(lines[0]).toMatch(/^✓/);
@@ -251,20 +261,35 @@ describe('formatResult', () => {
   });
 
   it('uses ✗ icon for a fatal failure', () => {
-    const r: CheckResult = { name: 'Fatal check', level: 'fatal', ok: false, hint: 'Fix it now' };
+    const r: CheckResult = {
+      name: 'Fatal check',
+      level: 'fatal',
+      ok: false,
+      hint: 'Fix it now',
+    };
     const lines = formatResult(r);
     expect(lines[0]).toMatch(/^✗/);
     expect(lines[0]).toContain('Fatal check');
   });
 
   it('uses ⚠ icon for a warn failure', () => {
-    const r: CheckResult = { name: 'Warn check', level: 'warn', ok: false, hint: 'Please fix' };
+    const r: CheckResult = {
+      name: 'Warn check',
+      level: 'warn',
+      ok: false,
+      hint: 'Please fix',
+    };
     const lines = formatResult(r);
     expect(lines[0]).toMatch(/^⚠/);
   });
 
   it('uses ○ icon for a suggest failure', () => {
-    const r: CheckResult = { name: 'Suggest check', level: 'suggest', ok: false, hint: 'Optional' };
+    const r: CheckResult = {
+      name: 'Suggest check',
+      level: 'suggest',
+      ok: false,
+      hint: 'Optional',
+    };
     const lines = formatResult(r);
     expect(lines[0]).toMatch(/^○/);
   });
@@ -285,7 +310,12 @@ describe('formatResult', () => {
   it('wraps a very long hint across multiple lines', () => {
     const longHint =
       'This is a very long hint that will definitely exceed the inner box width and should be wrapped across multiple output lines by the wrapHint helper function';
-    const r: CheckResult = { name: 'Long hint check', level: 'warn', ok: false, hint: longHint };
+    const r: CheckResult = {
+      name: 'Long hint check',
+      level: 'warn',
+      ok: false,
+      hint: longHint,
+    };
     const lines = formatResult(r);
     // first line = check name, subsequent lines = wrapped hint
     expect(lines.length).toBeGreaterThan(2);
@@ -301,7 +331,9 @@ describe('printStartupReport', () => {
     mockLogger.error.mockClear();
   });
 
-  function makeReport(overrides: Partial<StartupCheckReport> = {}): StartupCheckReport {
+  function makeReport(
+    overrides: Partial<StartupCheckReport> = {},
+  ): StartupCheckReport {
     return {
       fatals: [],
       warnings: [],
@@ -330,7 +362,12 @@ describe('printStartupReport', () => {
 
   it('uses "FAILED" in the title when there are fatals', () => {
     const fatals: CheckResult[] = [
-      { name: 'API credentials', level: 'fatal', ok: false, hint: 'Set your API key' },
+      {
+        name: 'API credentials',
+        level: 'fatal',
+        ok: false,
+        hint: 'Set your API key',
+      },
     ];
     printStartupReport(makeReport({ fatals }));
     const allCalls = mockLogger.error.mock.calls.flat().join('\n');
@@ -339,8 +376,18 @@ describe('printStartupReport', () => {
 
   it('includes fatal error count in the footer when there are fatals', () => {
     const fatals: CheckResult[] = [
-      { name: 'API credentials', level: 'fatal', ok: false, hint: 'Set your API key' },
-      { name: 'Other fatal', level: 'fatal', ok: false, hint: 'Another problem' },
+      {
+        name: 'API credentials',
+        level: 'fatal',
+        ok: false,
+        hint: 'Set your API key',
+      },
+      {
+        name: 'Other fatal',
+        level: 'fatal',
+        ok: false,
+        hint: 'Another problem',
+      },
     ];
     printStartupReport(makeReport({ fatals }));
     const allCalls = mockLogger.error.mock.calls.flat().join('\n');
@@ -350,7 +397,12 @@ describe('printStartupReport', () => {
 
   it('uses "running with limited functionality" footer when only warnings present', () => {
     const warnings: CheckResult[] = [
-      { name: 'Memory vault', level: 'warn', ok: false, hint: 'Vault not found' },
+      {
+        name: 'Memory vault',
+        level: 'warn',
+        ok: false,
+        hint: 'Vault not found',
+      },
     ];
     printStartupReport(makeReport({ warnings }));
     const allCalls = mockLogger.error.mock.calls.flat().join('\n');
@@ -360,7 +412,12 @@ describe('printStartupReport', () => {
 
   it('uses "running with limited functionality" footer when only suggestions present', () => {
     const suggestions: CheckResult[] = [
-      { name: 'Channels', level: 'suggest', ok: false, hint: 'No channels configured' },
+      {
+        name: 'Channels',
+        level: 'suggest',
+        ok: false,
+        hint: 'No channels configured',
+      },
     ];
     printStartupReport(makeReport({ suggestions }));
     const allCalls = mockLogger.error.mock.calls.flat().join('\n');
@@ -369,7 +426,12 @@ describe('printStartupReport', () => {
 
   it('outputs box borders (╔ top and ╚ bottom)', () => {
     const warnings: CheckResult[] = [
-      { name: 'Memory vault', level: 'warn', ok: false, hint: 'Vault not found' },
+      {
+        name: 'Memory vault',
+        level: 'warn',
+        ok: false,
+        hint: 'Vault not found',
+      },
     ];
     printStartupReport(makeReport({ warnings }));
     const calls = mockLogger.error.mock.calls.flat();
@@ -379,11 +441,16 @@ describe('printStartupReport', () => {
 
   it('every output line has the same visual width', () => {
     const warnings: CheckResult[] = [
-      { name: 'Memory vault', level: 'warn', ok: false, hint: 'Vault not found' },
+      {
+        name: 'Memory vault',
+        level: 'warn',
+        ok: false,
+        hint: 'Vault not found',
+      },
     ];
     printStartupReport(makeReport({ warnings }));
     const calls = mockLogger.error.mock.calls.flat();
-    const widths = calls.map((line) => [...line].length);
+    const widths = calls.map((line) => [...(line as string)].length);
     const first = widths[0];
     for (const w of widths) {
       expect(w).toBe(first);
@@ -392,7 +459,12 @@ describe('printStartupReport', () => {
 
   it('includes ✗ icon in output for fatal failures', () => {
     const fatals: CheckResult[] = [
-      { name: 'API credentials', level: 'fatal', ok: false, hint: 'Set your key' },
+      {
+        name: 'API credentials',
+        level: 'fatal',
+        ok: false,
+        hint: 'Set your key',
+      },
     ];
     printStartupReport(makeReport({ fatals }));
     const allCalls = mockLogger.error.mock.calls.flat().join('\n');
@@ -419,7 +491,7 @@ describe('printStartupReport', () => {
     ];
     printStartupReport(makeReport({ warnings }));
     const calls = mockLogger.error.mock.calls.flat();
-    const widths = calls.map((line) => [...line].length);
+    const widths = calls.map((line) => [...(line as string)].length);
     const expectedWidth = widths[0]; // take from border line
     for (const w of widths) {
       expect(w).toBe(expectedWidth);
