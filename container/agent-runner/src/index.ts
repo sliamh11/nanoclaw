@@ -70,6 +70,15 @@ const IPC_INPUT_DIR = '/workspace/ipc/input';
 const IPC_INPUT_CLOSE_SENTINEL = path.join(IPC_INPUT_DIR, '_close');
 const IPC_POLL_MS = 500;
 
+// Keywords that signal the prompt requires multi-agent orchestration.
+// When none are present and no external project is mounted, swarm tools
+// (TeamCreate, TeamDelete, SendMessage) are excluded from allowedTools,
+// saving ~300 tokens per call on personal-assistant queries.
+const SWARM_SIGNALS = [
+  'parallel agent', 'subagent', 'agent team', 'agent swarm',
+  'orchestrate', 'in parallel', 'multiple agents', 'spawn agent',
+];
+
 /**
  * Push-based async iterable for streaming user messages to the SDK.
  * Keeps the iterable alive until end() is called, preventing isSingleUserTurn.
@@ -478,6 +487,24 @@ async function runQuery(
     log(`Additional directories: ${extraDirs.join(', ')}`);
   }
 
+  // Swarm tools are only needed for multi-agent orchestration.
+  // Exclude them for plain personal-assistant queries to save ~300 tokens.
+  // Always include when an external project is mounted (engineering context)
+  // or the prompt explicitly signals multi-agent intent.
+  const teamsNeeded = hasProject ||
+    SWARM_SIGNALS.some(kw => prompt.toLowerCase().includes(kw));
+  log(`Swarm tools: ${teamsNeeded ? 'included' : 'excluded (~300 tokens saved)'}`);
+
+  // CLAUDE.md probe: log fingerprint before every query() call.
+  // Compare across turns in the same session — if len= appears N times for
+  // N turns, the SDK re-reads the file on every resumed call (lazy loading is worth it).
+  // If it only appears once, the SDK already caches it and no change is needed.
+  const claudeMdProbePath = '/workspace/group/CLAUDE.md';
+  if (fs.existsSync(claudeMdProbePath)) {
+    const _probeStat = fs.statSync(claudeMdProbePath);
+    log(`[claude-md-probe] turn=${sessionId ? 'resume' : 'new'} len=${_probeStat.size}B mtime=${_probeStat.mtimeMs}`);
+  }
+
   for await (const message of query({
     prompt: stream,
     options: {
@@ -493,10 +520,10 @@ async function runQuery(
         'Read', 'Write', 'Edit', 'Glob', 'Grep',
         'WebSearch', 'WebFetch',
         'Task', 'TaskOutput', 'TaskStop',
-        'TeamCreate', 'TeamDelete', 'SendMessage',
+        ...(teamsNeeded ? ['TeamCreate', 'TeamDelete', 'SendMessage'] : []),
         'TodoWrite', 'ToolSearch', 'Skill',
         'NotebookEdit',
-        'mcp__deus__*'
+        'mcp__deus__*',
       ],
       env: sdkEnv,
       permissionMode: 'bypassPermissions',
