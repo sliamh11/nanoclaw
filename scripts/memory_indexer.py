@@ -259,8 +259,13 @@ def cmd_add(path_str: str):
     print(f"Indexed {indexed} chunk(s) from {path.name}")
 
 
-def cmd_recent(n: int = 3):
-    """Return the last N session frontmatters by date. Pure filesystem — no API calls."""
+def cmd_recent(n: int = 3, days: bool = False):
+    """Return recent session frontmatters. Pure filesystem — no API calls.
+
+    When days=False (legacy): return last N sessions, sorted by date then mtime.
+    When days=True: return ALL sessions from the last N calendar days, sorted by
+    date descending then mtime descending (newest first within each day).
+    """
     if not VAULT_SESSION_LOGS.exists():
         print(f"ERROR: session logs not found at {VAULT_SESSION_LOGS}", file=sys.stderr)
         sys.exit(1)
@@ -276,10 +281,24 @@ def cmd_recent(n: int = 3):
         return fm.get("date", "0000-00-00")
 
     dated = [(get_date(f), f) for f in log_files]
-    dated.sort(key=lambda x: x[0], reverse=True)
+    # Sort by date descending, then mtime descending (newest file first within same day)
+    dated.sort(key=lambda x: (x[0], x[1].stat().st_mtime), reverse=True)
+
+    if days:
+        # Collect all unique dates, take the first N, return all sessions from those days
+        seen_dates: list[str] = []
+        for date, _ in dated:
+            if date not in seen_dates:
+                seen_dates.append(date)
+            if len(seen_dates) > n:
+                break
+        target_dates = set(seen_dates[:n])
+        selected = [(d, p) for d, p in dated if d in target_dates]
+    else:
+        selected = dated[:n]
 
     lines = ["## Recent Sessions"]
-    for date, path in dated[:n]:
+    for date, path in selected:
         content = path.read_text(encoding="utf-8")
         fm = extract_frontmatter(content)
         name = path.stem.replace("-", " ")
@@ -798,6 +817,8 @@ def main():
                        help="Extract atomic facts from a session log (uses Gemini Flash)")
     group.add_argument("--recent", type=int, metavar="N",
                        help="Return last N session frontmatters by date (no API call)")
+    group.add_argument("--recent-days", type=int, metavar="N",
+                       help="Return ALL sessions from the last N calendar days (no API call)")
     parser.add_argument("--top", type=int, default=3, help="Number of results for --query")
     parser.add_argument("--steps", type=int, default=3, help="Activation steps for --wander")
     parser.add_argument("--recency-boost", action="store_true",
@@ -811,6 +832,9 @@ def main():
         return
     if args.recent is not None:
         cmd_recent(args.recent)
+        return
+    if args.recent_days is not None:
+        cmd_recent(args.recent_days, days=True)
         return
 
     _client = genai.Client(api_key=load_api_key())
