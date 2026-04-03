@@ -197,3 +197,87 @@ def test_delete_entries_removes_rows(mi):
     mi.delete_entries(db, "/test/path.md")
     assert not mi.entry_exists(db, "/test/path.md")
     db.close()
+
+
+# ── cmd_recent ───────────────────────────────────────────────────────────
+
+
+def _create_session(vault, date_folder: str, name: str, tldr: str, mtime_offset: float = 0):
+    """Helper to create a session log file with controlled mtime."""
+    day_dir = vault / "Session-Logs" / date_folder
+    day_dir.mkdir(parents=True, exist_ok=True)
+    p = day_dir / f"{name}.md"
+    p.write_text(
+        f"---\ntype: session\ndate: {date_folder}\ntldr: {tldr}\n---\n## Summary\n"
+    )
+    # Set mtime: base + offset (higher offset = newer)
+    import time
+    base_mtime = time.time() - 10000 + mtime_offset
+    os.utime(p, (base_mtime, base_mtime))
+    return p
+
+
+def test_cmd_recent_mtime_tiebreaker(mi, fresh_vault, capsys):
+    """Sessions on the same day should be ordered by mtime, newest first."""
+    _create_session(fresh_vault, "2024-06-15", "session-a", "first session", mtime_offset=100)
+    _create_session(fresh_vault, "2024-06-15", "session-b", "second session", mtime_offset=200)
+    _create_session(fresh_vault, "2024-06-15", "session-c", "third session", mtime_offset=300)
+
+    mi.cmd_recent(2)
+    output = capsys.readouterr().out
+    lines = [l for l in output.strip().split("\n") if l.startswith("- [")]
+
+    assert len(lines) == 2
+    # session-c (newest mtime) should be first, then session-b
+    assert "session c" in lines[0]
+    assert "session b" in lines[1]
+
+
+def test_cmd_recent_days_returns_all_from_day(mi, fresh_vault, capsys):
+    """--recent-days N should return ALL sessions from the last N calendar days."""
+    # 3 sessions on the same day
+    _create_session(fresh_vault, "2024-06-15", "session-a", "a", mtime_offset=100)
+    _create_session(fresh_vault, "2024-06-15", "session-b", "b", mtime_offset=200)
+    _create_session(fresh_vault, "2024-06-15", "session-c", "c", mtime_offset=300)
+    # 1 session on a different day
+    _create_session(fresh_vault, "2024-06-14", "session-old", "old", mtime_offset=50)
+
+    mi.cmd_recent(1, days=True)
+    output = capsys.readouterr().out
+    lines = [l for l in output.strip().split("\n") if l.startswith("- [")]
+
+    # Should return all 3 from 2024-06-15, NOT the one from 2024-06-14
+    assert len(lines) == 3
+    assert "session old" not in output
+
+
+def test_cmd_recent_days_spans_multiple_days(mi, fresh_vault, capsys):
+    """--recent-days 2 should return sessions from 2 distinct calendar days."""
+    _create_session(fresh_vault, "2024-06-15", "today-a", "a", mtime_offset=300)
+    _create_session(fresh_vault, "2024-06-15", "today-b", "b", mtime_offset=200)
+    _create_session(fresh_vault, "2024-06-14", "yesterday", "y", mtime_offset=100)
+    _create_session(fresh_vault, "2024-06-13", "ancient-session", "o", mtime_offset=50)
+
+    mi.cmd_recent(2, days=True)
+    output = capsys.readouterr().out
+    lines = [l for l in output.strip().split("\n") if l.startswith("- [")]
+
+    # 2 from Jun 15 + 1 from Jun 14 = 3
+    assert len(lines) == 3
+    assert "ancient-session" not in output
+
+
+def test_cmd_recent_days_mtime_order_within_day(mi, fresh_vault, capsys):
+    """Within a day, sessions should be ordered newest-first by mtime."""
+    _create_session(fresh_vault, "2024-06-15", "early", "e", mtime_offset=100)
+    _create_session(fresh_vault, "2024-06-15", "middle", "m", mtime_offset=200)
+    _create_session(fresh_vault, "2024-06-15", "late", "l", mtime_offset=300)
+
+    mi.cmd_recent(1, days=True)
+    output = capsys.readouterr().out
+    lines = [l for l in output.strip().split("\n") if l.startswith("- [")]
+
+    assert len(lines) == 3
+    assert "late" in lines[0]
+    assert "middle" in lines[1]
+    assert "early" in lines[2]
