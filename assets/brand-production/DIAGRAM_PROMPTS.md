@@ -37,7 +37,7 @@ The flow is left-to-right with these stages:
 5. CONTAINER (Linux VM) — a rounded box with dashed border containing:
    - "Claude Agent SDK" at top
    - Below it, two tool boxes: "Calendar (gcal)" and "Filesystem"
-   - A small label: "YouTube, Obsidian, etc. via optional skills"
+   - A small label: "YouTube, etc. via optional skills"
 6. Container → "Credential Proxy (:3001)" → external "Claude API" (shown to the right of container, outside both zones). This is the OUTBOUND path for Claude API calls — the proxy injects real credentials so the container never holds secrets. Label this arrow "tokens injected outbound".
 7. Separate return arrow: CONTAINER → HOST → USER labeled "response". This is the user-facing response path — it does NOT go through the credential proxy.
 
@@ -135,7 +135,7 @@ LEFT ZONE — "Host" (orange accent):
   - "Credential Proxy (:3001)" box
   - "SQLite databases" box
   - "Mount Security Validator" box (validates additional mounts against allowlist)
-  - "Obsidian vault" box (labeled "optional mount, read-write")
+  - "Memory vault" box (labeled "optional mount, read-write")
 
 RIGHT ZONE — "Container" (teal accent, dashed border):
   - "Claude Agent SDK" box

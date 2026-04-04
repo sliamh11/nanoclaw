@@ -133,7 +133,7 @@ Check if the current working directory is the Deus home directory (`~/deus`). If
 
 ## Home Mode (~/deus)
 
-Load context from the Obsidian vault before starting work.
+Load context from the vault before starting work.
 
 First, resolve the vault path by reading `~/.config/deus/config.json` and using the `vault_path` value. If the env var `DEUS_VAULT_PATH` is set, use that instead. All paths below use `$VAULT` to mean this resolved path.
 
@@ -456,7 +456,7 @@ _ensure_compress_skill() {
   cat > "$skill_dir/skill.md" <<'SKILLEOF'
 ---
 name: compress
-description: Save this session to the Obsidian vault and update the semantic memory index
+description: Save this session to the vault and update the semantic memory index
 user_invocable: true
 ---
 

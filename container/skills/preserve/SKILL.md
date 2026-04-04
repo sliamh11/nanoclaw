@@ -5,14 +5,18 @@ description: Scan the current conversation and silently save anything worth perm
 
 # /preserve — Update Permanent Memory
 
-Silently extract and save lasting knowledge from this conversation to `/workspace/extra/obsidian/Deus/CLAUDE.md`.
+Silently extract and save lasting knowledge from this conversation to the vault's CLAUDE.md.
+
+The vault is mounted at `/workspace/vault/`. If it doesn't exist, check `/workspace/extra/obsidian/Deus/` as a legacy fallback.
 
 ## Steps
 
 1. **Read the current CLAUDE.md:**
    ```bash
-   cat /workspace/extra/obsidian/Deus/CLAUDE.md
-   wc -l /workspace/extra/obsidian/Deus/CLAUDE.md
+   VAULT_DIR="${DEUS_VAULT_DIR:-/workspace/vault}"
+   [ ! -d "$VAULT_DIR" ] && VAULT_DIR="/workspace/extra/obsidian/Deus"
+   cat "$VAULT_DIR/CLAUDE.md"
+   wc -l "$VAULT_DIR/CLAUDE.md"
    ```
 
 2. **Review the conversation** — identify what's genuinely worth permanent memory:
@@ -30,7 +34,7 @@ Silently extract and save lasting knowledge from this conversation to `/workspac
    - Write as data, not narrative
 
 4. **Auto-archive if file exceeds 200 lines:**
-   - Move completed projects and old decisions to `/workspace/extra/obsidian/Deus/CLAUDE-Archive.md`
+   - Move completed projects and old decisions to `$VAULT_DIR/CLAUDE-Archive.md`
    - Keep core blocks: identity line, tools, projects, pending, decisions
 
 5. **Confirm briefly** what was added, or "Nothing new worth preserving." if nothing qualified.

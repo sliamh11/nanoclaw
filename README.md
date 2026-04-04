@@ -185,7 +185,7 @@ macOS (Apple Silicon recommended), Linux, and Windows (via Docker Desktop). Wind
 The core agent uses the Claude Agent SDK — this is architectural and not swappable. The evolution/eval judges can use Ollama (local, free) or Gemini.
 
 **Where is my data?**
-All local. Memory in SQLite, session logs optionally in an Obsidian vault, no cloud sync.
+All local. Memory in SQLite, session logs in a local vault directory, no cloud sync.
 
 **How do I add a new channel?**
 Use the skill system: `/add-whatsapp`, `/add-telegram`, `/add-slack`, `/add-discord`, `/add-gmail`. Or build your own channel skill.

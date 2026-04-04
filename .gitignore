@@ -58,6 +58,9 @@ __pycache__/
 # Skills system (local per-installation state)
 .deus/
 
+# Project-local memory vault (alternative to external vault path)
+.vault/
+
 # Local-only skills — listed here so they're not staged into container builds
 # One skill name per line (e.g., "x-integration"). No paths, just the name.
 .local-skills
