@@ -71,15 +71,25 @@ export class WhatsAppProvider implements ChannelProvider {
   private pendingFirstOpen?: () => void;
   private lastGroupSync: string | null = null;
   private knownChats = new Map<string, { name: string; isGroup: boolean }>();
+  private readyPromise: Promise<void> | null = null;
+  private readyResolve: (() => void) | null = null;
 
   // Set by server-base.ts — called for every incoming message
   onMessage: (msg: IncomingMessage) => void = () => {};
 
   async connect(): Promise<void> {
+    this.readyPromise = new Promise<void>((resolve) => {
+      this.readyResolve = resolve;
+    });
     return new Promise<void>((resolve, reject) => {
       this.pendingFirstOpen = resolve;
       this.connectInternal().catch(reject);
     });
+  }
+
+  async waitForReady(): Promise<void> {
+    if (this.connected) return;
+    if (this.readyPromise) await this.readyPromise;
   }
 
   private async connectInternal(): Promise<void> {
@@ -174,6 +184,10 @@ export class WhatsAppProvider implements ChannelProvider {
         if (this.pendingFirstOpen) {
           this.pendingFirstOpen();
           this.pendingFirstOpen = undefined;
+        }
+        if (this.readyResolve) {
+          this.readyResolve();
+          this.readyResolve = null;
         }
       }
     });

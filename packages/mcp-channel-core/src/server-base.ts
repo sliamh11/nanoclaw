@@ -33,6 +33,12 @@ export function registerCommonTools(
     'Send a message to a chat or group',
     { chat_id: z.string(), text: z.string() },
     async (args) => {
+      if (!provider.isConnected() && provider.waitForReady) {
+        await Promise.race([
+          provider.waitForReady(),
+          new Promise((resolve) => setTimeout(resolve, 15_000)),
+        ]);
+      }
       await provider.sendMessage(args.chat_id, args.text);
       return { content: [{ type: 'text' as const, text: 'Message sent.' }] };
     },
@@ -57,6 +63,13 @@ export function registerCommonTools(
     'Get connection status and channel info',
     {},
     async () => {
+      // If the provider is still connecting, wait briefly for it to be ready
+      if (!provider.isConnected() && provider.waitForReady) {
+        await Promise.race([
+          provider.waitForReady(),
+          new Promise((resolve) => setTimeout(resolve, 15_000)),
+        ]);
+      }
       const status = provider.getStatus();
       return {
         content: [{ type: 'text' as const, text: JSON.stringify(status) }],
@@ -76,6 +89,12 @@ export function registerCommonTools(
     'Refresh group and chat metadata from the platform',
     { force: z.boolean().optional() },
     async () => {
+      if (!provider.isConnected() && provider.waitForReady) {
+        await Promise.race([
+          provider.waitForReady(),
+          new Promise((resolve) => setTimeout(resolve, 15_000)),
+        ]);
+      }
       const groups = provider.syncGroups ? await provider.syncGroups() : [];
       return {
         content: [{ type: 'text' as const, text: JSON.stringify(groups) }],

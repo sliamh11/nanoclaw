@@ -61,6 +61,13 @@ export interface ChannelProvider {
   syncGroups?(): Promise<ChatInfo[]>;
 
   /**
+   * Wait for the channel to be ready (connected).
+   * Optional — if not implemented, tools assume the channel is ready immediately.
+   * Should resolve when connected, or reject/timeout if connection fails.
+   */
+  waitForReady?(): Promise<void>;
+
+  /**
    * Called by the base server to inject the message handler.
    * The channel calls this function whenever a new message arrives.
    */
