@@ -11,6 +11,7 @@ import {
   fetchLatestWaWebVersion,
   useMultiFileAuthState,
 } from '@whiskeysockets/baileys';
+import qrcode from 'qrcode-terminal';
 import pino from 'pino';
 import fs from 'fs';
 import path from 'path';
@@ -52,7 +53,7 @@ async function main() {
   const sock = makeWASocket({
     version,
     auth: { creds: state.creds, keys: state.keys },
-    printQRInTerminal: !usePairingCode,
+    printQRInTerminal: false,
     logger,
     browser: Browsers.macOS('Chrome'),
   });
@@ -83,6 +84,7 @@ async function main() {
         return; // Skip QR instructions when using pairing code
       }
 
+      qrcode.generate(qr, { small: true });
       console.log(`\nQR data written to ${QR_DATA_PATH}`);
       console.log('Scan the QR code shown above with WhatsApp.');
       console.log(
