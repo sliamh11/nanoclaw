@@ -116,38 +116,13 @@ function Get-VaultPath {
     return ""
 }
 
-function Invoke-ClaudeWithContext {
-    param([string]$WorkDir)
+function Write-Status {
+    param([string]$Message)
+    Write-Host "`r  $Message$(' ' * (40 - $Message.Length))" -NoNewline
+}
 
-    # Load token for current shell session (service uses credentials.json directly)
-    $credPath = "$env:USERPROFILE\.claude\.credentials.json"
-    if (Test-Path $credPath) {
-        try {
-            $creds = Get-Content $credPath -Raw | ConvertFrom-Json
-            $token = $creds.claudeAiOauth.accessToken
-            if ($token) { $env:CLAUDE_CODE_OAUTH_TOKEN = $token }
-        } catch { }
-    }
-
-    $vault = Get-VaultPath
-
-    # Git context
-    $gitContext = ""
-    Push-Location $WorkDir
-    try {
-        $branch = & git rev-parse --abbrev-ref HEAD 2>$null
-        $status = & git status --short 2>$null
-        $log    = & git log --oneline -5 2>$null
-        if ($branch) {
-            $gitContext  = "Current branch: $branch`n"
-            $gitContext += "Status:`n$(if ($status) { $status } else { '(clean)' })`n`nRecent commits:`n$($log -join "`n")"
-        }
-    } catch { } finally { Pop-Location }
-
-    # Startup instruction - always present so Claude knows it's Deus
-    $startupInstruction = @"
-STARTUP INSTRUCTION:
-
+function Get-DeusIdentity {
+    return @"
 You are Deus - the user's personal AI assistant. You are not a generic coding tool. You collaborate on everything: coding, studies, life decisions, recommendations, brainstorming, and anything the user brings to you.
 
 Key capabilities you have:
@@ -165,19 +140,56 @@ Your personality:
 
 This repo (~/deus) is the infrastructure that powers you. See README.md for philosophy and CLAUDE.md for development rules.
 "@
-    if ($gitContext) {
-        $startupInstruction += "`n`ngitStatus:`n$gitContext"
+}
+
+function Invoke-ClaudeWithContext {
+    param([string]$WorkDir)
+
+    # Load token for current shell session (service uses credentials.json directly)
+    Write-Status "Loading credentials..."
+    $credPath = "$env:USERPROFILE\.claude\.credentials.json"
+    if (Test-Path $credPath) {
+        try {
+            $creds = Get-Content $credPath -Raw | ConvertFrom-Json
+            $token = $creds.claudeAiOauth.accessToken
+            if ($token) { $env:CLAUDE_CODE_OAUTH_TOKEN = $token }
+        } catch { }
     }
 
+    $vault = Get-VaultPath
+    $isHomeMode = ($WorkDir -eq $DeusHome)
+
+    # Git context
+    Write-Status "Loading git status..."
+    $gitContext = ""
+    Push-Location $WorkDir
+    try {
+        $branch    = & git rev-parse --abbrev-ref HEAD 2>$null
+        $mainBranch = "main"
+        $gitStatus = & git status --short 2>$null
+        $gitLog    = & git log --oneline -5 2>$null
+        if ($branch) {
+            $gitContext  = "Current branch: $branch`nMain branch: $mainBranch`n"
+            $gitContext += "Status:`n$(if ($gitStatus) { $gitStatus } else { '(clean)' })`n`nRecent commits:`n$($gitLog -join "`n")"
+        }
+    } catch { } finally { Pop-Location }
+
+    # Build startup instruction
+    $identity = Get-DeusIdentity
+
     if (-not $vault) {
+        Write-Host "`r  Ready.                                " -ForegroundColor Green
+        Write-Host ""
+        $prompt = "STARTUP INSTRUCTION:`n`n$identity"
+        if ($gitContext) { $prompt += "`n`ngitStatus:`n$gitContext" }
         Write-Host "Warning: No vault configured. Set DEUS_VAULT_PATH or vault_path in ~/.config/deus/config.json" -ForegroundColor Yellow
         Set-Location $WorkDir
-        Invoke-Claude @("--append-system-prompt", $startupInstruction)
+        Invoke-Claude @("--append-system-prompt", $prompt)
         return
     }
 
     # -- Load context (mirrors deus-cmd.sh context loading) ------------------
-    Write-Host "  Reading vault...`r" -NoNewline
+    Write-Status "Reading vault..."
     $claudeMd  = Read-VaultFile "$vault\CLAUDE.md"
     $studyMd   = Read-VaultFile "$vault\STUDY.md"
     $infraMd   = Read-VaultFile "$vault\INFRA.md"
@@ -188,7 +200,7 @@ This repo (~/deus) is the infrastructure that powers you. See README.md for phil
     if ($infraMd)  { $context += "`n`n=== VAULT: INFRA.md ===`n$infraMd" }
 
     # Checkpoint (today's)
-    Write-Host "  Checking checkpoints...`r" -NoNewline
+    Write-Status "Checking checkpoints..."
     $today = Get-Date -Format "yyyy-MM-dd"
     $checkpointDir = "$vault\Checkpoints"
     if (Test-Path $checkpointDir) {
@@ -201,7 +213,7 @@ This repo (~/deus) is the infrastructure that powers you. See README.md for phil
     }
 
     # Recent sessions (via memory_indexer.py)
-    Write-Host "  Loading recent sessions...`r" -NoNewline
+    Write-Status "Loading recent sessions..."
     $pythonCmd = if (Get-Command "python3" -ErrorAction SilentlyContinue) { "python3" } else { "python" }
     $indexerPath = "$DeusHome\scripts\memory_indexer.py"
     if ((Get-Command $pythonCmd -ErrorAction SilentlyContinue) -and (Test-Path $indexerPath)) {
@@ -210,13 +222,44 @@ This repo (~/deus) is the infrastructure that powers you. See README.md for phil
     }
 
     # Query memory for related sessions
-    $related = ""
+    Write-Status "Retrieving relevant context..."
     if ((Get-Command $pythonCmd -ErrorAction SilentlyContinue) -and (Test-Path $indexerPath)) {
         $related = & $pythonCmd $indexerPath --query --top 2 --recency-boost 2>$null
         if ($related) { $context += "`n`n=== RELATED SESSIONS ===`n$related" }
     }
 
-    Write-Host (" " * 50 + "`r") -NoNewline  # clear status line
+    # Git status for context
+    if ($gitContext) { $context += "`n`n=== GIT STATUS ===`n$gitContext" }
+
+    Write-Host "`r  Ready.                                " -ForegroundColor Green
+    Write-Host ""
+
+    # Build startup instruction with catch-me-up greeting
+    if ($isHomeMode) {
+        $startupInstruction = @"
+STARTUP INSTRUCTION:
+
+$identity
+
+Context from the memory vault has been pre-loaded above. Catch the user up using exactly this format:
+
+* Previous session: [1-2 lines of ongoing context and last session topic]
+* Pending: [bullet list of pending tasks, max 3 items]
+
+Then stop and wait for the user.
+"@
+    } else {
+        $startupInstruction = @"
+STARTUP INSTRUCTION:
+
+$identity
+
+You are operating in EXTERNAL PROJECT MODE. The current directory is an external codebase at $WorkDir - not the Deus project. Focus on this codebase while applying all your behavioral rules and knowledge.
+
+gitStatus:
+$gitContext
+"@
+    }
 
     # Combine context + startup instruction
     $fullPrompt = ""
@@ -224,7 +267,11 @@ This repo (~/deus) is the infrastructure that powers you. See README.md for phil
     $fullPrompt += $startupInstruction
 
     Set-Location $WorkDir
-    Invoke-Claude @("--append-system-prompt", $fullPrompt)
+    if ($isHomeMode) {
+        Invoke-Claude @("--append-system-prompt", $fullPrompt, "Catch me up.")
+    } else {
+        Invoke-Claude @("--append-system-prompt", $fullPrompt)
+    }
 }
 
 # -- Commands -----------------------------------------------------------------
