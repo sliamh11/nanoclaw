@@ -23,8 +23,28 @@ function parseArgs(args: string[]): { runtime: string } {
 }
 
 /**
+ * Read local-only skill names from .git/info/exclude.
+ * These are skills that exist locally but aren't committed (e.g. x-integration).
+ * They should NOT be staged into the container — their dependencies aren't available.
+ */
+function getLocalOnlySkills(projectRoot: string): Set<string> {
+  const excludePath = path.join(projectRoot, '.git', 'info', 'exclude');
+  const localOnly = new Set<string>();
+  if (!fs.existsSync(excludePath)) return localOnly;
+
+  const content = fs.readFileSync(excludePath, 'utf-8');
+  const pattern = /\.claude\/skills\/([^/\s]+)/g;
+  let match;
+  while ((match = pattern.exec(content)) !== null) {
+    localOnly.add(match[1]);
+  }
+  return localOnly;
+}
+
+/**
  * Stage skill agent files into container/skill-agents/ for the Docker build.
  * This replicates the staging logic from build.sh in a cross-platform way.
+ * Skips local-only skills listed in .git/info/exclude.
  */
 function stageSkillAgents(projectRoot: string): void {
   const stagingDir = path.join(projectRoot, 'container', 'skill-agents');
@@ -38,7 +58,14 @@ function stageSkillAgents(projectRoot: string): void {
   const skillsDir = path.join(projectRoot, '.claude', 'skills');
   if (!fs.existsSync(skillsDir)) return;
 
+  const localOnly = getLocalOnlySkills(projectRoot);
+
   for (const skillName of fs.readdirSync(skillsDir)) {
+    if (localOnly.has(skillName)) {
+      logger.info({ skill: skillName }, 'Skipped local-only skill');
+      continue;
+    }
+
     const skillDir = path.join(skillsDir, skillName);
     if (!fs.statSync(skillDir).isDirectory()) continue;
 
