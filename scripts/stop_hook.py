@@ -2,8 +2,8 @@
 """
 Deus Stop Hook
 Fires when Claude Code finishes a turn. Extracts the last few exchanges
-from the transcript and writes a lightweight checkpoint to the Obsidian
-vault so /resume can restore context across sessions or after /compact.
+from the transcript and writes a lightweight checkpoint to the vault
+so /resume can restore context across sessions or after /compact.
 
 No LLM calls — works offline, no quota risk, fast.
 Throttled: at most one checkpoint per 30 minutes.

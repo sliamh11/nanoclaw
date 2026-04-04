@@ -1,4 +1,4 @@
-Save this Claude Code session to the Obsidian vault and update the semantic memory index.
+Save this Claude Code session to the vault and update the semantic memory index.
 
 First, resolve the vault path by reading `~/.config/deus/config.json` and using the `vault_path` value. If the env var `DEUS_VAULT_PATH` is set, use that instead. All paths below use `$VAULT` to mean this resolved path.
 

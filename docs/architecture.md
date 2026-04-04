@@ -50,7 +50,7 @@ Deus is a personal AI assistant. A single Node.js host process orchestrates cont
               │                   MEMORY LAYER                           │
               │                                                          │
               │   Session Logs ──▶ Memory Indexer (scripts/)             │
-              │   (Obsidian vault)   sqlite-vec + Gemini embeddings      │
+              │   (vault directory)  sqlite-vec + Gemini embeddings      │
               │                         │                                │
               │              Tiered retrieval:                           │
               │              warm (last N sessions, free)                │
@@ -289,7 +289,7 @@ At startup, `index.ts` iterates over registered channel names, calls each factor
 
 - **SQLite vector database**: `~/.deus/memory.db` using `sqlite-vec` extension for vector similarity search
 - **Embeddings**: Gemini `text-embedding-004` model (768-dimensional vectors)
-- **Session logs**: Markdown files stored in an Obsidian vault (path configured via `DEUS_VAULT_PATH` or `~/.config/deus/config.json`)
+- **Session logs**: Markdown files stored in a vault directory (path configured via `DEUS_VAULT_PATH` or `~/.config/deus/config.json`, defaults to `~/.deus/vault/`)
 
 ### Memory Indexer (`scripts/memory_indexer.py`)
 
@@ -310,7 +310,7 @@ Commands:
 
 ### Session Lifecycle
 
-1. **Stop hook** (`scripts/stop_hook.py`): auto-saves a checkpoint to the Obsidian vault at the end of each Claude Code session. No LLM calls.
+1. **Stop hook** (`scripts/stop_hook.py`): auto-saves a checkpoint to the vault at the end of each Claude Code session. No LLM calls.
 2. **`/compress`**: saves the current session and updates the semantic index.
 3. **`/resume`**: loads core memory + warm tier + cold tier before starting work.
 
@@ -453,7 +453,7 @@ See [`docs/ENVIRONMENT.md`](ENVIRONMENT.md) for the full reference. Key variable
 | `CLAUDE_CODE_OAUTH_TOKEN` | OAuth token (alternative to API key) |
 | `GEMINI_API_KEY` | Gemini API key for memory embeddings and production judge |
 | `CONTAINER_RUNTIME` | Container binary: `docker`, `container`, `podman` |
-| `DEUS_VAULT_PATH` | Obsidian vault path for session logs |
+| `DEUS_VAULT_PATH` | Vault directory path for session logs |
 | `EVOLUTION_ENABLED` | Enable/disable evolution loop (default: enabled) |
 | `EVOLUTION_REFLECTION_THRESHOLD` | Score threshold for reflexion (default: 0.6) |
 | `EVAL_JUDGE` | Force judge: `ollama` or `gemini` |

@@ -14,7 +14,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 
-import { DATA_DIR, GROUPS_DIR } from './config.js';
+import { DATA_DIR, GROUPS_DIR, HOME_DIR, CONFIG_DIR } from './config.js';
 import { resolveGroupFolderPath, resolveGroupIpcPath } from './group-folder.js';
 import { logger } from './logger.js';
 import { getProjectById } from './db.js';
@@ -30,6 +30,36 @@ export interface VolumeMount {
   hostPath: string;
   containerPath: string;
   readonly: boolean;
+}
+
+/**
+ * Resolve the vault path from env var or config file.
+ * Returns null if no vault is configured.
+ */
+function resolveVaultPath(): string | null {
+  // 1. Environment variable
+  const envPath = process.env.DEUS_VAULT_PATH;
+  if (envPath) {
+    const resolved = envPath.startsWith('~')
+      ? path.join(HOME_DIR, envPath.slice(1))
+      : envPath;
+    return path.resolve(resolved);
+  }
+  // 2. Config file
+  const configPath = path.join(CONFIG_DIR, 'config.json');
+  try {
+    const cfg = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+    if (cfg.vault_path) {
+      const vp = cfg.vault_path as string;
+      const resolved = vp.startsWith('~')
+        ? path.join(HOME_DIR, vp.slice(1))
+        : vp;
+      return path.resolve(resolved);
+    }
+  } catch {
+    // No config file or parse error
+  }
+  return null;
 }
 
 export function buildVolumeMounts(
@@ -306,6 +336,23 @@ export function buildVolumeMounts(
     containerPath: '/app/src',
     readonly: true,
   });
+
+  // Auto-mount the memory vault if configured.
+  // The vault stores session logs, atoms, and checkpoints — agents need read-write
+  // access for /compress, /resume, and /preserve skills.
+  // Mounted at /workspace/vault/ (standard path referenced by container skills).
+  const vaultPath = resolveVaultPath();
+  if (vaultPath && fs.existsSync(vaultPath)) {
+    mounts.push({
+      hostPath: vaultPath,
+      containerPath: '/workspace/vault',
+      readonly: false,
+    });
+    logger.info(
+      { group: group.name, vaultPath },
+      'Vault mounted at /workspace/vault',
+    );
+  }
 
   // Additional mounts validated against external allowlist (tamper-proof from containers)
   if (group.containerConfig?.additionalMounts) {

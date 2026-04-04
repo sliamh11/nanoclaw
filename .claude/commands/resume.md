@@ -1,4 +1,4 @@
-Load context from the Obsidian vault before starting work.
+Load context from the vault before starting work.
 
 NOTE: This is the home-mode (~/deus) version. For external projects, the user-level /resume skill at ~/.claude/skills/resume/ handles project-focused context loading automatically.
 

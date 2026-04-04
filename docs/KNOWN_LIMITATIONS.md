@@ -21,6 +21,6 @@ This lock-in is a deliberate trade-off: the Claude Agent SDK provides session ma
 
 While Linux is supported, several features work best on macOS:
 - **Whisper transcription** — Metal acceleration on Apple Silicon
-- **Obsidian vault sync** — assumes local filesystem access
+- **Vault sync** — assumes local filesystem access
 
 Linux users can use Docker and skip voice transcription if Whisper Metal isn't available.

@@ -61,7 +61,7 @@ def _load_vault_path() -> Path:
     print(
         "ERROR: Memory vault not configured.\n"
         "Set DEUS_VAULT_PATH or add vault_path to ~/.config/deus/config.json\n"
-        "Run /setup → 'memory' in Claude Code to configure.",
+        "Run `deus setup` or /setup in Claude Code to configure.",
         file=sys.stderr,
     )
     sys.exit(1)
