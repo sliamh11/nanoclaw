@@ -102,7 +102,7 @@ All variables are set in `.env` at the project root. Copy `.env.example` to get 
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `DEUS_VAULT_PATH` | — | Obsidian vault path for session logs and memory |
+| `DEUS_VAULT_PATH` | — | Vault directory path for session logs and memory |
 
 ## Sessions
 

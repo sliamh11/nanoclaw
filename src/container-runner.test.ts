@@ -18,9 +18,11 @@ vi.mock('./config.js', () => ({
   CONTAINER_IMAGE: 'deus-agent:latest',
   CONTAINER_MAX_OUTPUT_SIZE: 10485760,
   CONTAINER_TIMEOUT: 1800000, // 30min
+  CONFIG_DIR: '/tmp/deus-test-config',
   CREDENTIAL_PROXY_PORT: 3001,
   DATA_DIR: '/tmp/deus-test-data',
   GROUPS_DIR: '/tmp/deus-test-groups',
+  HOME_DIR: '/tmp/deus-test-home',
   IDLE_TIMEOUT: 1800000, // 30min
   TIMEZONE: 'America/Los_Angeles',
 }));

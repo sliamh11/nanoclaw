@@ -21,6 +21,7 @@ import { emitStatus } from './status.js';
 const CONFIG_PATH = path.join(CONFIG_DIR, 'config.json');
 const DEUS_ENV_PATH = path.join(process.cwd(), '.env');
 const DEFAULT_VAULT_PATH = path.join(HOME_DIR, '.deus', 'vault');
+const PROJECT_LOCAL_VAULT_PATH = path.join(process.cwd(), '.vault');
 const MEMORY_INDEXER = path.join(process.cwd(), 'scripts', 'memory_indexer.py');
 
 const VAULT_SUBDIRS = ['Session-Logs', 'Atoms', 'Checkpoints', 'Persona'];
@@ -154,11 +155,25 @@ export async function run(args: string[]): Promise<void> {
     // No existing config
   }
 
-  // If vault_path is provided as arg, use it; otherwise check config; otherwise default
-  const vaultArg = args.find((a) => a.startsWith('--vault-path='));
-  let vaultPath = vaultArg
-    ? vaultArg.split('=', 2)[1]
-    : (config.vault_path as string | undefined) || DEFAULT_VAULT_PATH;
+  // Vault location options:
+  //   --vault-path=<path>   Explicit path (Obsidian vault, NAS, Dropbox, etc.)
+  //   --vault-mode=local    Project-local vault at .vault/ (gitignored, portable)
+  //   --vault-mode=default  Standard location at ~/.deus/vault/ (default)
+  //   (no args)             Use existing config, or default
+  const vaultPathArg = args.find((a) => a.startsWith('--vault-path='));
+  const vaultModeArg = args.find((a) => a.startsWith('--vault-mode='));
+  const vaultMode = vaultModeArg?.split('=', 2)[1];
+
+  let vaultPath: string;
+  if (vaultPathArg) {
+    vaultPath = vaultPathArg.split('=', 2)[1];
+  } else if (vaultMode === 'local') {
+    vaultPath = PROJECT_LOCAL_VAULT_PATH;
+  } else if (vaultMode === 'default') {
+    vaultPath = DEFAULT_VAULT_PATH;
+  } else {
+    vaultPath = (config.vault_path as string | undefined) || DEFAULT_VAULT_PATH;
+  }
 
   // Expand ~ if needed
   if (vaultPath.startsWith('~')) {
@@ -229,10 +244,18 @@ export async function run(args: string[]): Promise<void> {
     // File doesn't exist
   }
 
+  const vaultLocation =
+    vaultPath === path.resolve(PROJECT_LOCAL_VAULT_PATH)
+      ? 'project-local (.vault/)'
+      : vaultPath === path.resolve(DEFAULT_VAULT_PATH)
+        ? 'default (~/.deus/vault/)'
+        : 'custom';
+
   emitStatus('MEMORY', {
     STATUS: 'success',
     PYTHON_VERSION: pythonVersion,
     VAULT_PATH: vaultPath,
+    VAULT_LOCATION: vaultLocation,
     CONFIG_PATH: CONFIG_PATH,
     HAS_GEMINI_KEY: hasGeminiKey,
     GEMINI_KEY_HINT: hasGeminiKey

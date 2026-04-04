@@ -5,18 +5,22 @@ description: Load context from permanent memory and recent session logs. Tiered 
 
 # /resume — Load Context
 
-Load persistent context from the Obsidian vault.
+Load persistent context from the vault.
+
+The vault is mounted at `/workspace/vault/`. If it doesn't exist, check `/workspace/extra/obsidian/Deus/` as a legacy fallback.
 
 ## Steps
 
-1. **Read permanent memory (full — it's compact):**
+1. **Resolve vault path and read permanent memory (full — it's compact):**
    ```bash
-   cat /workspace/extra/obsidian/Deus/CLAUDE.md
+   VAULT_DIR="${DEUS_VAULT_DIR:-/workspace/vault}"
+   [ ! -d "$VAULT_DIR" ] && VAULT_DIR="/workspace/extra/obsidian/Deus"
+   cat "$VAULT_DIR/CLAUDE.md"
    ```
 
 2. **Find recent session logs** (default: last 3, or use number given as argument):
    ```bash
-   ls -t /workspace/extra/obsidian/Deus/Session-Logs/*.md 2>/dev/null | head -${args:-3}
+   ls -t "$VAULT_DIR"/Session-Logs/*.md 2>/dev/null | head -${args:-3}
    ```
 
 3. **For each session log: read frontmatter only** (the YAML block between the two `---` lines):
@@ -28,7 +32,7 @@ Load persistent context from the Obsidian vault.
 
 4. **If a search term was given** (e.g. `/resume auth`), grep logs and read frontmatter of matches:
    ```bash
-   grep -ril "<term>" /workspace/extra/obsidian/Deus/Session-Logs/ 2>/dev/null
+   grep -ril "<term>" "$VAULT_DIR/Session-Logs/" 2>/dev/null
    ```
 
 5. **Summarize in 2–3 lines:** ongoing context, pending tasks, ready to continue.
