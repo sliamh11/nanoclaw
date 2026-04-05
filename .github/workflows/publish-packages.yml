@@ -21,7 +21,7 @@ jobs:
       - name: Build and publish @deus-ai/channel-core
         working-directory: packages/mcp-channel-core
         run: |
-          npm ci
+          npm install
           npm run build
           npm publish --access public
         env:
@@ -30,7 +30,9 @@ jobs:
       - name: Build and publish @deus-ai/whatsapp-mcp
         working-directory: packages/mcp-whatsapp
         run: |
-          npm ci
+          # Point to published @deus-ai/channel-core instead of local file path
+          npm pkg set 'dependencies.@deus-ai/channel-core=^1.0.0'
+          npm install
           npm run build
           npm publish --access public
         env:
@@ -39,7 +41,9 @@ jobs:
       - name: Build and publish @deus-ai/telegram-mcp
         working-directory: packages/mcp-telegram
         run: |
-          npm ci
+          # Point to published @deus-ai/channel-core instead of local file path
+          npm pkg set 'dependencies.@deus-ai/channel-core=^1.0.0'
+          npm install
           npm run build
           npm publish --access public
         env:
