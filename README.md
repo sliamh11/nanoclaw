@@ -298,9 +298,8 @@ Deus is built and maintained solo — no company, no funding, just one developer
 [![GitHub Sponsors](https://img.shields.io/badge/Sponsor-%E2%9D%A4-ea4aaa?logo=github)](https://github.com/sponsors/sliamh11)
 [![Ko-fi](https://img.shields.io/badge/Ko--fi-Support-ff5e5b?logo=ko-fi)](https://ko-fi.com/liamsteiner)
 
-### Sponsors
-
-<!-- sponsors --><!-- sponsors -->
+<!-- sponsors-start -->
+<!-- sponsors-end -->
 
 ## Acknowledgments
 

@@ -13,11 +13,51 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: JamesIves/github-sponsors-readme-action@v1
-        with:
-          token: ${{ secrets.PAT }}
-          file: README.md
-          fallback: 'Become the first sponsor — [github.com/sponsors/sliamh11](https://github.com/sponsors/sliamh11)'
+      - name: Fetch sponsors and update README
+        env:
+          GH_TOKEN: ${{ secrets.PAT }}
+        run: |
+          # Query GitHub Sponsors GraphQL API
+          SPONSORS_JSON=$(gh api graphql -f query='
+            query {
+              user(login: "sliamh11") {
+                sponsors(first: 100) {
+                  nodes {
+                    ... on User { login avatarUrl url }
+                    ... on Organization { login avatarUrl url }
+                  }
+                }
+              }
+            }
+          ')
+
+          SPONSOR_COUNT=$(echo "$SPONSORS_JSON" | jq '.data.user.sponsors.nodes | length')
+
+          if [ "$SPONSOR_COUNT" -gt 0 ]; then
+            # Build sponsor avatars as linked images
+            AVATARS=$(echo "$SPONSORS_JSON" | jq -r '
+              .data.user.sponsors.nodes[] |
+              "<a href=\"\(.url)\"><img src=\"\(.avatarUrl)&s=60\" width=\"60\" alt=\"\(.login)\"></a>"
+            ' | tr '\n' ' ')
+
+            SECTION="### Sponsors\n\n${AVATARS}"
+          else
+            SECTION=""
+          fi
+
+          # Replace everything between markers
+          python3 -c "
+          import re, sys
+          readme = open('README.md').read()
+          pattern = r'<!-- sponsors-start -->.*?<!-- sponsors-end -->'
+          section = sys.argv[1]
+          if section:
+              replacement = '<!-- sponsors-start -->\n' + section + '\n<!-- sponsors-end -->'
+          else:
+              replacement = '<!-- sponsors-start -->\n<!-- sponsors-end -->'
+          readme = re.sub(pattern, replacement, readme, flags=re.DOTALL)
+          open('README.md', 'w').write(readme)
+          " "$SECTION"
 
       - uses: stefanzweifel/git-auto-commit-action@v5
         with:
