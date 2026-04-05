@@ -33,7 +33,7 @@ import type {
   ChannelStatus,
   ChatInfo,
   IncomingMessage,
-} from 'deus-mcp-channel-core';
+} from '@deus-ai/channel-core';
 
 // ── Config from env vars ────────────────────────────────────────────────
 

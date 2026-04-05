@@ -1,5 +1,5 @@
 /**
- * WhatsApp channel factory — spawns deus-mcp-whatsapp as MCP server.
+ * WhatsApp channel factory — spawns @deus-ai/whatsapp-mcp as MCP server.
  * Registers with the channel registry so the host can use it.
  */
 
@@ -22,9 +22,9 @@ registerChannel('whatsapp', (opts) => {
   // Resolve the MCP server entry point
   let serverPath: string;
   try {
-    // When deus-mcp-whatsapp is installed as a dependency
+    // When @deus-ai/whatsapp-mcp is installed as a dependency
     serverPath = import.meta
-      .resolve('deus-mcp-whatsapp')
+      .resolve('@deus-ai/whatsapp-mcp')
       .replace('file://', '');
   } catch {
     // Fallback: local packages directory (monorepo dev)
