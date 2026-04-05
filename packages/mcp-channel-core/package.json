@@ -1,5 +1,5 @@
 {
-  "name": "deus-mcp-channel-core",
+  "name": "@deus-ai/channel-core",
   "version": "1.0.0",
   "description": "Shared types and base server logic for Deus MCP channel servers",
   "type": "module",
@@ -20,6 +20,9 @@
   },
   "engines": {
     "node": ">=20"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "license": "MIT"
 }

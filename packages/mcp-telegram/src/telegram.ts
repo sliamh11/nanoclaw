@@ -14,7 +14,7 @@ import type {
   ChannelStatus,
   ChatInfo,
   IncomingMessage,
-} from 'deus-mcp-channel-core';
+} from '@deus-ai/channel-core';
 
 const ASSISTANT_NAME = process.env.ASSISTANT_NAME || 'Deus';
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
