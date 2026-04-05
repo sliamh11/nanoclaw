@@ -1,5 +1,5 @@
 /**
- * Telegram channel factory — spawns deus-mcp-telegram as MCP server.
+ * Telegram channel factory — spawns @deus-ai/telegram-mcp as MCP server.
  * Registers with the channel registry so the host can use it.
  */
 
@@ -19,7 +19,7 @@ registerChannel('telegram', (opts) => {
   let serverPath: string;
   try {
     serverPath = import.meta
-      .resolve('deus-mcp-telegram')
+      .resolve('@deus-ai/telegram-mcp')
       .replace('file://', '');
   } catch {
     serverPath = path.join(

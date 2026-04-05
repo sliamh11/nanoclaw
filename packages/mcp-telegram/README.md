@@ -1,4 +1,4 @@
-# deus-mcp-telegram
+# @deus-ai/telegram-mcp
 
 Standalone MCP server for Telegram bots. Uses [grammY](https://grammy.dev/) for the Telegram Bot API.
 
@@ -11,7 +11,7 @@ Works with any MCP client — Claude Code, Claude Desktop, or your own applicati
   "mcpServers": {
     "telegram": {
       "command": "npx",
-      "args": ["deus-mcp-telegram"],
+      "args": ["@deus-ai/telegram-mcp"],
       "env": {
         "TELEGRAM_BOT_TOKEN": "your-bot-token"
       }
