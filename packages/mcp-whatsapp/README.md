@@ -1,4 +1,4 @@
-# deus-mcp-whatsapp
+# @deus-ai/whatsapp-mcp
 
 Standalone MCP server for WhatsApp messaging. Uses [Baileys](https://github.com/WhiskeySockets/Baileys) for the WhatsApp Web API.
 
@@ -11,7 +11,7 @@ Works with any MCP client — Claude Code, Claude Desktop, or your own applicati
   "mcpServers": {
     "whatsapp": {
       "command": "npx",
-      "args": ["deus-mcp-whatsapp"],
+      "args": ["@deus-ai/whatsapp-mcp"],
       "env": {
         "WHATSAPP_AUTH_DIR": "/path/to/auth/dir"
       }

@@ -16,12 +16,12 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
-import { registerCommonTools } from 'deus-mcp-channel-core';
+import { registerCommonTools } from '@deus-ai/channel-core';
 
 import { WhatsAppProvider } from './whatsapp.js';
 
 const server = new McpServer({
-  name: 'deus-mcp-whatsapp',
+  name: '@deus-ai/whatsapp-mcp',
   version: '1.0.0',
 });
 
@@ -101,7 +101,7 @@ server.tool(
 if (provider.hasAuth()) {
   provider.connect().catch((err) => {
     // Log to stderr — don't crash, stay available for auth tools
-    console.error('[deus-mcp-whatsapp] Auto-connect failed:', err.message);
+    console.error('[@deus-ai/whatsapp-mcp] Auto-connect failed:', err.message);
   });
 }
 
