@@ -49,6 +49,12 @@ The following raw calls are banned outside `src/platform.ts` via `no-restricted-
 
 Violations fail lint, which runs on all three CI platforms (ubuntu, macos, windows).
 
+### CI integration
+
+The lint step runs on every PR via `.github/workflows/ci.yml` (`npm run lint`) on both `ubuntu-latest` and `windows-latest` runners. The rules are defined in `eslint.config.js` lines 28–54 — a dedicated config block scoped to `src/**/*.ts` with `src/platform.ts` in `ignores`.
+
+**Scope gap:** `container/` is excluded from ESLint (`ignores` at line 7). This is intentional — the agent-runner always runs inside a Linux container, so platform guards are unnecessary there. Any future code added to `container/` that needs to run on multiple OSes should be moved to `src/` or explicitly documented here.
+
 ## Consequences
 
 - **New platform differences** are added in one place — the compiler and lint show every call site
