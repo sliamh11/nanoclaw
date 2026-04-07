@@ -32,9 +32,10 @@ LONGMEMEVAL_CACHE = BENCHMARK_DIR / "longmemeval_s.json"
 RESULTS_LOG = BENCHMARK_DIR / "results.jsonl"
 
 LONGMEMEVAL_HF_DATASET = "xiaowu0162/longmemeval-cleaned"
+LONGMEMEVAL_HF_FILENAME = "longmemeval_s_cleaned.json"
 LONGMEMEVAL_GITHUB_RAW = (
-    "https://raw.githubusercontent.com/xiaowu0162/LongMemEval/main/"
-    "data/longmemeval_s.json"
+    "https://huggingface.co/datasets/xiaowu0162/longmemeval-cleaned"
+    "/resolve/main/longmemeval_s_cleaned.json"
 )
 
 _SCRIPT_DIR = Path(__file__).resolve().parent
@@ -114,7 +115,7 @@ def _download_longmemeval() -> list[dict]:
 
         local = hf_hub_download(
             repo_id=LONGMEMEVAL_HF_DATASET,
-            filename="longmemeval_s.json",
+            filename=LONGMEMEVAL_HF_FILENAME,
             repo_type="dataset",
             local_dir=str(BENCHMARK_DIR),
         )
@@ -186,6 +187,20 @@ def _session_stem_to_id(result_paths: list[str], session_stems: list[str]) -> li
 # ── Outbound mode: LongMemEval ─────────────────────────────────────────────────
 
 
+def _extract_session_tldr(session: object) -> str:
+    """Extract a meaningful tldr from session turns for better embedding quality."""
+    if not isinstance(session, list) or not session:
+        return "conversation session"
+    # Collect all user turns — these are the "episodic memory" facts
+    user_msgs = [
+        t.get("content", "") for t in session
+        if isinstance(t, dict) and t.get("role") == "user"
+    ]
+    # Join user messages, truncate to ~300 chars for the tldr
+    combined = " | ".join(m.strip() for m in user_msgs if m.strip())
+    return combined[:300] if combined else "conversation session"
+
+
 def _write_session_md(
     session: object,
     session_date: str,
@@ -194,10 +209,11 @@ def _write_session_md(
     dest: Path,
 ) -> None:
     """Write a single haystack session to a markdown file the indexer can parse."""
+    tldr = _extract_session_tldr(session)
     lines = [
         "---",
         f"date: {session_date}",
-        f"tldr: benchmark session {s_idx} for {qid}",
+        f"tldr: {tldr}",
         "topics: [benchmark]",
         "---",
         "",
@@ -234,9 +250,18 @@ def run_outbound(limit: int = 50, ks: list[int] = None) -> dict:
     for ex_idx, example in enumerate(examples):
         qid = example.get("question_id", f"q_{ex_idx:04d}")
         question = example["question"]
-        answer_ids: list[int] = example.get("answer_session_ids", [])
         haystack: list = example.get("haystack_sessions", [])
+        haystack_session_ids: list[str] = example.get("haystack_session_ids", [])
+        haystack_dates: list[str] = example.get("haystack_dates", [])
         session_date = example.get("question_date", "2024-01-01")
+
+        # Map string session IDs → 0-based haystack positions
+        id_to_idx: dict[str, int] = {sid: i for i, sid in enumerate(haystack_session_ids)}
+        answer_ids: set[int] = {
+            id_to_idx[sid]
+            for sid in example.get("answer_session_ids", [])
+            if sid in id_to_idx
+        }
 
         # Each example gets a completely isolated temp directory:
         #   tmpdir/home/   — overrides HOME so DB_PATH = tmpdir/home/.deus/memory.db
@@ -255,7 +280,11 @@ def run_outbound(limit: int = 50, ks: list[int] = None) -> dict:
             for s_idx, session in enumerate(haystack):
                 stem = f"session_{s_idx:04d}"
                 dest = session_logs_dir / f"{stem}.md"
-                _write_session_md(session, session_date, qid, s_idx, dest)
+                # Use per-session date when available; fall back to question_date
+                raw_date = haystack_dates[s_idx] if s_idx < len(haystack_dates) else session_date
+                # Normalise "2023/05/20 (Sat) 02:21" → "2023-05-20"
+                s_date = raw_date.split(" ")[0].replace("/", "-") if raw_date else session_date
+                _write_session_md(session, s_date, qid, s_idx, dest)
                 session_stems.append(stem)
 
                 # Index this session
@@ -274,16 +303,15 @@ def run_outbound(limit: int = 50, ks: list[int] = None) -> dict:
             result_paths = _parse_query_output(proc.stdout)
             result_ids = _session_stem_to_id(result_paths, session_stems)
 
-            # Compute metrics
-            answer_set = set(answer_ids)
+            # Compute metrics (answer_ids is already a set[int] of haystack positions)
             first_rank: Optional[int] = None
             for pos, rid in enumerate(result_ids[:max_k], start=1):
-                if rid in answer_set and first_rank is None:
+                if rid in answer_ids and first_rank is None:
                     first_rank = pos
             ranks.append(first_rank)
 
             for k in ks:
-                hit = any(rid in answer_set for rid in result_ids[:k])
+                hit = any(rid in answer_ids for rid in result_ids[:k])
                 hits[k].append(hit)
 
         elapsed = time.monotonic() - t_start
@@ -379,11 +407,19 @@ def _sample_real_sessions(sample: int) -> list[dict]:
             if not fm_match:
                 continue
             fm_text = fm_match.group(1)
-            tldr_m = re.search(r"^tldr:\s*(.+)$", fm_text, re.MULTILINE)
+            # Topics are always a single-line list — most reliable query signal
             topics_m = re.search(r"^topics:\s*\[(.+?)\]", fm_text, re.MULTILINE)
-            tldr = tldr_m.group(1).strip() if tldr_m else ""
             topics = topics_m.group(1).strip() if topics_m else ""
-            query_text = (tldr or topics or "").strip()
+            # tldr may be inline or YAML block scalar (tldr: | \n  actual text)
+            tldr_inline = re.search(r"^tldr:\s+([^|].*?)$", fm_text, re.MULTILINE)
+            tldr_block = re.search(r"^tldr:\s*\|[-]?\n([ \t]+.+?)(?=\n\S|\Z)", fm_text, re.DOTALL)
+            if tldr_inline:
+                tldr = tldr_inline.group(1).strip()
+            elif tldr_block:
+                tldr = " ".join(tldr_block.group(1).split())[:200]
+            else:
+                tldr = ""
+            query_text = (topics or tldr or "").strip()
             if len(query_text) > 10:
                 candidates.append({"path": str(lf), "query": query_text})
         except OSError:
@@ -434,7 +470,8 @@ def run_internal(limit: int = 20) -> dict:
 
     # ── Pending accuracy (CLAUDE.md) ─────────────────────────────────────────
     print("  Pending accuracy (CLAUDE.md)...", flush=True)
-    claude_md = Path(__file__).resolve().parent.parent / "CLAUDE.md"
+    vault_root = _load_vault_root()
+    claude_md = (vault_root / "CLAUDE.md") if vault_root else Path(__file__).resolve().parent.parent / "CLAUDE.md"
     pending_items = 0
     all_checkbox_format = True
     pending_issues: list[str] = []

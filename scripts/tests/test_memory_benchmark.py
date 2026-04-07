@@ -145,9 +145,10 @@ def _make_completed(stdout: str = "", returncode: int = 0):
 
 
 def _fake_examples(n: int = 3) -> list[dict]:
-    """All examples use answer_session_ids=[0] so session_0000 is always the hit."""
+    """All examples use answer_session_ids=['sid_0'] so session_0000 is always the hit."""
     examples = []
     for i in range(n):
+        haystack_ids = [f"sid_{j}" for j in range(3)]
         examples.append({
             "question_id": f"q_{i:04d}",
             "question": f"What happened in session {i}?",
@@ -158,7 +159,9 @@ def _fake_examples(n: int = 3) -> list[dict]:
                 [{"role": "user", "content": f"session content {j}"}]
                 for j in range(3)
             ],
-            "answer_session_ids": [0],
+            "haystack_session_ids": haystack_ids,
+            "haystack_dates": ["2024-03-10", "2024-03-11", "2024-03-12"],
+            "answer_session_ids": ["sid_0"],
         })
     return examples
 
@@ -370,3 +373,82 @@ def test_save_results_appends_multiple(tmp_path):
         mb.save_results({"mode": "internal", "n": 20})
     lines = results_log.read_text().strip().splitlines()
     assert len(lines) == 2
+
+
+# ── _extract_session_tldr ─────────────────────────────────────────────────────
+
+
+def test_extract_session_tldr_user_turns():
+    session = [
+        {"role": "user", "content": "I graduated with a degree in Business Administration."},
+        {"role": "assistant", "content": "Congratulations!"},
+        {"role": "user", "content": "Thanks. Any tips for the job search?"},
+    ]
+    tldr = mb._extract_session_tldr(session)
+    assert "Business Administration" in tldr
+    assert "job search" in tldr
+
+
+def test_extract_session_tldr_empty():
+    assert mb._extract_session_tldr([]) == "conversation session"
+
+
+def test_extract_session_tldr_no_user_turns():
+    session = [{"role": "assistant", "content": "Hello!"}]
+    assert mb._extract_session_tldr(session) == "conversation session"
+
+
+def test_extract_session_tldr_string_session():
+    assert mb._extract_session_tldr("some string session") == "conversation session"
+
+
+def test_extract_session_tldr_truncated_to_300():
+    long_content = "x" * 500
+    session = [{"role": "user", "content": long_content}]
+    tldr = mb._extract_session_tldr(session)
+    assert len(tldr) <= 300
+
+
+# ── _sample_real_sessions block-scalar tldr parsing ───────────────────────────
+
+
+def test_sample_real_sessions_block_scalar_tldr(tmp_path):
+    """Sessions with block-scalar tldr: | should use topics as query fallback."""
+    session_logs = tmp_path / "Session-Logs"
+    session_logs.mkdir()
+    md = session_logs / "my-session.md"
+    md.write_text(
+        "---\n"
+        "type: session\n"
+        "date: 2026-04-07\n"
+        "topics: [evolution, memory, indexer]\n"
+        "tldr: |\n"
+        "  Shipped the evolution batch-judge PR and fixed silent failures.\n"
+        "---\n\n"
+        "## Key Learnings\n- Something useful\n"
+    )
+    with patch.object(mb, "_load_vault_root", return_value=tmp_path):
+        sessions = mb._sample_real_sessions(5)
+    assert len(sessions) == 1
+    assert "evolution" in sessions[0]["query"]
+
+
+def test_sample_real_sessions_inline_tldr(tmp_path):
+    """Sessions with inline tldr should use tldr as query (topics still preferred)."""
+    session_logs = tmp_path / "Session-Logs"
+    session_logs.mkdir()
+    md = session_logs / "my-session.md"
+    md.write_text(
+        "---\n"
+        "type: session\n"
+        "date: 2026-01-01\n"
+        "topics: [linear-algebra, feynman]\n"
+        "tldr: Reviewed chapter 5 and chapter 6 of the textbook.\n"
+        "---\n\n"
+        "## Key Learnings\n- Something useful\n"
+    )
+    with patch.object(mb, "_load_vault_root", return_value=tmp_path):
+        sessions = mb._sample_real_sessions(5)
+    assert len(sessions) == 1
+    # topics takes priority but either way the query must be non-empty
+    assert len(sessions[0]["query"]) > 10
