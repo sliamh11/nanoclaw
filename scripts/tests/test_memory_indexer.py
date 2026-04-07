@@ -427,6 +427,56 @@ def test_cmd_learnings_cold_start_welcome(mi, fresh_vault, capsys, tmp_path, mon
     assert "Your learnings will appear here" in output
 
 
+# ── PR 1: source chunk preservation ──────────────────────────────────────
+
+
+def test_open_db_adds_source_chunk_column(mi):
+    """open_db() must add source_chunk column on fresh and existing DBs."""
+    db = mi.open_db()
+    cols = {row[1] for row in db.execute("PRAGMA table_info(entries)").fetchall()}
+    db.close()
+    assert "source_chunk" in cols
+
+
+def test_open_db_source_chunk_upgrade_idempotent(mi):
+    """Calling open_db() twice must not raise (column already exists)."""
+    db = mi.open_db()
+    db.close()
+    db2 = mi.open_db()
+    db2.close()
+
+
+def test_write_atom_file_includes_source_excerpt(mi, fresh_vault):
+    """write_atom_file() with source_excerpt writes it into frontmatter."""
+    atom = {"text": "Prefers pytest over unittest", "category": "preference"}
+    path = mi.write_atom_file(atom, "/session.md", "2024-06-15",
+                              source_excerpt="## Decisions Made\nUse pytest.")
+    content = path.read_text()
+    assert "source_excerpt:" in content
+    assert "Decisions Made" in content
+
+
+def test_write_atom_file_no_source_excerpt_when_empty(mi, fresh_vault):
+    """write_atom_file() without source_excerpt omits the field."""
+    atom = {"text": "Prefers dark mode", "category": "preference"}
+    path = mi.write_atom_file(atom, "/session.md", "2024-06-15")
+    content = path.read_text()
+    assert "source_excerpt" not in content
+
+
+def test_write_atom_file_truncates_long_excerpt(mi, fresh_vault):
+    """source_excerpt stored in frontmatter must be ≤ 2000 chars."""
+    long_excerpt = "x" * 5000
+    atom = {"text": "Some preference fact", "category": "preference"}
+    path = mi.write_atom_file(atom, "/session.md", "2024-06-15",
+                              source_excerpt=long_excerpt)
+    content = path.read_text()
+    # Verify truncation happened (not the full 5000) and is bounded near 2000
+    x_count = content.count("x")
+    assert x_count < 5000, "source_excerpt was not truncated"
+    assert x_count <= 2002, f"source_excerpt exceeded expected bound: {x_count}"
+
+
 def test_cmd_learnings_skips_expired_atoms(mi, fresh_vault, capsys, tmp_path, monkeypatch):
     """Atoms past their TTL should not appear."""
     monkeypatch.setattr(mi, "LAST_RESUME_LEARNINGS", tmp_path / "last_learnings.txt")
