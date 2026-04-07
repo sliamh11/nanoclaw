@@ -130,6 +130,21 @@ A fresh clone has **zero channels** — you add only the ones you need:
 
 A stop hook auto-saves a checkpoint at the end of every Claude Code session with no LLM calls.
 
+### Retrieval Benchmarks
+
+Evaluated on [LongMemEval-S](https://arxiv.org/abs/2410.10813) (ICLR 2025) — a needle-in-a-haystack benchmark with multi-session reasoning across 500+ turn histories.
+
+| Metric | Score |
+|---|---|
+| Recall@1 | 90% |
+| Recall@3 | 95% |
+| Recall@10 | 100% |
+| MRR | 0.93 |
+
+Internal recall@3 on real vault sessions: **95%** (sampled 20 sessions, queried by topic).
+
+Retrieval uses hybrid ANN + FTS5/BM25 with Reciprocal Rank Fusion — embeddings via local [EmbeddingGemma](https://ollama.com/library/nomic-embed-text) (no API cost).
+
 ---
 
 ## Channel Commands
