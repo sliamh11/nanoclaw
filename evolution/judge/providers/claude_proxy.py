@@ -1,10 +1,15 @@
 """Claude proxy judge provider — last-resort fallback."""
+from __future__ import annotations
+
 import os
 import urllib.request
 import urllib.error
 from typing import Any, Optional, Tuple
 
-from deepeval.models import DeepEvalBaseLLM
+try:
+    from deepeval.models import DeepEvalBaseLLM
+except ImportError:
+    DeepEvalBaseLLM = object  # type: ignore[misc,assignment]
 
 from ..base import BaseJudge, JudgeResult
 from ..provider import JudgeProvider

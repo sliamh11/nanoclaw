@@ -1,3 +1,7 @@
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Optional
+
 from .base import BaseJudge, JudgeResult
 from .provider import JudgeProvider, JudgeRegistry, NoProviderAvailableError
 
@@ -8,8 +12,8 @@ from .ollama_judge import OllamaJudge, OllamaRuntimeJudge, is_ollama_available
 # Register built-in providers on import
 from . import providers as _providers  # noqa: F401
 
-from typing import Optional
-from deepeval.models import DeepEvalBaseLLM
+if TYPE_CHECKING:
+    from deepeval.models import DeepEvalBaseLLM
 
 
 def make_deepeval_judge(model: Optional[str] = None, provider: Optional[str] = None) -> DeepEvalBaseLLM:

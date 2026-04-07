@@ -4,10 +4,13 @@ Provider/strategy pattern for judge backends.
 Each backend (Ollama, Gemini, Mock, ClaudeProxy) implements JudgeProvider.
 JudgeRegistry resolves the best available backend at runtime.
 """
-from abc import ABC, abstractmethod
-from typing import Optional
+from __future__ import annotations
 
-from deepeval.models import DeepEvalBaseLLM
+from abc import ABC, abstractmethod
+from typing import TYPE_CHECKING, Optional
+
+if TYPE_CHECKING:
+    from deepeval.models import DeepEvalBaseLLM
 
 from .base import BaseJudge
 

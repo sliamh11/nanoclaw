@@ -1,10 +1,16 @@
 """Tests for the JudgeProvider / JudgeRegistry pattern."""
+from __future__ import annotations
+
 import os
 from typing import Optional
 from unittest.mock import patch
 
 import pytest
-from deepeval.models import DeepEvalBaseLLM
+
+try:
+    from deepeval.models import DeepEvalBaseLLM
+except ImportError:
+    DeepEvalBaseLLM = object  # type: ignore[misc,assignment]
 
 from evolution.judge.base import BaseJudge, JudgeResult
 from evolution.judge.provider import (

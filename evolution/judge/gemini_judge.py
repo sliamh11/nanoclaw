@@ -8,11 +8,17 @@ Two roles:
 
 Uses the same google-genai client and API key as memory_indexer.py.
 """
+from __future__ import annotations
+
 import json
 import os
+
 from typing import Any, Optional, Tuple
 
-from deepeval.models import DeepEvalBaseLLM
+try:
+    from deepeval.models import DeepEvalBaseLLM
+except ImportError:
+    DeepEvalBaseLLM = object  # type: ignore[misc,assignment]
 
 from ..config import GEN_MODELS, JUDGE_MODEL, JUDGE_RETRY_COUNT, load_api_key
 from .base import BaseJudge, JudgeResult

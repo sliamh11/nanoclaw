@@ -1,7 +1,10 @@
 """Ollama judge provider."""
-from typing import Optional
+from __future__ import annotations
 
-from deepeval.models import DeepEvalBaseLLM
+from typing import TYPE_CHECKING, Optional
+
+if TYPE_CHECKING:
+    from deepeval.models import DeepEvalBaseLLM
 
 from ..base import BaseJudge
 from ..provider import JudgeProvider

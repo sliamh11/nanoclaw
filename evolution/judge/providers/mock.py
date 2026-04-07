@@ -1,8 +1,13 @@
 """Mock judge provider — for CI smoke tests."""
+from __future__ import annotations
+
 import os
 from typing import Any, Optional, Tuple
 
-from deepeval.models import DeepEvalBaseLLM
+try:
+    from deepeval.models import DeepEvalBaseLLM
+except ImportError:
+    DeepEvalBaseLLM = object  # type: ignore[misc,assignment]
 
 from ..base import BaseJudge, JudgeResult
 from ..provider import JudgeProvider
