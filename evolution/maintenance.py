@@ -83,21 +83,92 @@ def is_maintenance_due(*, interaction_count: Optional[int] = None) -> bool:
     return (interaction_count - stored_count) >= MAINTENANCE_INTERACTION_INTERVAL
 
 
-def judge_pending_interactions() -> int:
-    """
-    Judge all unjudged interactions in a single batch.
-
-    Called by maintenance to catch up on interactions that were logged
-    but not immediately judged (due to batch thresholds not being met).
-
-    Returns the number of interactions successfully judged.
-    """
-    import asyncio
-    from .config import REFLECTION_THRESHOLD, POSITIVE_THRESHOLD
+def _score_single(row: dict, judge) -> dict | None:
+    """Score a single interaction. Returns score info dict or None on failure."""
     from .ilog.interaction_log import update_score
-    from .judge import make_runtime_judge
+
+    try:
+        result = judge.evaluate(
+            prompt=row["prompt"],
+            response=row.get("response") or "",
+            tools_used=row.get("tools_used"),
+        )
+        dims = {
+            "quality": result.quality,
+            "safety": result.safety,
+            "tool_use": result.tool_use,
+            "personalization": result.personalization,
+        }
+        update_score(row["id"], result.score, dims, parse_error=result.is_parse_error)
+        return {
+            "row": row,
+            "score": result.score,
+            "dims": dims,
+            "rationale": result.rationale,
+            "is_parse_error": result.is_parse_error,
+        }
+    except Exception as exc:
+        log.warning("Failed to score interaction %s: %s", row["id"], exc)
+        return None
+
+
+def _reflect_single(scored: dict, config: dict) -> bool:
+    """Generate reflection for a scored interaction. Returns True on success."""
     from .reflexion.generator import generate_reflection, generate_positive_reflection
     from .reflexion.store import save_reflection
+
+    row = scored["row"]
+    try:
+        if scored["score"] < config["reflection_threshold"]:
+            content, category = generate_reflection(
+                prompt=row["prompt"],
+                response=row.get("response") or "",
+                score=scored["score"],
+                dims=scored["dims"],
+                rationale=scored["rationale"],
+                tools_used=row.get("tools_used"),
+            )
+            save_reflection(
+                content=content,
+                category=category,
+                score_at_gen=scored["score"],
+                interaction_id=row["id"],
+                group_folder=row.get("group_folder"),
+            )
+        elif scored["score"] >= config["positive_threshold"]:
+            content, category = generate_positive_reflection(
+                prompt=row["prompt"],
+                response=row.get("response") or "",
+                score=scored["score"],
+                dims=scored["dims"],
+                rationale=scored["rationale"],
+                tools_used=row.get("tools_used"),
+            )
+            save_reflection(
+                content=content,
+                category=category,
+                score_at_gen=scored["score"],
+                interaction_id=row["id"],
+                group_folder=row.get("group_folder"),
+            )
+        return True
+    except Exception as exc:
+        log.warning("Failed to generate reflection for %s: %s", row["id"], exc)
+        return False
+
+
+def judge_pending_interactions() -> int:
+    """
+    Judge all unjudged interactions using a two-pass approach:
+      Pass 1: Score all interactions in parallel (GPU-bound, benefits from OLLAMA_NUM_PARALLEL)
+      Pass 2: Generate reflections for low/high scorers in parallel
+
+    Returns the number of interactions successfully scored.
+    """
+    import os
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    from .config import REFLECTION_THRESHOLD, POSITIVE_THRESHOLD
+    from .judge import make_runtime_judge
     from .storage import get_storage
 
     store = get_storage()
@@ -111,59 +182,38 @@ def judge_pending_interactions() -> int:
         log.warning("Could not create judge for batch judging: %s", exc)
         return 0
 
-    judged = 0
-    for row in unjudged:
-        try:
-            result = asyncio.run(judge.a_evaluate(
-                prompt=row["prompt"],
-                response=row.get("response") or "",
-                tools_used=row.get("tools_used"),
-            ))
-            dims = {
-                "quality": result.quality,
-                "safety": result.safety,
-                "tool_use": result.tool_use,
-                "personalization": result.personalization,
-            }
-            update_score(row["id"], result.score, dims, parse_error=result.is_parse_error)
-            judged += 1
+    config = {
+        "reflection_threshold": REFLECTION_THRESHOLD,
+        "positive_threshold": POSITIVE_THRESHOLD,
+    }
 
-            if result.is_parse_error:
-                continue
-            if result.score < REFLECTION_THRESHOLD:
-                content, category = generate_reflection(
-                    prompt=row["prompt"],
-                    response=row.get("response") or "",
-                    score=result.score,
-                    dims=dims,
-                    rationale=result.rationale,
-                    tools_used=row.get("tools_used"),
-                )
-                save_reflection(
-                    content=content,
-                    category=category,
-                    score_at_gen=result.score,
-                    interaction_id=row["id"],
-                    group_folder=row.get("group_folder"),
-                )
-            elif result.score >= POSITIVE_THRESHOLD:
-                content, category = generate_positive_reflection(
-                    prompt=row["prompt"],
-                    response=row.get("response") or "",
-                    score=result.score,
-                    dims=dims,
-                    rationale=result.rationale,
-                    tools_used=row.get("tools_used"),
-                )
-                save_reflection(
-                    content=content,
-                    category=category,
-                    score_at_gen=result.score,
-                    interaction_id=row["id"],
-                    group_folder=row.get("group_folder"),
-                )
-        except Exception as exc:
-            log.warning("Failed to judge interaction %s: %s", row["id"], exc)
+    workers = int(os.environ.get("EVOLUTION_JUDGE_WORKERS", "4"))
+
+    # Pass 1: Score all interactions in parallel
+    scored_results = []
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {
+            pool.submit(_score_single, row, judge): row["id"]
+            for row in unjudged
+        }
+        for future in as_completed(futures):
+            result = future.result()
+            if result and not result["is_parse_error"]:
+                scored_results.append(result)
+
+    judged = len(scored_results) + sum(
+        1 for f in futures if f.result() is not None and f.result()["is_parse_error"]
+    )
+
+    # Pass 2: Generate reflections for interactions that need them
+    needs_reflection = [
+        s for s in scored_results
+        if s["score"] < config["reflection_threshold"]
+        or s["score"] >= config["positive_threshold"]
+    ]
+    if needs_reflection:
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            list(pool.map(lambda s: _reflect_single(s, config), needs_reflection))
 
     return judged
 
