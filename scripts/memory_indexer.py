@@ -988,10 +988,18 @@ def cmd_rebuild():
                 conf = float(fm.get("confidence", 0.5))
                 corr = int(fm.get("corroborations", 1))
                 date_str = fm.get("created_at", "")
+                # Restore source_excerpt from .md frontmatter into source_chunk column
+                stored_excerpt = None
+                raw = fm.get("raw", "")
+                excerpt_m = re.search(
+                    r"^source_excerpt:\s*\|\n((?:  .*\n?)*)", raw, re.MULTILINE
+                )
+                if excerpt_m:
+                    stored_excerpt = re.sub(r"^ {2}", "", excerpt_m.group(1), flags=re.MULTILINE).strip()
                 cur = db.execute(
-                    "INSERT INTO entries (path, date, chunk, type, tldr, topics, confidence, corroborations) "
-                    "VALUES (?, ?, ?, 'atom', ?, ?, ?, ?)",
-                    [str(af), date_str, body, body, fm.get("tags", ""), conf, corr],
+                    "INSERT INTO entries (path, date, chunk, type, tldr, topics, confidence, corroborations, source_chunk) "
+                    "VALUES (?, ?, ?, 'atom', ?, ?, ?, ?, ?)",
+                    [str(af), date_str, body, body, fm.get("tags", ""), conf, corr, stored_excerpt],
                 )
                 db.execute("INSERT INTO embeddings(rowid, embedding) VALUES (?, ?)",
                            [cur.lastrowid, serialize(vec)])

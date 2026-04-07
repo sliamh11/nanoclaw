@@ -492,3 +492,37 @@ def test_cmd_learnings_skips_expired_atoms(mi, fresh_vault, capsys, tmp_path, mo
     mi.cmd_learnings(since_days=7, max_items=3)
     output = capsys.readouterr().out
     assert "Expired constraint" not in output
+
+
+def test_rebuild_restores_source_chunk_from_frontmatter(mi, fresh_vault, tmp_path, monkeypatch):
+    """--rebuild reads source_excerpt from atom .md frontmatter and stores in source_chunk column."""
+    atoms_dir = fresh_vault / "Atoms"
+    atoms_dir.mkdir(exist_ok=True)
+    atom_file = atoms_dir / "preference-use-pytest.md"
+    atom_file.write_text(
+        "---\ntype: atom\ncategory: preference\ntags: []\n"
+        "confidence: 0.70\ncorroborations: 2\n"
+        "source: /session.md\ncreated_at: 2024-06-15\nupdated_at: 2024-06-15\nttl_days: 365\n"
+        "source_excerpt: |\n"
+        "  ## Decisions Made\n"
+        "  We chose pytest over unittest for all tests.\n"
+        "---\n"
+        "Prefers pytest over unittest for testing\n"
+    )
+
+    # Stub embed so --rebuild doesn't need API key
+    monkeypatch.setattr(mi, "embed", lambda text: [0.1] * 768)
+    test_db = tmp_path / "memory.db"
+    monkeypatch.setattr(mi, "DB_PATH", test_db)
+
+    mi.cmd_rebuild()
+
+    db = mi.open_db()
+    row = db.execute(
+        "SELECT source_chunk FROM entries WHERE type='atom' LIMIT 1"
+    ).fetchone()
+    db.close()
+
+    assert row is not None
+    assert row[0] is not None, "source_chunk should be restored from frontmatter"
+    assert "pytest" in row[0]
