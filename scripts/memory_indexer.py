@@ -264,12 +264,19 @@ def cmd_add(path_str: str):
     print(f"Indexed {indexed} chunk(s) from {path.name}")
 
 
-def cmd_recent(n: int = 3, days: bool = False):
+COMPACT_SESSION_THRESHOLD = 12  # auto-enable compact mode above this many sessions
+
+
+def cmd_recent(n: int = 3, days: bool = False, compact: bool = False):
     """Return recent session frontmatters. Pure filesystem — no API calls.
 
     When days=False (legacy): return last N sessions, sorted by date then mtime.
     When days=True: return ALL sessions from the last N calendar days, sorted by
     date descending then mtime descending (newest first within each day).
+
+    Compact mode (auto-triggered at >= COMPACT_SESSION_THRESHOLD sessions, or via
+    --compact flag): truncates decisions to 60 chars, strips full vault paths,
+    collapses cluster children to a count-only header.
     """
     if not VAULT_SESSION_LOGS.exists():
         print(f"ERROR: session logs not found at {VAULT_SESSION_LOGS}", file=sys.stderr)
@@ -302,6 +309,22 @@ def cmd_recent(n: int = 3, days: bool = False):
     else:
         selected = dated[:n]
 
+    # Auto-enable compact when session count exceeds threshold
+    if not compact and len(selected) >= COMPACT_SESSION_THRESHOLD:
+        compact = True
+
+    # Compact-aware formatting helpers
+    def fmt_decisions(decisions: str) -> str:
+        if not compact or not decisions:
+            return f" | {decisions}" if decisions else ""
+        truncated = decisions[:60] + "…" if len(decisions) > 60 else decisions
+        return f" | {truncated}"
+
+    def fmt_path(path: Path) -> str:
+        if compact:
+            return f"  ({path.stem})"
+        return f"  (full log: {path})"
+
     # Group sessions by date for clustering on busy days
     from collections import OrderedDict
     by_date: OrderedDict[str, list[tuple[str, Path, dict]]] = OrderedDict()
@@ -327,30 +350,38 @@ def cmd_recent(n: int = 3, days: bool = False):
 
             for topic, items in clusters.items():
                 if len(items) >= 2:
-                    # Clustered: group header + indented items
-                    lines.append(f"- [{date} | {topic}] ({len(items)} sessions)")
-                    for path, fm in items:
-                        name = path.stem.replace("-", " ")
-                        tldr = (fm.get("tldr", "") or "").split(".")[0][:80]
-                        lines.append(f"  - {name} — {tldr}")
-                        lines.append(f"    (full log: {path})")
+                    if compact:
+                        # Compact: header only — no individual entries
+                        tldrs = "; ".join(
+                            (fm.get("tldr", "") or "").split(".")[0][:40]
+                            for _, fm in items[:3]
+                        )
+                        lines.append(f"- [{date} | {topic}] ({len(items)} sessions, covering: {tldrs})")
+                    else:
+                        # Full: group header + indented items
+                        lines.append(f"- [{date} | {topic}] ({len(items)} sessions)")
+                        for path, fm in items:
+                            name = path.stem.replace("-", " ")
+                            tldr = (fm.get("tldr", "") or "").split(".")[0][:80]
+                            lines.append(f"  - {name} — {tldr}")
+                            lines.append(f"    (full log: {path})")
                 else:
                     # Single item — flat format
                     path, fm = items[0]
                     name = path.stem.replace("-", " ")
                     tldr = (fm.get("tldr", "") or "").split(".")[0][:80]
                     decisions = fm.get("decisions", "") or ""
-                    dec_part = f" | {decisions}" if decisions else ""
+                    dec_part = fmt_decisions(decisions)
                     lines.append(f"- [{date} | {name}]{dec_part} — {tldr}")
-                    lines.append(f"  (full log: {path})")
+                    lines.append(fmt_path(path))
         else:
             for _, path, fm in sessions:
                 name = path.stem.replace("-", " ")
                 tldr = (fm.get("tldr", "") or "").split(".")[0][:80]
                 decisions = fm.get("decisions", "") or ""
-                dec_part = f" | {decisions}" if decisions else ""
+                dec_part = fmt_decisions(decisions)
                 lines.append(f"- [{date} | {name}]{dec_part} — {tldr}")
-                lines.append(f"  (full log: {path})")
+                lines.append(fmt_path(path))
 
     # Continuity indicator
     total_sessions = len(list(VAULT_SESSION_LOGS.rglob("*.md"))) if VAULT_SESSION_LOGS.exists() else 0
@@ -371,7 +402,8 @@ def cmd_recent(n: int = 3, days: bool = False):
                 parts.append(f"{reflection_count} active reflections")
     except (sqlite3.OperationalError, Exception):
         pass
-    lines.append(f"\nContinuity: {' · '.join(parts)} (total: {total_sessions} sessions, {total_atoms} atoms)")
+    compact_suffix = " (compact)" if compact else ""
+    lines.append(f"\nContinuity: {' · '.join(parts)} (total: {total_sessions} sessions, {total_atoms} atoms){compact_suffix}")
 
     print("\n".join(lines))
 
@@ -1042,6 +1074,9 @@ def main():
                         help="Boost recent results in --query (last 7d strong, 30d moderate)")
     parser.add_argument("--source", action="store_true",
                         help="Show source excerpt below each atom in --query results")
+    parser.add_argument("--compact", action="store_true",
+                        help="Compact output for --recent/--recent-days: truncate decisions, strip paths, "
+                             "collapse cluster entries. Auto-triggered at >= 12 sessions.")
     args = parser.parse_args()
 
     global _client
@@ -1050,10 +1085,10 @@ def main():
         cmd_wander(args.wander or [], steps=args.steps, top_k=args.top or 10)
         return
     if args.recent is not None:
-        cmd_recent(args.recent)
+        cmd_recent(args.recent, compact=args.compact)
         return
     if args.recent_days is not None:
-        cmd_recent(args.recent_days, days=True)
+        cmd_recent(args.recent_days, days=True, compact=args.compact)
         return
     if args.learnings:
         cmd_learnings(since_days=args.since, max_items=args.top)
