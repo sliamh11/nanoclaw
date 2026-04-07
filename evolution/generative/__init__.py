@@ -20,6 +20,8 @@ def generate(prompt: str, model: Optional[str] = None, provider: Optional[str] =
     """
     Generate text using the best available provider.
 
+    Falls back to the next available provider on quota/rate-limit errors.
+
     Args:
         prompt: The input prompt.
         model: Optional model override.
@@ -28,7 +30,35 @@ def generate(prompt: str, model: Optional[str] = None, provider: Optional[str] =
     Returns:
         Generated text.
     """
-    return GenerativeRegistry.default().resolve(provider).generate(prompt, model)
+    registry = GenerativeRegistry.default()
+
+    # If explicit provider requested, no fallback
+    if provider:
+        return registry.resolve(provider).generate(prompt, model)
+
+    # Try providers in priority order, fall back on quota errors
+    last_exc = None
+    is_first = True
+    for name in registry.list_providers():
+        p = registry._providers[name]
+        if not p.is_available():
+            continue
+        try:
+            # Only pass model override to the primary provider — fallback
+            # providers use their own default (model names aren't portable)
+            effective_model = model if is_first else None
+            return p.generate(prompt, effective_model)
+        except (RuntimeError, Exception) as exc:
+            exc_str = str(exc)
+            if any(s in exc_str for s in ("429", "quota", "RESOURCE_EXHAUSTED", "503", "unavailable", "404", "timed out")):
+                last_exc = exc
+                is_first = False
+                continue
+            raise
+
+    if last_exc:
+        raise last_exc
+    raise NoGenerativeProviderError("No generative provider available")
 
 
 __all__ = [
