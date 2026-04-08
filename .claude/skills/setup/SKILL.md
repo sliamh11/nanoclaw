@@ -229,23 +229,45 @@ echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc  # or ~/.bashrc
 
 Install Deus's 6 core memory skills to `~/.claude/skills/` so they work in any directory (home mode AND external project mode).
 
-Run:
+Run using Python (cross-platform — macOS, Linux, Windows):
 ```bash
-REPO_DIR="$(pwd)"
-SKILLS_SRC="$REPO_DIR/.claude/skills"
-SKILLS_DEST="$HOME/.claude/skills"
-mkdir -p "$SKILLS_DEST"
+python3 -c "
+import os, shutil, sys
+from pathlib import Path
 
-for skill in compress resume checkpoint preserve preferences project-settings; do
-  mkdir -p "$SKILLS_DEST/$skill"
-  ln -sf "$SKILLS_SRC/$skill/skill.md" "$SKILLS_DEST/$skill/skill.md"
-  echo "  ✓ $skill"
-done
+repo = Path.cwd()
+src_base = repo / '.claude' / 'skills'
+dest_base = Path.home() / '.claude' / 'skills'
+skills = ['compress', 'resume', 'checkpoint', 'preserve', 'preferences', 'project-settings']
+failed = []
+
+for skill in skills:
+    src = src_base / skill / 'skill.md'
+    dest_dir = dest_base / skill
+    dest = dest_dir / 'skill.md'
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    if dest.exists() or dest.is_symlink():
+        dest.unlink()
+    try:
+        dest.symlink_to(src.resolve())
+        print(f'  ✓ {skill} (symlink)')
+    except OSError:
+        # Windows without Developer Mode — fall back to copy
+        shutil.copy2(src, dest)
+        print(f'  ✓ {skill} (copied — re-run setup after repo updates)')
+
+if failed:
+    print(f'  ✗ failed: {failed}', file=sys.stderr)
+    sys.exit(1)
+"
 ```
 
-This creates symlinks so updates to the repo automatically reflect in `~/.claude/skills/`. Idempotent — safe to re-run.
+- **macOS/Linux:** creates symlinks — repo updates propagate automatically
+- **Windows (Developer Mode on):** creates symlinks
+- **Windows (Developer Mode off):** falls back to file copy — user must re-run setup after updating the repo
+- Idempotent — safe to re-run anytime
 
-**If any symlink fails** (permissions, existing non-symlink file): warn the user and continue — the other skills still install. The commands at `.claude/commands/` (home-mode-only) remain as fallback.
+**If any skill fails:** warn the user and continue — the other skills still install. The commands at `.claude/commands/` (home-mode-only) remain as fallback.
 
 **After installing:** Tell the user that `/compress`, `/resume`, `/checkpoint`, `/preserve`, `/preferences`, and `/project-settings` are now available in any project directory.
 
