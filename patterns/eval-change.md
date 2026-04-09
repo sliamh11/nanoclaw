@@ -4,6 +4,11 @@ governs:
   - eval/
   - scripts/memory_indexer.py
 last_verified: "2026-04-09"
+test_tasks:
+  - "Add a new DeepEval metric to the core_qa test suite"
+  - "Add a new judge backend to the evolution judge provider registry"
+  - "Fix a race condition in the evolution storage provider on concurrent writes"
+  - "Update the memory indexer to include a new atom type"
 ---
 # Pattern: eval-change
 

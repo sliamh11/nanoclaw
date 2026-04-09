@@ -1,0 +1,393 @@
+"""
+Tests for scripts/drift_check.py — the --paths mode specifically.
+
+The --paths mode walks each pattern's frontmatter `governs:` list and the
+backtick-quoted path references in its body, and verifies every referenced
+path exists on disk. These tests exercise both sources of references in
+isolation using a temporary project tree.
+"""
+import sys
+from pathlib import Path
+
+import pytest
+
+# Ensure scripts/ is importable so `import drift_check` resolves.
+_SCRIPTS_DIR = str(Path(__file__).resolve().parent.parent)
+if _SCRIPTS_DIR not in sys.path:
+    sys.path.insert(0, _SCRIPTS_DIR)
+
+import drift_check
+
+
+# ── extract_body_paths ─────────────────────────────────────────────────────────
+
+class TestExtractBodyPaths:
+    def test_extracts_simple_backtick_path(self):
+        text = "See `src/channels/registry.ts` for the implementation."
+        assert drift_check.extract_body_paths(text) == {"src/channels/registry.ts"}
+
+    def test_extracts_directory_reference(self):
+        text = "All channels live in `src/channels/`."
+        assert drift_check.extract_body_paths(text) == {"src/channels"}
+
+    def test_extracts_multiple_paths(self):
+        text = "Read `docs/SECURITY.md` and `docs/CONTRIBUTING-AI.md`."
+        assert drift_check.extract_body_paths(text) == {
+            "docs/SECURITY.md",
+            "docs/CONTRIBUTING-AI.md",
+        }
+
+    def test_skips_glob_patterns(self):
+        text = "Rebuild via `packages/mcp-*/` — one build per package."
+        assert drift_check.extract_body_paths(text) == set()
+
+    def test_skips_template_placeholders(self):
+        text = "Run `packages/mcp-{channel}/` after editing."
+        assert drift_check.extract_body_paths(text) == set()
+
+    def test_skips_angle_placeholders(self):
+        text = "Inside `packages/mcp-<name>/` run tsc."
+        assert drift_check.extract_body_paths(text) == set()
+
+    def test_ignores_frontmatter(self):
+        text = (
+            "---\n"
+            "governs:\n"
+            "  - src/never-scanned-from-body.ts\n"
+            "---\n"
+            "Body reference: `docs/CONTRIBUTING-AI.md`."
+        )
+        found = drift_check.extract_body_paths(text)
+        assert found == {"docs/CONTRIBUTING-AI.md"}
+        assert "src/never-scanned-from-body.ts" not in found
+
+    def test_ignores_non_repo_tokens(self):
+        text = "Install with `npm run build` and `node_modules/foo`."
+        # Neither starts with a known top-level dir — both skipped.
+        assert drift_check.extract_body_paths(text) == set()
+
+    def test_handles_dotted_top_dirs(self):
+        text = "Skills live in `.claude/skills/` alongside `.mex/ROUTER.md`."
+        assert drift_check.extract_body_paths(text) == {
+            ".claude/skills",
+            ".mex/ROUTER.md",
+        }
+
+
+# ── check_paths ────────────────────────────────────────────────────────────────
+
+def _build_project(tmp_path: Path, pattern_body: str, governs: list[str]) -> Path:
+    """Create a minimal project tree with one pattern file."""
+    patterns_dir = tmp_path / "patterns"
+    patterns_dir.mkdir()
+
+    governs_yaml = "\n".join(f"  - {p}" for p in governs)
+    pattern_text = (
+        "---\n"
+        f"governs:\n{governs_yaml}\n"
+        "---\n"
+        f"{pattern_body}\n"
+    )
+    (patterns_dir / "demo.md").write_text(pattern_text)
+
+    index = patterns_dir / "INDEX.md"
+    index.write_text("| task | pattern | source |\n|---|---|---|\n| demo | `patterns/demo.md` | none |\n")
+    return tmp_path
+
+
+class TestCheckPaths:
+    def test_passes_when_all_paths_exist(self, tmp_path, monkeypatch):
+        (tmp_path / "src").mkdir()
+        (tmp_path / "src" / "real.ts").write_text("// real")
+        _build_project(tmp_path, "See `src/real.ts` for details.", ["src/real.ts"])
+
+        monkeypatch.setattr(drift_check, "PROJECT_ROOT", tmp_path)
+        assert drift_check.check_paths(tmp_path) == 0
+
+    def test_fails_on_missing_governs_path(self, tmp_path, monkeypatch):
+        _build_project(tmp_path, "No body refs.", ["src/gone.ts"])
+
+        monkeypatch.setattr(drift_check, "PROJECT_ROOT", tmp_path)
+        assert drift_check.check_paths(tmp_path) == 1
+
+    def test_fails_on_missing_body_path(self, tmp_path, monkeypatch):
+        _build_project(
+            tmp_path,
+            "Check `src/ghost.ts` for the fix.",
+            [],  # empty governs
+        )
+
+        monkeypatch.setattr(drift_check, "PROJECT_ROOT", tmp_path)
+        assert drift_check.check_paths(tmp_path) == 1
+
+    def test_reports_source_in_output(self, tmp_path, monkeypatch, capsys):
+        _build_project(tmp_path, "Ref `src/ghost.ts`.", ["src/also-gone.ts"])
+
+        monkeypatch.setattr(drift_check, "PROJECT_ROOT", tmp_path)
+        drift_check.check_paths(tmp_path)
+        out = capsys.readouterr().out
+        assert "[governs]" in out
+        assert "[body]" in out
+        assert "src/ghost.ts" in out
+        assert "src/also-gone.ts" in out
+
+    def test_ignores_glob_in_body(self, tmp_path, monkeypatch):
+        (tmp_path / "packages").mkdir()  # wildcard expansion not attempted
+        _build_project(
+            tmp_path,
+            "Run tsc inside `packages/mcp-*/`.",
+            [],
+        )
+        monkeypatch.setattr(drift_check, "PROJECT_ROOT", tmp_path)
+        # Glob is skipped, not treated as missing — exit 0.
+        assert drift_check.check_paths(tmp_path) == 0
+
+
+# ── parse_adr / helpers ───────────────────────────────────────────────────────
+
+class TestPathsOverlap:
+    def test_exact_match(self):
+        assert drift_check._paths_overlap("eval/", "eval/")
+
+    def test_dir_contains_file(self):
+        assert drift_check._paths_overlap("src/", "src/startup-gate.ts")
+
+    def test_file_under_dir(self):
+        assert drift_check._paths_overlap("src/startup-gate.ts", "src/")
+
+    def test_no_overlap_similar_names(self):
+        assert not drift_check._paths_overlap("eval/", "evolution/")
+
+    def test_strips_backticks_and_slashes(self):
+        assert drift_check._paths_overlap("`eval/`", "eval")
+
+
+class TestParseAdr:
+    def test_parses_date_and_scope(self, tmp_path):
+        adr = tmp_path / "a.md"
+        adr.write_text(
+            "# ADR: Example\n\n"
+            "**Date:** 2026-04-08\n"
+            "**Scope:** `evolution/`, `scripts/memory_indexer.py`\n"
+        )
+        parsed = drift_check.parse_adr(adr)
+        assert parsed is not None
+        assert parsed["date"] == "2026-04-08"
+        assert parsed["scopes"] == ["evolution", "scripts/memory_indexer.py"]
+
+    def test_returns_none_without_date(self, tmp_path):
+        adr = tmp_path / "b.md"
+        adr.write_text("# ADR: No date\n\n**Status:** Accepted\n")
+        assert drift_check.parse_adr(adr) is None
+
+    def test_empty_scopes_when_missing(self, tmp_path):
+        adr = tmp_path / "c.md"
+        adr.write_text("# ADR\n\n**Date:** 2026-04-01\n**Status:** Accepted\n")
+        parsed = drift_check.parse_adr(adr)
+        assert parsed is not None
+        assert parsed["scopes"] == []
+
+
+# ── check_adr ─────────────────────────────────────────────────────────────────
+
+def _build_adr_project(
+    tmp_path: Path,
+    pattern_governs: list[str],
+    pattern_last_verified: str,
+    adr_date: str,
+    adr_scope: str,
+) -> Path:
+    """Create a project with one pattern and one ADR."""
+    (tmp_path / "patterns").mkdir()
+    (tmp_path / "docs" / "decisions").mkdir(parents=True)
+
+    governs_yaml = "\n".join(f"  - {p}" for p in pattern_governs)
+    pattern_text = (
+        "---\n"
+        f"governs:\n{governs_yaml}\n"
+        f'last_verified: "{pattern_last_verified}"\n'
+        "---\n"
+        "Demo pattern.\n"
+    )
+    (tmp_path / "patterns" / "demo.md").write_text(pattern_text)
+    (tmp_path / "patterns" / "INDEX.md").write_text(
+        "| task | pattern | source |\n|---|---|---|\n| demo | `patterns/demo.md` | none |\n"
+    )
+
+    adr_text = (
+        "# ADR: Demo\n\n"
+        f"**Date:** {adr_date}\n"
+        f"**Scope:** {adr_scope}\n"
+        "**Status:** Accepted\n"
+    )
+    (tmp_path / "docs" / "decisions" / "demo.md").write_text(adr_text)
+    return tmp_path
+
+
+class TestCheckAdr:
+    def test_passes_when_adr_older_than_pattern(self, tmp_path, monkeypatch):
+        _build_adr_project(
+            tmp_path,
+            pattern_governs=["evolution/"],
+            pattern_last_verified="2026-04-09",
+            adr_date="2026-03-01",
+            adr_scope="`evolution/`",
+        )
+        monkeypatch.setattr(drift_check, "PROJECT_ROOT", tmp_path)
+        assert drift_check.check_adr(tmp_path) == 0
+
+    def test_fails_when_adr_newer_with_overlap(self, tmp_path, monkeypatch):
+        _build_adr_project(
+            tmp_path,
+            pattern_governs=["evolution/"],
+            pattern_last_verified="2026-04-01",
+            adr_date="2026-04-08",
+            adr_scope="`evolution/`, `scripts/memory_indexer.py`",
+        )
+        monkeypatch.setattr(drift_check, "PROJECT_ROOT", tmp_path)
+        assert drift_check.check_adr(tmp_path) == 1
+
+    def test_passes_when_adr_newer_but_no_overlap(self, tmp_path, monkeypatch):
+        _build_adr_project(
+            tmp_path,
+            pattern_governs=["packages/"],  # unrelated
+            pattern_last_verified="2026-04-01",
+            adr_date="2026-04-08",
+            adr_scope="`evolution/`",
+        )
+        monkeypatch.setattr(drift_check, "PROJECT_ROOT", tmp_path)
+        assert drift_check.check_adr(tmp_path) == 0
+
+    def test_dir_file_overlap_triggers(self, tmp_path, monkeypatch):
+        """A pattern governing `src/` should flag on an ADR scoped to `src/startup-gate.ts`."""
+        _build_adr_project(
+            tmp_path,
+            pattern_governs=["src/"],
+            pattern_last_verified="2026-04-01",
+            adr_date="2026-04-09",
+            adr_scope="`src/startup-gate.ts`",
+        )
+        monkeypatch.setattr(drift_check, "PROJECT_ROOT", tmp_path)
+        assert drift_check.check_adr(tmp_path) == 1
+
+    def test_warns_on_missing_scope(self, tmp_path, monkeypatch, capsys):
+        _build_adr_project(
+            tmp_path,
+            pattern_governs=["src/"],
+            pattern_last_verified="2026-04-09",
+            adr_date="2026-04-08",
+            adr_scope="",  # will write an empty Scope line
+        )
+        monkeypatch.setattr(drift_check, "PROJECT_ROOT", tmp_path)
+        # Missing scope is a fatal warning (exit 1) so CI forces the fix.
+        rc = drift_check.check_adr(tmp_path)
+        out = capsys.readouterr().out
+        assert "missing **Scope:**" in out
+        assert rc == 1
+
+
+# ── parse_test_tasks / check_test_tasks ──────────────────────────────────────
+
+def _build_tt_project(tmp_path: Path, test_tasks: list[str]) -> Path:
+    """Create a project with one pattern file containing test_tasks."""
+    (tmp_path / "patterns").mkdir()
+    tasks_yaml = "\n".join(f'  - "{t}"' for t in test_tasks) if test_tasks else ""
+    tasks_block = f"test_tasks:\n{tasks_yaml}\n" if test_tasks else ""
+    pattern_text = (
+        "---\n"
+        "governs:\n  - src/\n"
+        "last_verified: \"2026-04-09\"\n"
+        f"{tasks_block}"
+        "---\n"
+        "Body.\n"
+    )
+    (tmp_path / "patterns" / "demo.md").write_text(pattern_text)
+    (tmp_path / "patterns" / "INDEX.md").write_text(
+        "| task | pattern | source |\n|---|---|---|\n| demo | `patterns/demo.md` | none |\n"
+    )
+    return tmp_path
+
+
+class TestParseTestTasks:
+    def test_parses_quoted_list(self, tmp_path):
+        _build_tt_project(tmp_path, ["Add a Discord channel", "Fix silent drop"])
+        tasks = drift_check.parse_test_tasks(tmp_path / "patterns" / "demo.md")
+        assert tasks == ["Add a Discord channel", "Fix silent drop"]
+
+    def test_empty_when_missing(self, tmp_path):
+        _build_tt_project(tmp_path, [])  # no test_tasks key
+        tasks = drift_check.parse_test_tasks(tmp_path / "patterns" / "demo.md")
+        assert tasks == []
+
+    def test_stops_at_next_key(self, tmp_path):
+        pattern = tmp_path / "demo.md"
+        pattern.write_text(
+            "---\n"
+            "test_tasks:\n"
+            '  - "one"\n'
+            '  - "two"\n'
+            "governs:\n"
+            "  - src/\n"
+            "---\n"
+            "body\n"
+        )
+        tasks = drift_check.parse_test_tasks(pattern)
+        assert tasks == ["one", "two"]
+
+
+class TestCheckTestTasks:
+    def test_passes_with_three_tasks(self, tmp_path, monkeypatch):
+        _build_tt_project(tmp_path, ["one", "two", "three"])
+        monkeypatch.setattr(drift_check, "PROJECT_ROOT", tmp_path)
+        assert drift_check.check_test_tasks(tmp_path) == 0
+
+    def test_fails_below_minimum(self, tmp_path, monkeypatch):
+        _build_tt_project(tmp_path, ["one", "two"])  # below minimum of 3
+        monkeypatch.setattr(drift_check, "PROJECT_ROOT", tmp_path)
+        assert drift_check.check_test_tasks(tmp_path) == 1
+
+    def test_custom_minimum(self, tmp_path, monkeypatch):
+        _build_tt_project(tmp_path, ["one", "two"])
+        monkeypatch.setattr(drift_check, "PROJECT_ROOT", tmp_path)
+        assert drift_check.check_test_tasks(tmp_path, minimum=2) == 0
+
+    def test_fails_on_missing_test_tasks(self, tmp_path, monkeypatch):
+        _build_tt_project(tmp_path, [])
+        monkeypatch.setattr(drift_check, "PROJECT_ROOT", tmp_path)
+        assert drift_check.check_test_tasks(tmp_path) == 1
+
+
+# ── _load_source_docs ────────────────────────────────────────────────────────
+
+class TestLoadSourceDocs:
+    def test_loads_known_docs(self, tmp_path):
+        (tmp_path / "docs").mkdir()
+        (tmp_path / "docs" / "CONTRIBUTING-AI.md").write_text("# Contributing")
+        (tmp_path / "docs" / "DEVELOPMENT.md").write_text("# Dev")
+        (tmp_path / "docs" / "SECURITY.md").write_text("# Security")
+        docs = drift_check._load_source_docs(tmp_path)
+        assert "docs/CONTRIBUTING-AI.md" in docs
+        assert "docs/DEVELOPMENT.md" in docs
+        assert "docs/SECURITY.md" in docs
+        assert docs["docs/CONTRIBUTING-AI.md"] == "# Contributing"
+
+    def test_loads_all_adrs(self, tmp_path):
+        (tmp_path / "docs" / "decisions").mkdir(parents=True)
+        (tmp_path / "docs" / "decisions" / "INDEX.md").write_text("index")
+        (tmp_path / "docs" / "decisions" / "one.md").write_text("adr one")
+        (tmp_path / "docs" / "decisions" / "two.md").write_text("adr two")
+        docs = drift_check._load_source_docs(tmp_path)
+        assert "docs/decisions/INDEX.md" in docs
+        assert "docs/decisions/one.md" in docs
+        assert "docs/decisions/two.md" in docs
+
+    def test_missing_files_skipped_silently(self, tmp_path):
+        # No docs/ directory at all
+        docs = drift_check._load_source_docs(tmp_path)
+        assert docs == {}
+
+    def test_partial_docs_directory(self, tmp_path):
+        (tmp_path / "docs").mkdir()
+        (tmp_path / "docs" / "CONTRIBUTING-AI.md").write_text("only this one")
+        docs = drift_check._load_source_docs(tmp_path)
+        assert list(docs.keys()) == ["docs/CONTRIBUTING-AI.md"]

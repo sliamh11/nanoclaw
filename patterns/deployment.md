@@ -5,6 +5,11 @@ governs:
   - dist/
   - packages/
 last_verified: "2026-04-09"
+test_tasks:
+  - "Apply a fix to the credential proxy and restart the service"
+  - "Rebuild the WhatsApp MCP package and pick up the change live"
+  - "Rotate the Gemini API key without restarting the evolution layer"
+  - "Ship a dist/ fix after a failed deploy where the old binary is still running"
 ---
 # Pattern: deployment
 

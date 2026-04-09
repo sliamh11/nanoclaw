@@ -2,6 +2,11 @@
 governs:
   - .claude/skills
 last_verified: "2026-04-09"
+test_tasks:
+  - "Create a skill that fetches and summarizes recent Gmail threads"
+  - "Update the /debug skill to include log rotation instructions"
+  - "Add a skill that opens a GitHub issue from a chat message"
+  - "Rename an existing skill and update its discovery metadata"
 ---
 # Pattern: skill-add
 

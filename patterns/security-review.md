@@ -6,6 +6,11 @@ governs:
   - src/sender-allowlist.ts
   - src/mount-security.ts
 last_verified: "2026-04-09"
+test_tasks:
+  - "Add a new shared-volume mount for per-group config files"
+  - "Allow the container to read a specific env var at runtime"
+  - "Audit a new MCP tool for credential exposure risks"
+  - "Add a new sender to the allowlist for a specific channel"
 ---
 # Pattern: security-review
 

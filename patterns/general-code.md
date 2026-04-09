@@ -7,6 +7,11 @@ governs:
   - src/checks.ts
   - setup/
 last_verified: "2026-04-09"
+test_tasks:
+  - "Refactor src/router.ts into smaller modules"
+  - "Add a new utility function for parsing timestamps"
+  - "Fix a memory leak in the startup gate"
+  - "Add a new startup check for a required environment variable"
 ---
 # Pattern: general-code
 

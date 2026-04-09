@@ -4,6 +4,11 @@ governs:
   - src/cross-platform.test.ts
   - src/config.ts
 last_verified: "2026-04-09"
+test_tasks:
+  - "Add a new child process that reads the user's HOME directory path"
+  - "Support a new shell command that must work on both macOS and Linux"
+  - "Fix a path separator bug that only appears on Windows"
+  - "Add a new env var fallback that reads from OS-specific config dirs"
 ---
 # Pattern: cross-platform
 

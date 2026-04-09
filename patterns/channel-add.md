@@ -3,6 +3,11 @@ governs:
   - src/channels
   - packages/
 last_verified: "2026-04-09"
+test_tasks:
+  - "Add a Discord channel with OAuth login"
+  - "Fix silent message loss in the WhatsApp MCP server"
+  - "Update the Telegram MCP server to expose a new tool"
+  - "Add a notification hook that reports errors to a Slack webhook"
 ---
 # Pattern: channel-add
 
