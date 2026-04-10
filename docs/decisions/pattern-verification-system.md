@@ -135,6 +135,7 @@ Each of these is documented as a deferred task with an implementation plan in `d
 - **Markdown anchors + bidirectional rule tracking.** Would require editing every source doc to tag every rule, and maintaining a rule inventory by hand. That's the manual process that caused the original problem.
 - **Mirroring ESLint/lint rules into patterns.** CI already enforces these. Duplicating them would double the maintenance burden and confuse the architectural split between "knowledge" (patterns) and "enforcement" (CI).
 - **Runtime behavioral tests that exercise patterns.** Interesting idea but would require building a task-dispatch harness. `--validate` achieves the same signal (does this pattern produce a correct plan?) without any new infrastructure — it just asks an LLM the question directly.
+- **Auto-generating ROUTER.md from pattern frontmatter.** Would eliminate the one manual step (adding a routing table row) when creating a new pattern. Rejected because: (a) some rows map multiple task types to one pattern and include extra-doc hints — that metadata doesn't naturally fit in frontmatter, (b) the Precedence and Compound tasks sections are prose requiring human judgment and can't be generated, (c) the cost is one line per pattern which is rare (~8 patterns in the project's lifetime), (d) `--paths` already catches stale references, and (e) indirection hurts readability — right now you open ROUTER.md and see everything.
 
 ## Managing at scale
 
