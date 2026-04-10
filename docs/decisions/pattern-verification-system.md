@@ -41,6 +41,7 @@ Each mode catches one of the failure categories:
 | `--all` *(new)* | Aggregator that runs all the fast checks | fast | yes — this is what CI calls |
 | `--validate` *(new)* | **Semantic content gaps** — rule exists in source docs but missing from pattern (categories 1–4) | slow (LLM) | weekly cron, skips without API key |
 | `--validate-router` *(new)* | `.mex/ROUTER.md` routes a task to the wrong pattern | slow (LLM) | weekly cron, skips without API key |
+| `--contradictions` *(new)* | Two patterns give directly conflicting advice | slow (LLM) | on-demand, skips without API key |
 
 ## Two insights that make this work
 
@@ -70,6 +71,18 @@ One LLM call per task:
 - Compares the answer to the pattern the task was declared in.
 
 Mismatch = either the router is confused or the test_task is too generic to disambiguate. Takes ~5–10 seconds per task.
+
+### `--contradictions`
+Single LLM call that concatenates all pattern bodies (separated by `--- filename ---`) and asks: "find rules that directly contradict each other across different patterns." The model responds `NO_CONTRADICTIONS` or lists each pair with file references. Not wired into `--all` (opt-in only — LLM-based). Takes ~5 seconds for the full set.
+
+### Router precedence rule
+
+`.mex/ROUTER.md` now has a `## Precedence` section that resolves routing ambiguity with a ranked-specificity principle:
+1. Security-sensitive code → `security-review`
+2. Subsystem-internal changes → the subsystem's own pattern
+3. `general-code` is the fallback
+
+This is a general principle, not a hardcoded list. Adding a new pattern doesn't require updating the precedence rule — it applies automatically.
 
 ## The `test_tasks:` frontmatter
 
@@ -103,9 +116,8 @@ When to add a new layer: if a future audit finds that a new *category* of gap ke
 Being honest about what this system does *not* catch:
 
 1. **Rules that live only in code** — ESLint configs, commit-msg hooks, test assertions. These are already enforced by CI, so the pattern system deliberately doesn't duplicate them. Mixing patterns (knowledge) with CI (enforcement) would bloat everything.
-2. **Cross-pattern contradictions** — if two patterns give conflicting advice, no check detects that. With 8 patterns today, contradictions are rare. Can be added later if they become a problem.
-3. **Source doc staleness vs actual code behavior** — a doc could describe behavior the code no longer implements. This is a docs-validation problem, not a pattern-validation problem. Would need AST analysis or behavioral tests — out of scope.
-4. **Semantic no-op source changes** — if a source doc is reorganized without changing its rules, `--drift` flags the pattern anyway. The workaround is trivial (bump `last_verified:`), so no fix.
+2. **Source doc staleness vs actual code behavior** — a doc could describe behavior the code no longer implements. This is a docs-validation problem, not a pattern-validation problem. Would need AST analysis or behavioral tests — out of scope.
+3. **Semantic no-op source changes** — if a source doc is reorganized without changing its rules, `--drift` flags the pattern anyway. The workaround is trivial (bump `last_verified:`), so no fix.
 
 Each of these is documented as a deferred task with an implementation plan in `docs/decisions/pattern-verification-deferred.md`.
 
@@ -114,11 +126,67 @@ Each of these is documented as a deferred task with an implementation plan in `d
 - **Every PR gets fast pattern checks for free.** CI runs `--all` automatically.
 - **Content gaps can be found on demand.** `npm run pattern-validate` surfaces rules missing from patterns vs source docs. Runs with Gemini, costs ~$0.25 for a full scan.
 - **Router mistakes can be found on demand.** `npm run pattern-validate-router` surfaces cases where the router picks the wrong pattern.
+- **Cross-pattern contradictions caught.** `npm run pattern-contradictions` flags rules that directly conflict across patterns.
 - **New patterns plug in with minimal work.** Add a pattern, add 3+ test_tasks, everything else flows through automatically.
-- **The system is explainable to anyone.** This ADR. Six checks, six categories, one file. No complex abstractions.
+- **The system is explainable to anyone.** This ADR. Seven checks, one file. No complex abstractions.
 
 ## Reasons alternative approaches were rejected
 
 - **Markdown anchors + bidirectional rule tracking.** Would require editing every source doc to tag every rule, and maintaining a rule inventory by hand. That's the manual process that caused the original problem.
 - **Mirroring ESLint/lint rules into patterns.** CI already enforces these. Duplicating them would double the maintenance burden and confuse the architectural split between "knowledge" (patterns) and "enforcement" (CI).
 - **Runtime behavioral tests that exercise patterns.** Interesting idea but would require building a task-dispatch harness. `--validate` achieves the same signal (does this pattern produce a correct plan?) without any new infrastructure — it just asks an LLM the question directly.
+
+## Managing at scale
+
+As the number of patterns, source docs, and ADRs grows, use this guide to stay on top of the verification system.
+
+### Quick reference — all commands
+
+| Command | What it does | When to run |
+|---------|-------------|-------------|
+| `npm run drift-check` | All fast checks (drift + paths + adr + test_tasks + coverage) | Every PR (CI does this automatically) |
+| `npm run drift-check:mtime` | Just the mtime-based drift check | Quick local sanity check |
+| `npm run drift-check:paths` | Verify all pattern-referenced paths exist | After renaming/deleting files |
+| `npm run drift-check:adr` | Flag patterns stale vs recent ADRs | After writing a new ADR |
+| `npm run drift-check:coverage` | Report docs/ files no pattern covers | After adding new docs |
+| `npm run pattern-validate` | LLM content audit (slow, needs GEMINI_API_KEY) | After editing a pattern or source doc |
+| `npm run pattern-validate-router` | LLM router correctness (slow) | After editing ROUTER.md or pattern test_tasks |
+| `npm run pattern-contradictions` | LLM cross-pattern conflict detection (slow) | After adding a new pattern or changing rules |
+
+### Adding a new pattern
+
+1. Create `patterns/<name>.md` with YAML frontmatter: `governs:`, `last_verified:`, `test_tasks:` (3+ entries)
+2. Add a row to `patterns/INDEX.md`
+3. Add a routing row to `.mex/ROUTER.md`
+4. Run `npm run drift-check` — should pass with the new pattern included
+5. Run `npm run pattern-validate -- <name>` — verify content completeness
+6. Run `npm run pattern-validate-router -- <name>` — verify routing accuracy
+7. Run `npm run pattern-contradictions` — verify no conflicts with existing patterns
+
+### Updating an existing pattern
+
+1. Edit the pattern content
+2. Update `last_verified:` to today's date
+3. Run `npm run pattern-validate -- <name>` to verify the edit didn't introduce gaps
+4. If you changed `test_tasks:`, also run `npm run pattern-validate-router -- <name>`
+
+### After writing a new ADR
+
+1. Add `**Scope:**` to the ADR frontmatter (list of file paths the decision affects)
+2. Add the ADR to `docs/decisions/INDEX.md`
+3. Run `npm run drift-check:adr` — any pattern whose `last_verified:` predates the new ADR and overlaps its scope will be flagged for re-review
+
+### Interpreting results
+
+- **DRIFTED** (`--drift`): a governed source file was committed more recently than the pattern. Re-read the source and update the pattern, then bump `last_verified:`.
+- **MISSING** (`--paths`): a path referenced in the pattern no longer exists. Remove or update the reference.
+- **STALE** (`--adr`): a new ADR affects files this pattern covers. Re-read the ADR and incorporate any relevant rules, then bump `last_verified:`.
+- **MISMATCH** (`--validate-router`): either the router text is ambiguous or the test_task is too generic. Tighten the test_task wording or adjust `ROUTER.md`'s precedence/routing table.
+- **GAPS** (`--validate`): the auditor found rules in source docs that the pattern doesn't mention. Re-distill the missing rules into the pattern.
+- **CONTRADICTION** (`--contradictions`): two patterns give opposite advice. Resolve by scoping the rule to its context or removing the conflict.
+
+### Scaling characteristics
+
+- **Fast checks (`--all`)**: O(patterns × ADRs) — milliseconds. CI runs on every PR. No degradation at 50+ patterns.
+- **LLM checks**: O(patterns × test_tasks) API calls. Each call is independent and could be parallelized. Current cost at 8 patterns × 4 tasks = 32 calls ≈ $0.25 per full scan.
+- **Pattern filter**: every LLM command accepts an optional pattern name to scope to a single file, so you don't need to scan everything every time.

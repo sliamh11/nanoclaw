@@ -331,7 +331,7 @@ Commit messages, formatting, and PR conventions are enforced automatically by pr
 
 ### Pattern verification (for AI contributors)
 
-Deus uses distilled pattern files (`patterns/*.md`) instead of loading full docs on every task — ~68% token reduction. Run `npm run drift-check` before committing pattern changes; it aggregates path, ADR-freshness, and frontmatter checks. LLM-based content and router validation is available on-demand via `npm run pattern-validate` and `npm run pattern-validate-router` (needs `GEMINI_API_KEY`). See [docs/decisions/pattern-verification-system.md](docs/decisions/pattern-verification-system.md) for how the system works and how to add new check layers.
+Deus uses distilled pattern files (`patterns/*.md`) instead of loading full docs on every task — ~68% token reduction. Run `npm run drift-check` before committing pattern changes; it aggregates path, ADR-freshness, and frontmatter checks. LLM-based content, router, and cross-pattern contradiction checks are available on-demand via `npm run pattern-validate`, `npm run pattern-validate-router`, and `npm run pattern-contradictions` (need `GEMINI_API_KEY`). See [docs/decisions/pattern-verification-system.md](docs/decisions/pattern-verification-system.md) for how the system works, how to add new check layers, and a complete command reference for managing patterns at scale.
 
 ---
 

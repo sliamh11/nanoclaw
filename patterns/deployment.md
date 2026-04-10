@@ -7,7 +7,7 @@ last_verified: "2026-04-09"
 test_tasks:
   - "Deploy a hotfix to a running service and restart it after rebuilding dist/"
   - "Rebuild the WhatsApp MCP package and pick up the change live"
-  - "Rotate an API key in the .env file and restart the service to pick it up"
+  - "Update a long-lived config value and restart the service to pick it up"
   - "Ship a dist/ fix after a failed deploy where the old binary is still running"
 ---
 # Pattern: deployment

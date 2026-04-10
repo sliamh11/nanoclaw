@@ -19,6 +19,7 @@ Usage:
   python3 scripts/drift_check.py --all             # run every fast check above
   python3 scripts/drift_check.py --validate        # LLM pattern content check (slow)
   python3 scripts/drift_check.py --validate-router # LLM router selection check (slow)
+  python3 scripts/drift_check.py --contradictions  # LLM cross-pattern contradictions (slow)
   npm run drift-check
 """
 import argparse
@@ -903,6 +904,102 @@ def check_validate_router(project_root: Path, pattern_filter: str | None = None)
     return 1 if mismatches else 0
 
 
+def check_contradictions(project_root: Path, pattern_filter: str | None = None) -> int:
+    """LLM-based cross-pattern contradictions check.
+
+    Loads all pattern bodies into a single prompt and asks the LLM to find
+    rules that directly contradict each other across different patterns.
+    Not wired into --all (opt-in only, LLM-based).
+    """
+    try:
+        from google import genai
+        from google.genai import types as genai_types
+    except ImportError as e:
+        print(f"SKIP: --contradictions needs google-genai ({e})", file=sys.stderr)
+        return 0
+
+    try:
+        from evolution.config import GEN_MODELS, load_api_key
+    except ImportError as e:
+        print(f"SKIP: --contradictions needs evolution.config ({e})", file=sys.stderr)
+        return 0
+
+    try:
+        api_key = load_api_key()
+    except RuntimeError as e:
+        print(f"SKIP: --contradictions needs GEMINI_API_KEY ({e})", file=sys.stderr)
+        return 0
+
+    patterns = discover_patterns()
+    if pattern_filter:
+        patterns = [p for p in patterns if pattern_filter in p.name]
+        if not patterns:
+            print(f"No patterns match filter: {pattern_filter}")
+            return 0
+
+    # Build a single blob with all pattern contents, separated by filename
+    blob_parts: list[str] = []
+    for p in patterns:
+        if not p.exists():
+            continue
+        blob_parts.append(f"--- {p.name} ---\n{p.read_text()}")
+
+    if not blob_parts:
+        print("No pattern files found.")
+        return 0
+
+    patterns_blob = "\n\n".join(blob_parts)
+
+    prompt = (
+        "You are auditing a set of pattern files for contradictions. Each "
+        "pattern is a cheat-sheet of rules for a specific task type.\n\n"
+        f"{patterns_blob}\n\n"
+        "Identify any rules that DIRECTLY contradict each other across "
+        "different patterns. A contradiction is when pattern A says to always "
+        "do X and pattern B says to never do X (or vice versa). Do NOT flag:\n"
+        "- Rules that are simply more specific in one pattern than another\n"
+        "- Rules that apply to different contexts or task types\n"
+        "- Universal rules that are intentionally repeated across patterns\n\n"
+        "If there are no contradictions, respond with exactly: NO_CONTRADICTIONS\n"
+        "Otherwise, list each contradiction as:\n"
+        "CONTRADICTION: <pattern_a.md> says \"<rule>\" vs <pattern_b.md> says \"<rule>\""
+    )
+
+    client = genai.Client(api_key=api_key)
+    response_text = None
+    for model in GEN_MODELS:
+        try:
+            response = client.models.generate_content(
+                model=model,
+                contents=prompt,
+                config=genai_types.GenerateContentConfig(
+                    temperature=0.0, max_output_tokens=2048
+                ),
+            )
+            response_text = (response.text or "").strip()
+            break
+        except Exception as e:
+            err = str(e)
+            if "429" in err or "RESOURCE_EXHAUSTED" in err:
+                continue
+            print(f"WARN: Gemini error ({model}): {e}", file=sys.stderr)
+            return 0
+    else:
+        print("WARN: all Gemini models quota-exhausted", file=sys.stderr)
+        return 0
+
+    if not response_text:
+        print("WARN: empty response from Gemini", file=sys.stderr)
+        return 0
+
+    if "NO_CONTRADICTIONS" in response_text:
+        print(f"No contradictions found across {len(blob_parts)} patterns.")
+        return 0
+
+    print(f"=== CONTRADICTIONS FOUND ===\n{response_text}")
+    return 1
+
+
 def check_all(project_root: Path) -> int:
     """Run every fast check in sequence and aggregate exit codes.
 
@@ -1008,9 +1105,19 @@ if __name__ == "__main__":
         help="LLM-based router check: verify ROUTER.md picks the correct "
              "pattern for each test_task (slow, needs GEMINI_API_KEY).",
     )
+    parser.add_argument(
+        "--contradictions",
+        nargs="?",
+        const="",
+        metavar="PATTERN",
+        help="LLM-based cross-pattern contradictions check (slow, needs "
+             "GEMINI_API_KEY). Optional PATTERN arg filters to matching files.",
+    )
     args = parser.parse_args()
 
-    if args.validate_router is not None:
+    if args.contradictions is not None:
+        sys.exit(check_contradictions(PROJECT_ROOT, args.contradictions or None))
+    elif args.validate_router is not None:
         sys.exit(check_validate_router(PROJECT_ROOT, args.validate_router or None))
     elif args.validate is not None:
         sys.exit(check_validate(PROJECT_ROOT, args.validate or None))

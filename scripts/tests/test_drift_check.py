@@ -497,3 +497,116 @@ class TestCheckValidateRouterSkip:
         # API key check (stderr). Either path returns 0.
         rc = drift_check.check_validate_router(tmp_path, pattern_filter="nonexistent")
         assert rc == 0
+
+
+# ── check_contradictions ──────────────────────────────────────────────────────
+
+def _make_pattern_tree(tmp_path, patterns: dict[str, str]):
+    """Helper: create patterns/INDEX.md + pattern files from a dict."""
+    pdir = tmp_path / "patterns"
+    pdir.mkdir(exist_ok=True)
+    rows = []
+    for name, body in patterns.items():
+        (pdir / name).write_text(body)
+        rows.append(f"| test | `patterns/{name}` | none |")
+    table = "| task | pattern | source |\n|---|---|---|\n" + "\n".join(rows) + "\n"
+    (pdir / "INDEX.md").write_text(table)
+
+
+class TestCheckContradictionsSkip:
+    """Skip-path tests — no LLM needed."""
+
+    def test_skip_without_api_key(self, tmp_path, monkeypatch):
+        """Without google-genai or API key, should return 0 (skip)."""
+        _make_pattern_tree(tmp_path, {"a.md": "---\n---\nrule A"})
+        monkeypatch.setattr(drift_check, "PROJECT_ROOT", tmp_path)
+        rc = drift_check.check_contradictions(tmp_path)
+        assert rc == 0
+
+    def test_skip_when_filter_matches_nothing(self, tmp_path, monkeypatch):
+        _make_pattern_tree(tmp_path, {"a.md": "---\n---\nrule A"})
+        monkeypatch.setattr(drift_check, "PROJECT_ROOT", tmp_path)
+        rc = drift_check.check_contradictions(tmp_path, pattern_filter="nonexistent")
+        assert rc == 0
+
+    def test_not_in_check_all(self, tmp_path, monkeypatch, capsys):
+        """check_all must NOT invoke check_contradictions (opt-in only)."""
+        _make_pattern_tree(tmp_path, {
+            "demo.md": "---\ngoverns:\n  - src/\nlast_verified: \"2026-04-09\"\n"
+                       "test_tasks:\n  - \"do a thing\"\n  - \"do b\"\n  - \"do c\"\n---\nbody\n"
+        })
+        (tmp_path / "src").mkdir()
+        (tmp_path / "docs").mkdir()
+        monkeypatch.setattr(drift_check, "PROJECT_ROOT", tmp_path)
+        drift_check.check_all(tmp_path)
+        captured = capsys.readouterr()
+        assert "contradictions" not in captured.out.lower()
+
+
+class TestCheckContradictionsMocked:
+    """Mocked Gemini tests for the contradiction detection logic."""
+
+    def _setup_and_mock(self, tmp_path, monkeypatch, patterns, llm_response):
+        """Set up pattern tree and mock the Gemini imports + client."""
+        _make_pattern_tree(tmp_path, patterns)
+        monkeypatch.setattr(drift_check, "PROJECT_ROOT", tmp_path)
+
+        # Build a fake genai module tree
+        class FakeResponse:
+            text = llm_response
+
+        class FakeModels:
+            def generate_content(self, **kwargs):
+                return FakeResponse()
+
+        class FakeClient:
+            def __init__(self, **kwargs):
+                self.models = FakeModels()
+
+        class FakeConfig:
+            def __init__(self, **kwargs):
+                pass
+
+        fake_genai = type(sys)("genai")
+        fake_genai.Client = FakeClient
+        fake_types = type(sys)("types")
+        fake_types.GenerateContentConfig = FakeConfig
+        fake_genai.types = fake_types
+
+        fake_google = type(sys)("google")
+        fake_google.genai = fake_genai
+
+        # Inject into sys.modules so the lazy import inside check_contradictions works
+        monkeypatch.setitem(sys.modules, "google", fake_google)
+        monkeypatch.setitem(sys.modules, "google.genai", fake_genai)
+        monkeypatch.setitem(sys.modules, "google.genai.types", fake_types)
+
+        # Mock evolution.config
+        fake_config = type(sys)("config")
+        fake_config.GEN_MODELS = ["test-model"]
+        fake_config.load_api_key = lambda: "fake-key"
+        fake_evolution = type(sys)("evolution")
+        fake_evolution.config = fake_config
+        monkeypatch.setitem(sys.modules, "evolution", fake_evolution)
+        monkeypatch.setitem(sys.modules, "evolution.config", fake_config)
+
+    def test_detects_conflict(self, tmp_path, monkeypatch):
+        patterns = {
+            "a.md": "---\n---\nAlways use tabs for indentation.",
+            "b.md": "---\n---\nNever use tabs — spaces only.",
+        }
+        self._setup_and_mock(
+            tmp_path, monkeypatch, patterns,
+            'CONTRADICTION: a.md says "Always use tabs" vs b.md says "Never use tabs"',
+        )
+        rc = drift_check.check_contradictions(tmp_path)
+        assert rc == 1
+
+    def test_clean_no_conflict(self, tmp_path, monkeypatch):
+        patterns = {
+            "a.md": "---\n---\nAlways run tests before committing.",
+            "b.md": "---\n---\nAlways lint before committing.",
+        }
+        self._setup_and_mock(tmp_path, monkeypatch, patterns, "NO_CONTRADICTIONS")
+        rc = drift_check.check_contradictions(tmp_path)
+        assert rc == 0

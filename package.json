@@ -26,7 +26,8 @@
     "drift-check:adr": "python3 scripts/drift_check.py --adr",
     "drift-check:coverage": "python3 scripts/drift_check.py --coverage",
     "pattern-validate": "python3 scripts/drift_check.py --validate",
-    "pattern-validate-router": "python3 scripts/drift_check.py --validate-router"
+    "pattern-validate-router": "python3 scripts/drift_check.py --validate-router",
+    "pattern-contradictions": "python3 scripts/drift_check.py --contradictions"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
