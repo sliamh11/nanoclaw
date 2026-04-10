@@ -543,23 +543,11 @@ def _load_source_docs(project_root: Path) -> dict[str, str]:
     skipped — the set is additive, not required.
     """
     docs: dict[str, str] = {}
-    explicit = [
-        "docs/CONTRIBUTING-AI.md",
-        "docs/DEVELOPMENT.md",
-        "docs/SECURITY.md",
-        "docs/CROSS_PLATFORM.md",
-        "docs/decisions/INDEX.md",
-    ]
-    adr_dir = project_root / "docs" / "decisions"
-    if adr_dir.exists():
-        for adr in sorted(adr_dir.glob("*.md")):
-            if adr.name != "INDEX.md":
-                explicit.append(str(adr.relative_to(project_root)))
-
-    for rel in explicit:
-        path = project_root / rel
-        if path.exists():
-            docs[rel] = path.read_text()
+    docs_dir = project_root / "docs"
+    if docs_dir.exists():
+        for md in sorted(docs_dir.rglob("*.md")):
+            rel = str(md.relative_to(project_root))
+            docs[rel] = md.read_text()
     return docs
 
 

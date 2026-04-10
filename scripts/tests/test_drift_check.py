@@ -392,6 +392,15 @@ class TestLoadSourceDocs:
         docs = drift_check._load_source_docs(tmp_path)
         assert list(docs.keys()) == ["docs/CONTRIBUTING-AI.md"]
 
+    def test_discovers_new_docs_dynamically(self, tmp_path):
+        """New docs are picked up without editing any hardcoded list."""
+        (tmp_path / "docs").mkdir()
+        (tmp_path / "docs" / "ONBOARDING.md").write_text("# Onboarding")
+        (tmp_path / "docs" / "CONTRIBUTING-AI.md").write_text("# Contributing")
+        docs = drift_check._load_source_docs(tmp_path)
+        assert "docs/ONBOARDING.md" in docs
+        assert "docs/CONTRIBUTING-AI.md" in docs
+
 
 # ── _normalize_router_response ───────────────────────────────────────────────
 
