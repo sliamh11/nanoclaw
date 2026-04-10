@@ -32,6 +32,9 @@ jobs:
       - name: Tests
         run: npx vitest run
 
+      - name: Install pytest
+        run: python3 -m pip install pytest
+
       - name: Pattern drift check
         run: npm run drift-check
 
