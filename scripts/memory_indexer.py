@@ -195,6 +195,45 @@ def open_db() -> sqlite3.Connection:
         """)
     except sqlite3.OperationalError:
         pass  # FTS5 unavailable on this SQLite build — hybrid search degrades to ANN-only
+    # Phase 2: entity/relationship graph tables
+    db.execute("""
+        CREATE TABLE IF NOT EXISTS entities (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            name          TEXT NOT NULL,
+            entity_type   TEXT NOT NULL,
+            domain        TEXT,
+            first_seen    TEXT NOT NULL,
+            last_seen     TEXT NOT NULL,
+            mention_count INTEGER DEFAULT 1,
+            summary       TEXT,
+            UNIQUE(name, entity_type)
+        )
+    """)
+    db.execute("""
+        CREATE TABLE IF NOT EXISTS relationships (
+            id             INTEGER PRIMARY KEY AUTOINCREMENT,
+            source_id      INTEGER NOT NULL REFERENCES entities(id),
+            target_id      INTEGER NOT NULL REFERENCES entities(id),
+            rel_type       TEXT NOT NULL,
+            confidence     REAL DEFAULT 0.5,
+            first_seen     TEXT NOT NULL,
+            last_seen      TEXT NOT NULL,
+            evidence_count INTEGER DEFAULT 1,
+            expired_at     TEXT,
+            UNIQUE(source_id, target_id, rel_type)
+        )
+    """)
+    db.execute("""
+        CREATE TABLE IF NOT EXISTS atom_entities (
+            atom_id   INTEGER NOT NULL REFERENCES entries(id) ON DELETE CASCADE,
+            entity_id INTEGER NOT NULL REFERENCES entities(id),
+            PRIMARY KEY (atom_id, entity_id)
+        )
+    """)
+    try:
+        db.execute("CREATE INDEX IF NOT EXISTS idx_atom_entities_entity ON atom_entities(entity_id)")
+    except sqlite3.OperationalError:
+        pass
     db.commit()
     _backfill_fts(db)
     return db
@@ -890,12 +929,17 @@ def cmd_query(query: str, top: int = 3, recency_boost: bool = False,
     print("\n".join(lines))
 
 
-def cmd_wander(seeds: list[str], steps: int = 3, top_k: int = 10):
+def cmd_wander(seeds: list[str], steps: int = 3, top_k: int = 10, graph: bool = False):
     """
     Spreading activation over session log topics (no embeddings needed).
     Builds a topic co-occurrence graph from session logs, then spreads activation
     from seed topics to discover cross-domain connections.
+
+    With --graph: uses the entity relationship graph instead (Phase 2).
     """
+    if graph:
+        cmd_wander_graph(seeds, steps=steps, top_k=top_k)
+        return
     from collections import defaultdict
 
     if not VAULT_SESSION_LOGS.exists():
@@ -1164,6 +1208,291 @@ def classify_domain(text: str) -> str:
     return best_domain
 
 
+# ── Phase 2: Entity/relationship graph ───────────────────────────────────────
+
+
+def upsert_entity(db: sqlite3.Connection, name: str, entity_type: str,
+                  domain: str | None, date: str) -> int:
+    """Insert or update an entity. Returns entity id."""
+    name = name.strip().lower()
+    entity_type = entity_type.strip().lower()
+    domain = domain or classify_domain(name)
+    db.execute(
+        """INSERT INTO entities (name, entity_type, domain, first_seen, last_seen, mention_count)
+           VALUES (?, ?, ?, ?, ?, 1)
+           ON CONFLICT(name, entity_type) DO UPDATE SET
+             last_seen = excluded.last_seen,
+             mention_count = mention_count + 1""",
+        [name, entity_type, domain, date, date],
+    )
+    row = db.execute(
+        "SELECT id FROM entities WHERE name = ? AND entity_type = ?",
+        [name, entity_type],
+    ).fetchone()
+    return row[0]
+
+
+def upsert_relationship(db: sqlite3.Connection, source_id: int, target_id: int,
+                        rel_type: str, confidence: float, date: str) -> int:
+    """Insert or update a relationship edge. Returns relationship id."""
+    rel_type = rel_type.strip().lower()
+    db.execute(
+        """INSERT INTO relationships (source_id, target_id, rel_type, confidence, first_seen, last_seen)
+           VALUES (?, ?, ?, ?, ?, ?)
+           ON CONFLICT(source_id, target_id, rel_type) DO UPDATE SET
+             last_seen = excluded.last_seen,
+             evidence_count = evidence_count + 1,
+             confidence = MIN(confidence + 0.05, 0.95),
+             expired_at = NULL""",
+        [source_id, target_id, rel_type, confidence, date, date],
+    )
+    row = db.execute(
+        "SELECT id FROM relationships WHERE source_id = ? AND target_id = ? AND rel_type = ?",
+        [source_id, target_id, rel_type],
+    ).fetchone()
+    return row[0]
+
+
+def link_atom_entities(db: sqlite3.Connection, atom_id: int,
+                       entity_refs: list[tuple[str, str]]):
+    """Link an atom to its mentioned entities via the junction table."""
+    for name, entity_type in entity_refs:
+        name = name.strip().lower()
+        entity_type = entity_type.strip().lower()
+        row = db.execute(
+            "SELECT id FROM entities WHERE name = ? AND entity_type = ?",
+            [name, entity_type],
+        ).fetchone()
+        if row:
+            db.execute(
+                "INSERT OR IGNORE INTO atom_entities (atom_id, entity_id) VALUES (?, ?)",
+                [atom_id, row[0]],
+            )
+
+
+def _ent_rel_prompt(content: str) -> str:
+    """Build prompt for entity/relationship extraction."""
+    return (
+        "Extract entities and relationships from this session log.\n\n"
+        "Entities are people, projects, tools, concepts, or organizations mentioned.\n"
+        "Relationships connect two entities (e.g. 'user uses docker', 'deus depends_on sqlite').\n\n"
+        "Return ONLY a JSON object, no markdown fencing:\n"
+        '{"entities": [{"name": "...", "entity_type": "person|project|tool|concept|org", "summary": "..."}],\n'
+        ' "relationships": [{"source": "...", "target": "...", "rel_type": "uses|works_on|prefers|knows|depends_on|related_to", "confidence": 0.0-1.0}]}\n\n'
+        "Rules:\n"
+        "- Max 10 entities, 10 relationships\n"
+        "- Names should be lowercase, canonical (e.g. 'docker' not 'Docker containers')\n"
+        "- Skip generic entities ('code', 'file', 'bug')\n"
+        "- If nothing meaningful, return {\"entities\": [], \"relationships\": []}\n\n"
+        f"SESSION LOG:\n{_extract_content_for_llm(content)}"
+    )
+
+
+def extract_entities_and_relations(content: str) -> dict:
+    """Extract entities and relationships from a session log via Gemini Flash."""
+    prompt = _ent_rel_prompt(content)
+    for model in GEN_MODELS:
+        try:
+            response = _client.models.generate_content(
+                model=model,
+                contents=prompt,
+                config=genai_types.GenerateContentConfig(temperature=0.1, max_output_tokens=1024),
+            )
+            raw = response.text.strip()
+            if raw.startswith("```"):
+                raw = re.sub(r"```[a-z]*\n?", "", raw).strip()
+            result = json.loads(raw)
+            if isinstance(result, dict) and "entities" in result:
+                return result
+            return {"entities": [], "relationships": []}
+        except json.JSONDecodeError:
+            return {"entities": [], "relationships": []}
+        except Exception as e:
+            err = str(e)
+            if "429" in err or "RESOURCE_EXHAUSTED" in err:
+                print(f"  quota exhausted on {model}, trying fallback...", file=sys.stderr)
+                continue
+            print(f"  WARN: entity extraction error ({model}): {e}", file=sys.stderr)
+            return {"entities": [], "relationships": []}
+    print("  WARN: all models quota-exhausted, skipping entity extraction.", file=sys.stderr)
+    return {"entities": [], "relationships": []}
+
+
+def _contradiction_prompt(fact_a: str, fact_b: str) -> str:
+    """Build prompt for pairwise contradiction check."""
+    return (
+        "Compare these two facts about the same user. Reply with exactly one word:\n"
+        "CONTRADICT — if they cannot both be true\n"
+        "CONSISTENT — if they are compatible\n"
+        "UNRELATED — if they are about different things\n\n"
+        f"Fact A (existing): {fact_a}\n"
+        f"Fact B (new): {fact_b}\n\n"
+        "Reply with one word only:"
+    )
+
+
+def detect_contradictions(db: sqlite3.Connection, new_atom_id: int,
+                          new_atom_text: str, new_atom_vec: list[float]) -> list[dict]:
+    """Check new atom against similar existing atoms for contradictions.
+
+    Returns list of conflicts found. Invalidates contradicted atoms via Phase 1's
+    invalidate_atom(). Caps at 5 LLM calls. Skips atoms with L2 distance > 1.2.
+    """
+    conflicts: list[dict] = []
+    try:
+        rows = db.execute(
+            """
+            SELECT e.id, e.chunk, v.distance
+            FROM embeddings v
+            JOIN entries e ON e.id = v.rowid
+            WHERE e.type = 'atom'
+              AND (e.expired_at IS NULL OR e.expired_at > date('now'))
+              AND e.id != ?
+              AND v.embedding MATCH ?
+              AND k = 10
+            ORDER BY v.distance
+            """,
+            [new_atom_id, serialize(new_atom_vec)],
+        ).fetchall()
+    except Exception:
+        return []
+
+    llm_calls = 0
+    for existing_id, existing_text, distance in rows:
+        if distance > 1.2 or llm_calls >= 5:
+            break
+        try:
+            prompt = _contradiction_prompt(existing_text, new_atom_text)
+            response = _client.models.generate_content(
+                model=GEN_MODELS[0],
+                contents=prompt,
+                config=genai_types.GenerateContentConfig(temperature=0.0, max_output_tokens=10),
+            )
+            llm_calls += 1
+            verdict = response.text.strip().upper().split()[0] if response.text else ""
+            if verdict == "CONTRADICT":
+                invalidate_atom(db, existing_id, reason=f"superseded by atom {new_atom_id}")
+                conflicts.append({"older_id": existing_id, "newer_id": new_atom_id,
+                                  "older_text": existing_text})
+                print(f"  contradiction: invalidated atom {existing_id} ({existing_text[:60]})")
+        except Exception as e:
+            print(f"  WARN: contradiction check failed: {e}", file=sys.stderr)
+            continue
+
+    return conflicts
+
+
+def cmd_wander_graph(seeds: list[str], steps: int = 3, top_k: int = 10):
+    """Spreading activation over the entity graph with fan-effect + lateral inhibition."""
+    import math
+    db = open_db()
+
+    # Resolve seeds to entity ids
+    all_entities = db.execute("SELECT id, name FROM entities").fetchall()
+    if not all_entities:
+        print("No entities in graph yet. Run --extract on some session logs first.")
+        return
+
+    entity_names = {row[1]: row[0] for row in all_entities}
+    resolved: list[tuple[int, str]] = []
+    for seed in seeds:
+        s = seed.lower()
+        if s in entity_names:
+            resolved.append((entity_names[s], s))
+        else:
+            for name, eid in entity_names.items():
+                if s in name or name in s:
+                    resolved.append((eid, name))
+
+    if not resolved:
+        # Use entities from most recent atoms
+        recent = db.execute(
+            "SELECT ae.entity_id, ent.name FROM atom_entities ae "
+            "JOIN entities ent ON ent.id = ae.entity_id "
+            "JOIN entries e ON e.id = ae.atom_id "
+            "ORDER BY e.date DESC LIMIT 5"
+        ).fetchall()
+        resolved = [(r[0], r[1]) for r in recent]
+
+    if not resolved:
+        print("Could not resolve any seed entities.")
+        return
+
+    # Build adjacency from relationships
+    edges = db.execute(
+        "SELECT source_id, target_id, confidence, evidence_count "
+        "FROM relationships WHERE expired_at IS NULL"
+    ).fetchall()
+    import math
+    adjacency: dict[int, list[tuple[int, float]]] = {}
+    degree: dict[int, int] = {}
+    for src, tgt, conf, ev_count in edges:
+        weight = conf * math.log1p(ev_count)
+        adjacency.setdefault(src, []).append((tgt, weight))
+        adjacency.setdefault(tgt, []).append((src, weight))
+        degree[src] = degree.get(src, 0) + 1
+        degree[tgt] = degree.get(tgt, 0) + 1
+
+    # Spreading activation — accumulate all discovered entities
+    DECAY = 0.7
+    frontier: dict[int, float] = {eid: 1.0 for eid, _ in resolved}
+    all_activated: dict[int, float] = {}
+    visited: set[int] = {eid for eid, _ in resolved}
+
+    for _ in range(steps):
+        spread: dict[int, float] = {}
+        for node_id, strength in frontier.items():
+            neighbors = adjacency.get(node_id, [])
+            fan_penalty = math.sqrt(max(degree.get(node_id, 1), 1))
+            for neighbor_id, weight in neighbors:
+                if neighbor_id not in visited:
+                    incoming = strength * DECAY * weight / fan_penalty
+                    spread[neighbor_id] = spread.get(neighbor_id, 0.0) + incoming
+        if not spread:
+            break
+        top = sorted(spread.items(), key=lambda x: -x[1])[:top_k]
+        frontier = dict(top)
+        for eid, strength in frontier.items():
+            all_activated[eid] = max(all_activated.get(eid, 0.0), strength)
+        visited.update(frontier)
+    activation = all_activated
+
+    # Resolve names for output
+    id_to_name = {row[0]: row[1] for row in all_entities}
+
+    print(f"## Graph Wander: seeds = [{', '.join(name for _, name in resolved)}]\n")
+    if activation:
+        print("### Activated Entities\n")
+        for eid, strength in sorted(activation.items(), key=lambda x: -x[1])[:top_k]:
+            name = id_to_name.get(eid, f"entity-{eid}")
+            print(f"- **{name}** ({strength:.2f})")
+
+    # Bridge candidates: activated pairs with no direct edge
+    activated_list = [eid for eid, _ in sorted(activation.items(), key=lambda x: -x[1])[:15]]
+    direct_edges = {(src, tgt) for src, tgt, _, _ in edges} | {(tgt, src) for src, tgt, _, _ in edges}
+    bridges = []
+    for i, e1 in enumerate(activated_list):
+        for e2 in activated_list[i + 1:]:
+            if (e1, e2) not in direct_edges:
+                shared = set()
+                for n1, _ in adjacency.get(e1, []):
+                    for n2, _ in adjacency.get(e2, []):
+                        if n1 == n2:
+                            shared.add(n1)
+                if shared:
+                    bridges.append((e1, e2, shared))
+
+    print("\n### Bridge Candidates\n")
+    if bridges:
+        for e1, e2, via in bridges[:5]:
+            n1, n2 = id_to_name.get(e1, "?"), id_to_name.get(e2, "?")
+            via_names = [id_to_name.get(v, "?") for v in list(via)[:3]]
+            print(f"- **{n1}** ↔ **{n2}**  (via: {', '.join(via_names)})")
+    else:
+        print("(none)")
+    db.close()
+
+
 def write_atom_file(atom: dict, source_path: str, today: str,
                     source_excerpt: str = "", domain: str = "general") -> Path:
     """Write an atom to the vault Atoms/ directory and return its path."""
@@ -1195,7 +1524,7 @@ def write_atom_file(atom: dict, source_path: str, today: str,
     return path
 
 
-def cmd_extract(session_path: str):
+def cmd_extract(session_path: str, no_contradict: bool = False):
     path = Path(session_path).expanduser().resolve()
     if not path.exists():
         print(f"ERROR: file not found: {path}", file=sys.stderr)
@@ -1223,6 +1552,7 @@ def cmd_extract(session_path: str):
     db = open_db()
     today = datetime.now().strftime("%Y-%m-%d")
     new_count, corroborated_count = 0, 0
+    new_atom_ids: list[tuple[int, str, list[float]]] = []  # (entry_id, text, vec)
 
     # Load existing atom texts for cheap text-equality dedup before embedding
     existing_texts = {
@@ -1268,11 +1598,59 @@ def cmd_extract(session_path: str):
             )
             db.execute("INSERT INTO embeddings(rowid, embedding) VALUES (?, ?)",
                        [cur.lastrowid, serialize(vec)])
+            new_atom_ids.append((cur.lastrowid, atom["text"], vec))
             new_count += 1
             print(f"  new atom [{domain}]: {atom['text'][:70]}")
 
     db.commit()
     print(f"Extracted {new_count + corroborated_count} atoms ({new_count} new, {corroborated_count} corroborated)")
+
+    # Phase 2: entity/relationship extraction + contradiction detection
+    try:
+        ent_rel = extract_entities_and_relations(content)
+        entities = ent_rel.get("entities", [])
+        relationships = ent_rel.get("relationships", [])
+
+        entity_refs: list[tuple[str, str]] = []
+        for ent in entities:
+            if isinstance(ent, dict) and "name" in ent and "entity_type" in ent:
+                domain = classify_domain(ent.get("summary", ent["name"]))
+                upsert_entity(db, ent["name"], ent["entity_type"], domain, today)
+                entity_refs.append((ent["name"], ent["entity_type"]))
+
+        for rel in relationships:
+            if isinstance(rel, dict) and "source" in rel and "target" in rel and "rel_type" in rel:
+                src_row = db.execute(
+                    "SELECT id FROM entities WHERE name = ?", [rel["source"].strip().lower()]
+                ).fetchone()
+                tgt_row = db.execute(
+                    "SELECT id FROM entities WHERE name = ?", [rel["target"].strip().lower()]
+                ).fetchone()
+                if src_row and tgt_row:
+                    upsert_relationship(db, src_row[0], tgt_row[0], rel["rel_type"],
+                                        rel.get("confidence", 0.5), today)
+
+        # Link new atoms to entities
+        for atom_id, atom_text, _ in new_atom_ids:
+            link_atom_entities(db, atom_id, entity_refs)
+
+        db.commit()
+        if entities:
+            print(f"  graph: {len(entities)} entities, {len(relationships)} relationships")
+    except Exception as e:
+        print(f"  WARN: entity extraction failed: {e}", file=sys.stderr)
+
+    # Contradiction detection for new atoms
+    if not no_contradict and new_atom_ids:
+        try:
+            total_conflicts = 0
+            for atom_id, atom_text, atom_vec in new_atom_ids:
+                conflicts = detect_contradictions(db, atom_id, atom_text, atom_vec)
+                total_conflicts += len(conflicts)
+            if total_conflicts:
+                print(f"  contradictions: {total_conflicts} older atom(s) invalidated")
+        except Exception as e:
+            print(f"  WARN: contradiction detection failed: {e}", file=sys.stderr)
 
 
 def cmd_rebuild():
@@ -1417,6 +1795,17 @@ def _collect_health_metrics(db: sqlite3.Connection) -> dict:
         len([f for f in VAULT_SESSION_LOGS.rglob("*.md") if ".obsidian" not in str(f)])
         if VAULT_SESSION_LOGS.exists() else 0
     )
+    # Phase 2: graph metrics
+    try:
+        snapshot["entities"] = db.execute("SELECT COUNT(*) FROM entities").fetchone()[0]
+        rels = db.execute(
+            "SELECT COUNT(*) FILTER (WHERE expired_at IS NULL), "
+            "COUNT(*) FILTER (WHERE expired_at IS NOT NULL) FROM relationships"
+        ).fetchall()
+        snapshot["relationships_live"] = rels[0][0] if rels else 0
+        snapshot["relationships_expired"] = rels[0][1] if rels else 0
+    except sqlite3.OperationalError:
+        snapshot.update({"entities": 0, "relationships_live": 0, "relationships_expired": 0})
     return snapshot
 
 
@@ -1504,6 +1893,11 @@ def cmd_health(save: bool = True) -> None:
         + _delta(sess, prev["sessions"] if prev else None)
         + f"  (atom/session ratio: {ratio})"
     )
+    ent_count = current.get("entities", 0)
+    rel_live = current.get("relationships_live", 0)
+    rel_expired = current.get("relationships_expired", 0)
+    if ent_count > 0 or rel_live > 0:
+        out.append(f"Entities: {ent_count}  Relationships: {rel_live} live, {rel_expired} expired")
 
     out.append("")
     if prev:
@@ -1736,12 +2130,18 @@ def main():
                         help="Reason for --invalidate (default: manual)")
     parser.add_argument("--domain", metavar="DOMAIN",
                         help="Filter --query results by domain (dev/study/trading/personal/general)")
+    parser.add_argument("--graph", action="store_true",
+                        help="Use entity graph instead of topic co-occurrence for --wander")
+    parser.add_argument("--no-contradict", action="store_true",
+                        help="Skip contradiction detection during --extract")
+    parser.add_argument("--with-graph", action="store_true",
+                        help="Re-extract entities/relationships during --rebuild (LLM calls)")
     args = parser.parse_args()
 
     global _client
     # Commands that need no API key
     if args.wander is not None:
-        cmd_wander(args.wander or [], steps=args.steps, top_k=args.top or 10)
+        cmd_wander(args.wander or [], steps=args.steps, top_k=args.top or 10, graph=args.graph)
         return
     if args.recent is not None:
         cmd_recent(args.recent, compact=args.compact)
@@ -1775,7 +2175,7 @@ def main():
     elif args.rebuild:
         cmd_rebuild()
     elif args.extract:
-        cmd_extract(args.extract)
+        cmd_extract(args.extract, no_contradict=args.no_contradict)
 
 
 if __name__ == "__main__":

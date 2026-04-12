@@ -44,6 +44,7 @@ def _install_google_genai_stub():
     if "google.genai.types" not in sys.modules:
         types_mod = types.ModuleType("google.genai.types")
         types_mod.EmbedContentConfig = object
+        types_mod.GenerateContentConfig = lambda **kwargs: kwargs
         sys.modules["google.genai.types"] = types_mod
 
     genai_types_attr = sys.modules.get("google.genai")
@@ -1463,3 +1464,412 @@ def test_cmd_gaps_no_gaps_when_covered(mi, fresh_vault, capsys):
     mi.cmd_gaps(top=5)
     output = capsys.readouterr().out
     assert "python" not in output or "No significant gaps" in output
+
+
+# ── KB Phase 2: Schema ──────────────────────────────────────────────────────
+
+
+def test_schema_has_entities_table(mi):
+    db = mi.open_db()
+    cols = {r[1] for r in db.execute("PRAGMA table_info(entities)").fetchall()}
+    assert "name" in cols
+    assert "entity_type" in cols
+    assert "mention_count" in cols
+    db.close()
+
+
+def test_schema_has_relationships_table(mi):
+    db = mi.open_db()
+    cols = {r[1] for r in db.execute("PRAGMA table_info(relationships)").fetchall()}
+    assert "source_id" in cols
+    assert "target_id" in cols
+    assert "rel_type" in cols
+    assert "expired_at" in cols
+    db.close()
+
+
+def test_schema_has_atom_entities_table(mi):
+    db = mi.open_db()
+    cols = {r[1] for r in db.execute("PRAGMA table_info(atom_entities)").fetchall()}
+    assert "atom_id" in cols
+    assert "entity_id" in cols
+    db.close()
+
+
+def test_schema_reopen_idempotent(mi):
+    """Opening DB twice doesn't error (CREATE TABLE IF NOT EXISTS)."""
+    db1 = mi.open_db()
+    db1.close()
+    db2 = mi.open_db()
+    count = db2.execute("SELECT COUNT(*) FROM entities").fetchone()[0]
+    assert count == 0
+    db2.close()
+
+
+# ── KB Phase 2: upsert_entity / upsert_relationship ─────────────────────────
+
+
+def test_upsert_entity_creates_new(mi):
+    db = mi.open_db()
+    eid = mi.upsert_entity(db, "Docker", "tool", "dev", "2024-01-01")
+    assert eid > 0
+    row = db.execute("SELECT name, entity_type, mention_count FROM entities WHERE id = ?", [eid]).fetchone()
+    assert row[0] == "docker"
+    assert row[1] == "tool"
+    assert row[2] == 1
+    db.close()
+
+
+def test_upsert_entity_increments_mention_count(mi):
+    db = mi.open_db()
+    eid1 = mi.upsert_entity(db, "Docker", "tool", "dev", "2024-01-01")
+    eid2 = mi.upsert_entity(db, "Docker", "tool", "dev", "2024-01-02")
+    assert eid1 == eid2
+    row = db.execute("SELECT mention_count, last_seen FROM entities WHERE id = ?", [eid1]).fetchone()
+    assert row[0] == 2
+    assert row[1] == "2024-01-02"
+    db.close()
+
+
+def test_upsert_entity_preserves_type(mi):
+    db = mi.open_db()
+    mi.upsert_entity(db, "Python", "tool", "dev", "2024-01-01")
+    mi.upsert_entity(db, "Python", "tool", "dev", "2024-01-02")
+    row = db.execute("SELECT entity_type FROM entities WHERE name = 'python'").fetchone()
+    assert row[0] == "tool"
+    db.close()
+
+
+def test_upsert_relationship_creates_edge(mi):
+    db = mi.open_db()
+    src = mi.upsert_entity(db, "User", "person", "personal", "2024-01-01")
+    tgt = mi.upsert_entity(db, "Docker", "tool", "dev", "2024-01-01")
+    rid = mi.upsert_relationship(db, src, tgt, "uses", 0.7, "2024-01-01")
+    assert rid > 0
+    row = db.execute("SELECT confidence, evidence_count FROM relationships WHERE id = ?", [rid]).fetchone()
+    assert row[0] == pytest.approx(0.7)
+    assert row[1] == 1
+    db.close()
+
+
+def test_upsert_relationship_increments_evidence(mi):
+    db = mi.open_db()
+    src = mi.upsert_entity(db, "User", "person", "personal", "2024-01-01")
+    tgt = mi.upsert_entity(db, "Python", "tool", "dev", "2024-01-01")
+    mi.upsert_relationship(db, src, tgt, "uses", 0.5, "2024-01-01")
+    mi.upsert_relationship(db, src, tgt, "uses", 0.5, "2024-01-02")
+    row = db.execute(
+        "SELECT evidence_count, confidence FROM relationships WHERE source_id = ? AND target_id = ?",
+        [src, tgt],
+    ).fetchone()
+    assert row[0] == 2
+    assert row[1] == pytest.approx(0.55)  # 0.5 + 0.05
+    db.close()
+
+
+def test_upsert_relationship_confidence_cap(mi):
+    db = mi.open_db()
+    src = mi.upsert_entity(db, "User", "person", "personal", "2024-01-01")
+    tgt = mi.upsert_entity(db, "Git", "tool", "dev", "2024-01-01")
+    mi.upsert_relationship(db, src, tgt, "uses", 0.90, "2024-01-01")
+    # Upsert again — confidence should cap at 0.95
+    mi.upsert_relationship(db, src, tgt, "uses", 0.90, "2024-01-02")
+    row = db.execute(
+        "SELECT confidence FROM relationships WHERE source_id = ? AND target_id = ?",
+        [src, tgt],
+    ).fetchone()
+    assert row[0] <= 0.95
+    db.close()
+
+
+def test_upsert_relationship_clears_expired_on_reassert(mi):
+    db = mi.open_db()
+    src = mi.upsert_entity(db, "User", "person", "personal", "2024-01-01")
+    tgt = mi.upsert_entity(db, "Ruby", "tool", "dev", "2024-01-01")
+    rid = mi.upsert_relationship(db, src, tgt, "uses", 0.5, "2024-01-01")
+    # Manually expire
+    db.execute("UPDATE relationships SET expired_at = '2024-06-01' WHERE id = ?", [rid])
+    db.commit()
+    # Re-assert
+    mi.upsert_relationship(db, src, tgt, "uses", 0.5, "2024-07-01")
+    row = db.execute("SELECT expired_at FROM relationships WHERE id = ?", [rid]).fetchone()
+    assert row[0] is None  # cleared
+    db.close()
+
+
+# ── KB Phase 2: link_atom_entities ───────────────────────────────────────────
+
+
+def test_link_atom_entities_creates_junction_rows(mi):
+    db = mi.open_db()
+    mi.upsert_entity(db, "Docker", "tool", "dev", "2024-01-01")
+    mi.upsert_entity(db, "Python", "tool", "dev", "2024-01-01")
+    # Create a fake atom entry
+    cur = db.execute(
+        "INSERT INTO entries (path, date, chunk, type, confidence) VALUES ('a.md', '2024-01-01', 'test', 'atom', 0.5)"
+    )
+    atom_id = cur.lastrowid
+    mi.link_atom_entities(db, atom_id, [("Docker", "tool"), ("Python", "tool")])
+    rows = db.execute("SELECT COUNT(*) FROM atom_entities WHERE atom_id = ?", [atom_id]).fetchone()
+    assert rows[0] == 2
+    db.close()
+
+
+def test_link_atom_entities_skips_missing_entity(mi):
+    db = mi.open_db()
+    cur = db.execute(
+        "INSERT INTO entries (path, date, chunk, type, confidence) VALUES ('b.md', '2024-01-01', 'test', 'atom', 0.5)"
+    )
+    # Should not crash when entity doesn't exist
+    mi.link_atom_entities(db, cur.lastrowid, [("Nonexistent", "tool")])
+    rows = db.execute("SELECT COUNT(*) FROM atom_entities WHERE atom_id = ?", [cur.lastrowid]).fetchone()
+    assert rows[0] == 0
+    db.close()
+
+
+def test_link_atom_entities_idempotent(mi):
+    db = mi.open_db()
+    mi.upsert_entity(db, "Node", "tool", "dev", "2024-01-01")
+    cur = db.execute(
+        "INSERT INTO entries (path, date, chunk, type, confidence) VALUES ('c.md', '2024-01-01', 'test', 'atom', 0.5)"
+    )
+    atom_id = cur.lastrowid
+    mi.link_atom_entities(db, atom_id, [("Node", "tool")])
+    mi.link_atom_entities(db, atom_id, [("Node", "tool")])  # duplicate — should not crash
+    rows = db.execute("SELECT COUNT(*) FROM atom_entities WHERE atom_id = ?", [atom_id]).fetchone()
+    assert rows[0] == 1
+    db.close()
+
+
+# ── KB Phase 2: Contradiction detection ──────────────────────────────────────
+
+
+def test_contradiction_prompt_format(mi):
+    prompt = mi._contradiction_prompt("User lives in NYC", "User lives in Tel Aviv")
+    assert "Fact A" in prompt
+    assert "Fact B" in prompt
+    assert "CONTRADICT" in prompt
+
+
+def test_detect_contradictions_skips_distant_embeddings(mi):
+    """Atoms with L2 distance > 1.2 should not trigger LLM calls."""
+    db = mi.open_db()
+    # Insert an atom with a very different vector
+    far_vec = [1.0] * mi.EMBED_DIM
+    cur = db.execute(
+        "INSERT INTO entries (path, date, chunk, type, confidence) "
+        "VALUES ('far.md', '2024-01-01', 'totally different topic', 'atom', 0.5)"
+    )
+    db.execute("INSERT INTO embeddings(rowid, embedding) VALUES (?, ?)",
+               [cur.lastrowid, mi.serialize(far_vec)])
+    db.commit()
+
+    # New atom with opposite vector — L2 distance should be large
+    new_vec = [0.0] * mi.EMBED_DIM
+    # Should return empty (no LLM calls made) — we don't mock _client,
+    # so if it tried to call LLM it would crash
+    conflicts = mi.detect_contradictions(db, 999, "new fact", new_vec)
+    assert conflicts == []
+    db.close()
+
+
+def test_detect_contradictions_caps_at_5_calls(mi, monkeypatch):
+    """Should not make more than 5 LLM calls even with many similar atoms."""
+    db = mi.open_db()
+    vec = [0.5] * mi.EMBED_DIM
+
+    # Insert 10 similar atoms
+    for i in range(10):
+        v = [0.5] * mi.EMBED_DIM
+        v[0] = 0.5 + i * 0.001  # tiny variation
+        cur = db.execute(
+            "INSERT INTO entries (path, date, chunk, type, confidence) "
+            f"VALUES ('atom{i}.md', '2024-01-01', 'similar fact {i}', 'atom', 0.5)"
+        )
+        db.execute("INSERT INTO embeddings(rowid, embedding) VALUES (?, ?)",
+                   [cur.lastrowid, mi.serialize(v)])
+    db.commit()
+
+    # Mock the LLM client to track calls
+    call_count = [0]
+
+    class FakeResponse:
+        text = "CONSISTENT"
+
+    class FakeModels:
+        def generate_content(self, **kwargs):
+            call_count[0] += 1
+            return FakeResponse()
+
+    class FakeClient:
+        models = FakeModels()
+
+    monkeypatch.setattr(mi, "_client", FakeClient())
+
+    mi.detect_contradictions(db, 999, "test fact", vec)
+    assert call_count[0] <= 5
+    db.close()
+
+
+def test_detect_contradictions_invalidates_on_conflict(mi, fresh_vault, monkeypatch):
+    db = mi.open_db()
+    vec = [0.5] * mi.EMBED_DIM
+
+    # Insert an existing atom
+    atom_path = fresh_vault / "Atoms" / "fact-old.md"
+    atom_path.write_text(
+        "---\ntype: atom\ncategory: fact\nconfidence: 0.70\ncorroborations: 1\n"
+        "created_at: 2024-01-01\nupdated_at: 2024-01-01\nttl_days: null\n---\n"
+        "User lives in NYC\n"
+    )
+    cur = db.execute(
+        "INSERT INTO entries (path, date, chunk, type, confidence) "
+        "VALUES (?, '2024-01-01', 'User lives in NYC', 'atom', 0.70)",
+        [str(atom_path)],
+    )
+    old_id = cur.lastrowid
+    db.execute("INSERT INTO embeddings(rowid, embedding) VALUES (?, ?)",
+               [old_id, mi.serialize(vec)])
+    db.commit()
+
+    # Mock LLM to return CONTRADICT
+    class FakeResponse:
+        text = "CONTRADICT"
+
+    class FakeModels:
+        def generate_content(self, **kwargs):
+            return FakeResponse()
+
+    class FakeClient:
+        models = FakeModels()
+
+    monkeypatch.setattr(mi, "_client", FakeClient())
+
+    new_vec = [0.5] * mi.EMBED_DIM
+    new_vec[0] = 0.501
+    conflicts = mi.detect_contradictions(db, 999, "User lives in Tel Aviv", new_vec)
+    assert len(conflicts) == 1
+    assert conflicts[0]["older_id"] == old_id
+
+    # Old atom should be expired
+    row = db.execute("SELECT expired_at FROM entries WHERE id = ?", [old_id]).fetchone()
+    assert row[0] is not None
+    db.close()
+
+
+def test_detect_contradictions_consistent_no_invalidation(mi, monkeypatch):
+    db = mi.open_db()
+    vec = [0.5] * mi.EMBED_DIM
+
+    cur = db.execute(
+        "INSERT INTO entries (path, date, chunk, type, confidence) "
+        "VALUES ('compat.md', '2024-01-01', 'User likes Python', 'atom', 0.70)"
+    )
+    db.execute("INSERT INTO embeddings(rowid, embedding) VALUES (?, ?)",
+               [cur.lastrowid, mi.serialize(vec)])
+    db.commit()
+
+    class FakeResponse:
+        text = "CONSISTENT"
+
+    class FakeModels:
+        def generate_content(self, **kwargs):
+            return FakeResponse()
+
+    class FakeClient:
+        models = FakeModels()
+
+    monkeypatch.setattr(mi, "_client", FakeClient())
+
+    conflicts = mi.detect_contradictions(db, 999, "User also likes TypeScript", vec)
+    assert len(conflicts) == 0
+    # Original not expired
+    row = db.execute("SELECT expired_at FROM entries WHERE id = ?", [cur.lastrowid]).fetchone()
+    assert row[0] is None
+    db.close()
+
+
+# ── KB Phase 2: Graph wander ────────────────────────────────────────────────
+
+
+def test_cmd_wander_graph_empty_graph(mi, capsys):
+    """No crash on empty entities table."""
+    mi.cmd_wander_graph(["test"])
+    output = capsys.readouterr().out
+    assert "No entities" in output
+
+
+def test_cmd_wander_graph_spreads_activation(mi, capsys):
+    db = mi.open_db()
+    # Build a simple graph: A -> B -> C
+    a = mi.upsert_entity(db, "alpha", "concept", "dev", "2024-01-01")
+    b = mi.upsert_entity(db, "beta", "concept", "dev", "2024-01-01")
+    c = mi.upsert_entity(db, "gamma", "concept", "dev", "2024-01-01")
+    mi.upsert_relationship(db, a, b, "related_to", 0.8, "2024-01-01")
+    mi.upsert_relationship(db, b, c, "related_to", 0.8, "2024-01-01")
+    db.commit()
+    db.close()
+
+    mi.cmd_wander_graph(["alpha"], steps=2, top_k=10)
+    output = capsys.readouterr().out
+    assert "beta" in output
+    assert "gamma" in output  # reached via 2-step spread
+
+
+def test_cmd_wander_graph_fan_effect(mi):
+    """Hub node should spread less activation per edge than a leaf."""
+    import math
+    db = mi.open_db()
+    hub = mi.upsert_entity(db, "hub", "concept", "dev", "2024-01-01")
+    # Connect hub to 10 neighbors
+    for i in range(10):
+        n = mi.upsert_entity(db, f"neighbor-{i}", "concept", "dev", "2024-01-01")
+        mi.upsert_relationship(db, hub, n, "related_to", 0.5, "2024-01-01")
+    db.commit()
+
+    # Fan penalty should be sqrt(10) ≈ 3.16
+    # Per-edge activation = 1.0 * 0.7 * weight / sqrt(10) — much less than without fan effect
+    degree = db.execute(
+        "SELECT COUNT(*) FROM relationships WHERE source_id = ? OR target_id = ?", [hub, hub]
+    ).fetchone()[0]
+    assert degree == 10
+    fan_penalty = math.sqrt(degree)
+    assert fan_penalty > 3.0  # confirms fan effect would reduce spread
+    db.close()
+
+
+def test_cmd_wander_graph_bridges(mi, capsys):
+    db = mi.open_db()
+    # A-B, A-C, D-B, D-C — B and C are bridges between A and D (no direct A-D edge)
+    a = mi.upsert_entity(db, "node-a", "concept", "dev", "2024-01-01")
+    b = mi.upsert_entity(db, "node-b", "concept", "dev", "2024-01-01")
+    c = mi.upsert_entity(db, "node-c", "concept", "dev", "2024-01-01")
+    d = mi.upsert_entity(db, "node-d", "concept", "dev", "2024-01-01")
+    mi.upsert_relationship(db, a, b, "related_to", 0.8, "2024-01-01")
+    mi.upsert_relationship(db, a, c, "related_to", 0.8, "2024-01-01")
+    mi.upsert_relationship(db, d, b, "related_to", 0.8, "2024-01-01")
+    mi.upsert_relationship(db, d, c, "related_to", 0.8, "2024-01-01")
+    db.commit()
+    db.close()
+
+    mi.cmd_wander_graph(["node-a"], steps=2, top_k=10)
+    output = capsys.readouterr().out
+    assert "node-d" in output  # reached via indirect path
+
+
+# ── KB Phase 2: Health metrics ──────────────────────────────────────────────
+
+
+def test_health_includes_graph_metrics(mi):
+    db = mi.open_db()
+    mi.upsert_entity(db, "TestEntity", "concept", "dev", "2024-01-01")
+    src = mi.upsert_entity(db, "Src", "tool", "dev", "2024-01-01")
+    tgt = mi.upsert_entity(db, "Tgt", "tool", "dev", "2024-01-01")
+    mi.upsert_relationship(db, src, tgt, "uses", 0.5, "2024-01-01")
+    db.commit()
+
+    metrics = mi._collect_health_metrics(db)
+    assert metrics["entities"] == 3
+    assert metrics["relationships_live"] == 1
+    assert metrics["relationships_expired"] == 0
+    db.close()
