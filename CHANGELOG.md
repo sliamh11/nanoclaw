@@ -4,6 +4,22 @@ All notable changes to Deus will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.5.0](https://github.com/sliamh11/Deus/compare/v1.4.0...v1.5.0) (2026-04-12)
+
+
+### Features
+
+* **memory:** kb phase 1 — temporal invalidation, domain tagging, confidence priors, gaps ([#145](https://github.com/sliamh11/Deus/issues/145)) ([fa560cb](https://github.com/sliamh11/Deus/commit/fa560cbba92e9d017ecfad3da46beab60bf1eaa5))
+* **memory:** kb phase 2 — entity graph, contradiction detection, graph wander ([#146](https://github.com/sliamh11/Deus/issues/146)) ([b548e4a](https://github.com/sliamh11/Deus/commit/b548e4a9692fb3d9271b3bb535bc6356f8e8f794))
+* **memory:** kb phase 3 — entity articles, compression, query routing ([#147](https://github.com/sliamh11/Deus/issues/147)) ([933d4e2](https://github.com/sliamh11/Deus/commit/933d4e21c461b20efa08a998445e7fc6725300fa))
+* **memory:** kb phase 4 — forgetting curves, synthesis, privacy ([#148](https://github.com/sliamh11/Deus/issues/148)) ([cd5f67c](https://github.com/sliamh11/Deus/commit/cd5f67c451e15aa994f6567b455b37dc523fc908))
+* **memory:** per-channel privacy configuration ([#149](https://github.com/sliamh11/Deus/issues/149)) ([4b54eb9](https://github.com/sliamh11/Deus/commit/4b54eb9e45bf1a6c903d412d844022ffa2288b3a))
+
+
+### Bug Fixes
+
+* auto-refresh OAuth tokens with cross-platform credential store fallback ([7179b33](https://github.com/sliamh11/Deus/commit/7179b33782f739d6a3aef871bba52612124af641))
+
 ## [1.4.0](https://github.com/sliamh11/Deus/compare/v1.3.0...v1.4.0) (2026-04-11)
 
 
