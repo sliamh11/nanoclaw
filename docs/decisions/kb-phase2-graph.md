@@ -1,8 +1,8 @@
 # KB Phase 2: Entity/Relationship Graph
 
+**Status:** Accepted
 **Date:** 2026-04-12
-
-## Status: Accepted
+**Scope:** `scripts/memory_indexer.py`
 
 ## Context
 Phase 1 added temporal invalidation and domain tagging to atoms. Phase 2 lifts atoms into a lightweight entity graph for multi-hop reasoning and contradiction detection.
