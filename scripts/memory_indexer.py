@@ -292,6 +292,19 @@ def open_db() -> sqlite3.Connection:
             UNIQUE(entity_a_id, entity_b_id)
         )
     """)
+    db.execute("""
+        CREATE TABLE IF NOT EXISTS pending_conflicts (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            older_id    INTEGER NOT NULL,
+            newer_id    INTEGER NOT NULL,
+            older_text  TEXT,
+            newer_text  TEXT,
+            created_at  TEXT NOT NULL,
+            resolved    INTEGER DEFAULT 0,
+            resolution  TEXT,
+            UNIQUE(older_id, newer_id)
+        )
+    """)
     for col, definition in [
         ("privacy", "TEXT DEFAULT 'internal'"),
         ("temperature", "REAL DEFAULT 1.0"),
@@ -1546,10 +1559,21 @@ def detect_contradictions(db: sqlite3.Connection, new_atom_id: int,
             llm_calls += 1
             verdict = response.text.strip().upper().split()[0] if response.text else ""
             if verdict == "CONTRADICT":
-                invalidate_atom(db, existing_id, reason=f"superseded by atom {new_atom_id}")
                 conflicts.append({"older_id": existing_id, "newer_id": new_atom_id,
                                   "older_text": existing_text})
-                print(f"  contradiction: invalidated atom {existing_id} ({existing_text[:60]})")
+                # Log to pending_conflicts for user review — never auto-invalidate
+                today = datetime.now().strftime("%Y-%m-%d")
+                try:
+                    db.execute(
+                        "INSERT OR IGNORE INTO pending_conflicts "
+                        "(older_id, newer_id, older_text, newer_text, created_at) "
+                        "VALUES (?, ?, ?, ?, ?)",
+                        [existing_id, new_atom_id, existing_text, new_atom_text, today],
+                    )
+                except Exception:
+                    pass
+                print(f"  CONFLICT DETECTED (pending review): atom {existing_id} "
+                      f"may be superseded by {new_atom_id} ({existing_text[:60]})")
         except Exception as e:
             print(f"  WARN: contradiction check failed: {e}", file=sys.stderr)
             continue
@@ -1970,7 +1994,10 @@ def compute_temperature(db: sqlite3.Connection, entry_id: int,
         "SELECT accessed_at FROM access_log WHERE entry_id = ?", [entry_id]
     ).fetchall()
     if not accesses:
-        return 0.0
+        # Baseline: atoms with no access history get a neutral temperature (0.5)
+        # instead of 0.0, so they aren't permanently bottom-ranked.
+        # They'll decay naturally once access_log entries start accumulating.
+        return 0.5
     total = 0.0
     for (accessed_at,) in accesses:
         try:
@@ -2250,6 +2277,68 @@ def cmd_blind_spots(top: int = 10):
     db.close()
 
 
+def cmd_resolve_conflicts():
+    """Show pending contradictions for user review. Does NOT auto-invalidate."""
+    db = open_db()
+    try:
+        conflicts = db.execute(
+            "SELECT id, older_id, newer_id, older_text, newer_text, created_at "
+            "FROM pending_conflicts WHERE resolved = 0"
+        ).fetchall()
+    except sqlite3.OperationalError:
+        print("No pending_conflicts table. Nothing to review.")
+        db.close()
+        return
+
+    if not conflicts:
+        print("No pending conflicts to review.")
+        db.close()
+        return
+
+    print(f"## {len(conflicts)} Pending Conflict(s)\n")
+    for cid, older_id, newer_id, older_text, newer_text, created_at in conflicts:
+        print(f"### Conflict #{cid} (detected {created_at})")
+        print(f"  OLDER (atom {older_id}): {older_text[:120]}")
+        print(f"  NEWER (atom {newer_id}): {newer_text[:120]}")
+        print(f"  → To invalidate older: --invalidate-conflict {cid}")
+        print(f"  → To dismiss:          --dismiss-conflict {cid}")
+        print()
+    db.close()
+
+
+def cmd_invalidate_conflict(conflict_id: int):
+    """Invalidate the older atom in a conflict after user review."""
+    db = open_db()
+    row = db.execute(
+        "SELECT older_id, newer_id FROM pending_conflicts WHERE id = ? AND resolved = 0",
+        [conflict_id],
+    ).fetchone()
+    if not row:
+        print(f"Conflict #{conflict_id} not found or already resolved.")
+        db.close()
+        return
+    older_id, newer_id = row
+    invalidate_atom(db, older_id, reason=f"superseded by atom {newer_id} (user-confirmed)")
+    db.execute(
+        "UPDATE pending_conflicts SET resolved = 1, resolution = 'invalidated' WHERE id = ?",
+        [conflict_id],
+    )
+    db.commit()
+    db.close()
+
+
+def cmd_dismiss_conflict(conflict_id: int):
+    """Dismiss a false-positive conflict."""
+    db = open_db()
+    db.execute(
+        "UPDATE pending_conflicts SET resolved = 1, resolution = 'dismissed' WHERE id = ?",
+        [conflict_id],
+    )
+    db.commit()
+    print(f"Conflict #{conflict_id} dismissed.")
+    db.close()
+
+
 def cmd_export(output_path: str, privacy_levels: list[str] | None = None):
     """Export atoms filtered by privacy to standalone markdown."""
     db = open_db()
@@ -2500,6 +2589,8 @@ def cmd_rebuild():
                 atom_domain = "general"
                 atom_expired_at = None
                 atom_expired_reason = None
+                atom_privacy = "internal"
+                atom_temperature = 1.0
                 for line in raw.splitlines():
                     if line.startswith("domain:"):
                         atom_domain = line.split(":", 1)[1].strip()
@@ -2509,6 +2600,15 @@ def cmd_rebuild():
                             atom_expired_at = val
                     elif line.startswith("expired_reason:"):
                         atom_expired_reason = line.split(":", 1)[1].strip() or None
+                    elif line.startswith("privacy:"):
+                        val = line.split(":", 1)[1].strip()
+                        if val in VALID_PRIVACY_LEVELS:
+                            atom_privacy = val
+                    elif line.startswith("temperature:"):
+                        try:
+                            atom_temperature = float(line.split(":", 1)[1].strip())
+                        except (ValueError, TypeError):
+                            pass
                 # If no domain in frontmatter, classify from body
                 if atom_domain == "general":
                     atom_domain = classify_domain(body)
@@ -2520,9 +2620,9 @@ def cmd_rebuild():
                 if excerpt_m:
                     stored_excerpt = re.sub(r"^ {2}", "", excerpt_m.group(1), flags=re.MULTILINE).strip()
                 cur = db.execute(
-                    "INSERT INTO entries (path, date, chunk, type, tldr, topics, confidence, corroborations, source_chunk, domain, expired_at, expired_reason) "
-                    "VALUES (?, ?, ?, 'atom', ?, ?, ?, ?, ?, ?, ?, ?)",
-                    [str(af), date_str, body, body, fm.get("tags", ""), conf, corr, stored_excerpt, atom_domain, atom_expired_at, atom_expired_reason],
+                    "INSERT INTO entries (path, date, chunk, type, tldr, topics, confidence, corroborations, source_chunk, domain, expired_at, expired_reason, privacy, temperature) "
+                    "VALUES (?, ?, ?, 'atom', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    [str(af), date_str, body, body, fm.get("tags", ""), conf, corr, stored_excerpt, atom_domain, atom_expired_at, atom_expired_reason, atom_privacy, atom_temperature],
                 )
                 db.execute("INSERT INTO embeddings(rowid, embedding) VALUES (?, ?)",
                            [cur.lastrowid, serialize(vec)])
@@ -2972,6 +3072,12 @@ def main():
                        help="Cross-domain synthesis suggestions (uses Gemini Flash)")
     group.add_argument("--blind-spots", action="store_true",
                        help="Enhanced gap analysis: topic gaps + query misses + entity orphans (no API call)")
+    group.add_argument("--resolve-conflicts", action="store_true",
+                       help="Show pending contradictions for review (no auto-invalidation)")
+    group.add_argument("--invalidate-conflict", type=int, metavar="ID",
+                       help="Confirm and invalidate the older atom in conflict #ID")
+    group.add_argument("--dismiss-conflict", type=int, metavar="ID",
+                       help="Dismiss conflict #ID as false positive")
     group.add_argument("--export", metavar="PATH",
                        help="Export atoms filtered by --privacy to standalone markdown")
     parser.add_argument("--no-extract", action="store_true",
@@ -3046,6 +3152,15 @@ def main():
         return
     if args.blind_spots:
         cmd_blind_spots(top=args.top)
+        return
+    if args.resolve_conflicts:
+        cmd_resolve_conflicts()
+        return
+    if args.invalidate_conflict is not None:
+        cmd_invalidate_conflict(args.invalidate_conflict)
+        return
+    if args.dismiss_conflict is not None:
+        cmd_dismiss_conflict(args.dismiss_conflict)
         return
     if args.export:
         ap = _parse_allowed_privacy_arg(args.allowed_privacy)
