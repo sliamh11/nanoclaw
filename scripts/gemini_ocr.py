@@ -26,7 +26,7 @@ from google.genai import types
 # Config
 # ---------------------------------------------------------------------------
 
-MODELS = ["gemini-2.5-flash", "gemini-2.5-flash-lite"]
+MODELS = ["gemini-3-flash-preview", "gemini-2.5-flash"]
 
 DEFAULT_PROMPT = """\
 You are an OCR engine. Extract ALL text from this image exactly as written.
