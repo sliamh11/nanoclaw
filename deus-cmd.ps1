@@ -229,6 +229,14 @@ function Invoke-ClaudeWithContext {
     if ($studyMd)  { $context += "`n`n=== VAULT: STUDY.md ===`n$studyMd" }
     if ($infraMd)  { $context += "`n`n=== VAULT: INFRA.md ===`n$infraMd" }
 
+    # Memory tree (Phase 4, gated by DEUS_MEMORY_TREE=1 during dogfood).
+    if ($env:DEUS_MEMORY_TREE -eq "1") {
+        $memoryTreeMd = Read-VaultFile "$vault\MEMORY_TREE.md"
+        if ($memoryTreeMd) {
+            $context += "`n`n=== VAULT: MEMORY_TREE.md ===`n$memoryTreeMd`n`n=== MEMORY TREE USAGE ===`nFor factual personal questions (identity, household, preferences, cross-branch), call:`n  python3 `$HOME/deus/scripts/memory_tree.py query `"<question>`"`nThe top result's path is the vault file to Read. On abstained:true or low confidence, fall back to Persona/INDEX.md. Prefer this over guessing from CLAUDE.md hints."
+        }
+    }
+
     # Checkpoint (today's)
     Write-Status "Checking checkpoints..."
     $today = Get-Date -Format "yyyy-MM-dd"

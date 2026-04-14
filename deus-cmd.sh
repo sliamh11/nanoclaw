@@ -862,6 +862,14 @@ Additional instructions from the user: $PREFS_PERSONA"
     [ -n "$STUDY_MD" ]  && CONTEXT="$CONTEXT\n\n=== VAULT: STUDY.md ===\n$STUDY_MD"
     [ -n "$INFRA_MD" ]  && CONTEXT="$CONTEXT\n\n=== VAULT: INFRA.md ===\n$INFRA_MD"
 
+    # Memory tree (Phase 4, gated by DEUS_MEMORY_TREE=1 during dogfood).
+    if [ "${DEUS_MEMORY_TREE:-0}" = "1" ]; then
+      MEMORY_TREE_MD=$(cat "$VAULT/MEMORY_TREE.md" 2>/dev/null)
+      if [ -n "$MEMORY_TREE_MD" ]; then
+        CONTEXT="$CONTEXT\n\n=== VAULT: MEMORY_TREE.md ===\n$MEMORY_TREE_MD\n\n=== MEMORY TREE USAGE ===\nFor factual personal questions (identity, household, preferences, cross-branch), call:\n  python3 \$HOME/deus/scripts/memory_tree.py query \"<question>\"\nThe top result's path is the vault file to Read. On abstained:true or low confidence, fall back to Persona/INDEX.md. Prefer this over guessing from CLAUDE.md hints."
+      fi
+    fi
+
     printf "  Checking checkpoints...\r"
     CHECKPOINT_FILE=$(find "$VAULT/Checkpoints" -name "$(date +%Y-%m-%d)-*.md" 2>/dev/null | xargs ls -t 2>/dev/null | head -1)
     if [ -n "$CHECKPOINT_FILE" ]; then
