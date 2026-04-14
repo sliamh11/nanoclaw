@@ -210,6 +210,16 @@ class TestFrontmatter:
         fm = mt.parse_frontmatter('---\ntitle: "With quotes"\n---\n')
         assert fm["title"] == "With quotes"
 
+    def test_summary_falls_back_to_description(self):
+        fm = mt.parse_frontmatter("---\nsummary: an existing vault field\n---\n")
+        assert fm["description"] == "an existing vault field"
+
+    def test_description_overrides_summary(self):
+        fm = mt.parse_frontmatter(
+            "---\nsummary: old\ndescription: new\n---\n"
+        )
+        assert fm["description"] == "new"
+
 
 # ── DB schema ─────────────────────────────────────────────────────────────────
 

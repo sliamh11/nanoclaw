@@ -125,7 +125,7 @@ def parse_frontmatter(content: str) -> dict[str, Any]:
     fm = m.group(1)
     out: dict[str, Any] = {}
 
-    for scalar in ("id", "description", "alias_of", "title", "type", "orphaned_at"):
+    for scalar in ("id", "description", "summary", "alias_of", "title", "type", "orphaned_at"):
         sm = re.search(
             rf"^{scalar}:\s*>?\s*\n?\s*(.+?)(?=\n\S|\n---|\Z)",
             fm,
@@ -134,6 +134,11 @@ def parse_frontmatter(content: str) -> dict[str, Any]:
         if sm:
             val = re.sub(r"\n\s+", " ", sm.group(1)).strip().strip('"').strip("'")
             out[scalar] = val
+
+    # Existing vault files use `summary:`; treat as fallback description so we
+    # don't duplicate prose.
+    if "description" not in out and "summary" in out:
+        out["description"] = out["summary"]
 
     lm = re.search(r"^level:\s*(\d+)\s*$", fm, re.MULTILINE)
     if lm:
