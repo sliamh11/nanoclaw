@@ -881,6 +881,64 @@ def check_tree(db: sqlite3.Connection, vault: Path) -> dict[str, Any]:
     return report
 
 
+def autofix_tree(db: sqlite3.Connection, vault: Path) -> dict[str, int]:
+    """Idempotent maintenance pass: discover new, orphan missing, reembed stale.
+
+    Does NOT drop embeddings or orphan everything — each action is targeted
+    and preserves the no-db-deletion invariant. Safe for daily launchd use.
+
+    Returns counts: {discovered, orphaned, reembedded, skipped}.
+    """
+    counts = {"discovered": 0, "orphaned": 0, "reembedded": 0, "skipped": 0}
+    now_iso = _utc_iso()
+
+    active = db.execute(
+        "SELECT id, path, updated_at FROM nodes WHERE orphaned_at IS NULL"
+    ).fetchall()
+    tracked: set[str] = {row[1] for row in active}
+
+    # 1) Orphan nodes whose files are missing.
+    for (nid, npath, _) in active:
+        if not (vault / npath).exists():
+            db.execute(
+                "UPDATE nodes SET orphaned_at = ?, orphan_reason = 'missing_file' WHERE id = ?",
+                (now_iso, nid),
+            )
+            counts["orphaned"] += 1
+
+    # 2) Discover new .md files under the vault (honors iter_tree_files' skip set).
+    for p in iter_tree_files(vault):
+        try:
+            rel = str(p.relative_to(vault))
+        except ValueError:
+            continue
+        if rel in tracked:
+            continue
+        status = discover_node(vault, rel, db)
+        if status == "discovered":
+            counts["discovered"] += 1
+        else:
+            counts["skipped"] += 1
+
+    # 3) Re-embed stale tracked files (mtime > updated_at, hash-gated inside).
+    for (_, npath, updated_at) in active:
+        full = vault / npath
+        if not full.exists():
+            continue
+        try:
+            mtime = int(full.stat().st_mtime)
+        except OSError:
+            continue
+        if mtime > (updated_at or 0):
+            status = reembed_file(vault, npath, db)
+            if status == "reembedded":
+                counts["reembedded"] += 1
+
+    db.commit()
+    _emit_audit({"action": "autofix", "vault": str(vault), **counts})
+    return counts
+
+
 def _reachable_via_child(db: sqlite3.Connection, root_id: str) -> set[str]:
     visited = {root_id}
     frontier = [root_id]
@@ -1345,9 +1403,14 @@ def main(argv: list[str] | None = None) -> int:
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     p_build = sub.add_parser("build", help="Walk vault, upsert nodes + edges")
-    p_build.add_argument("--rebuild", action="store_true", help="Mark all nodes orphaned first")
+    p_build.add_argument(
+        "--force-resync", "--rebuild",
+        action="store_true",
+        dest="force_resync",
+        help="EMERGENCY: orphan all active nodes + drop embeddings, then re-upsert from walk. Normal flow should never invoke this — use `check --auto-fix` or reembed instead. The 50%% safety abort gate still applies unless --force is passed.",
+    )
     p_build.add_argument("--skip-embed", action="store_true", help="Skip embedding API calls (structure only)")
-    p_build.add_argument("--force", action="store_true", help="Bypass rebuild safety abort when walk retains under half of current active rows")
+    p_build.add_argument("--force", action="store_true", help="Bypass force-resync safety abort when walk retains under half of current active rows")
 
     p_query = sub.add_parser("query", help="Retrieve top nodes for a query")
     p_query.add_argument("text", help="Query text")
@@ -1362,6 +1425,11 @@ def main(argv: list[str] | None = None) -> int:
     p_check = sub.add_parser("check", help="Report coverage gaps + graph issues")
     p_check.add_argument("--coverage", action="store_true")
     p_check.add_argument("--json", action="store_true")
+    p_check.add_argument(
+        "--auto-fix",
+        action="store_true",
+        help="Discover new files, orphan missing files, re-embed stale files (idempotent)",
+    )
 
     p_graph = sub.add_parser("graph", help="Emit GraphViz dot of the tree")
     p_graph.add_argument("--highlight", help="Relative path to highlight")
@@ -1384,10 +1452,16 @@ def main(argv: list[str] | None = None) -> int:
     vault = resolve_vault_path()
 
     if args.cmd == "build":
+        if "--rebuild" in (argv if argv is not None else sys.argv):
+            print(
+                "WARN: --rebuild is deprecated; use --force-resync. "
+                "Intent is unchanged (emergency full resync).",
+                file=sys.stderr,
+            )
         try:
             counts = build_tree(
                 vault, db,
-                rebuild=args.rebuild,
+                rebuild=args.force_resync,
                 skip_embed=args.skip_embed,
                 force=args.force,
             )
@@ -1416,6 +1490,17 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.cmd == "check":
+        if args.auto_fix:
+            fix_counts = autofix_tree(db, vault)
+            if args.json:
+                print(json.dumps(fix_counts, indent=2))
+            else:
+                print(
+                    f"autofix: discovered={fix_counts['discovered']} "
+                    f"orphaned={fix_counts['orphaned']} "
+                    f"reembedded={fix_counts['reembedded']} "
+                    f"skipped={fix_counts['skipped']}"
+                )
         report = check_tree(db, vault)
         if args.json:
             print(json.dumps(report, indent=2))

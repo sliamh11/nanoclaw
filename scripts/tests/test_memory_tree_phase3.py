@@ -809,3 +809,207 @@ class TestHookDiscovery:
         monkeypatch.setattr(hook, "_vault_root", lambda: v)
         status = hook.dispatch({"tool_input": {"file_path": str(v / "bare.md")}})
         assert status == "no_id"
+
+
+# ── TestStopHookDiscovery — drift scan discovers new vault files ──────────────
+
+if "stop_hook" in sys.modules:
+    stop_hook = sys.modules["stop_hook"]
+else:
+    spec = importlib.util.spec_from_file_location("stop_hook", _ROOT / "scripts" / "stop_hook.py")
+    stop_hook = importlib.util.module_from_spec(spec)
+    sys.modules["stop_hook"] = stop_hook
+    spec.loader.exec_module(stop_hook)
+
+
+class TestStopHookDiscovery:
+    def _setup(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("DEUS_MEMORY_TREE", "1")
+        monkeypatch.setattr(mt, "embed_text", _stub_embed)
+        v = tmp_path / "vault"
+        v.mkdir()
+        db_path = tmp_path / "t.db"
+        real_open_db = mt.open_db
+        monkeypatch.setattr(mt, "open_db", lambda path=None: real_open_db(db_path))
+        return v, db_path, real_open_db
+
+    def test_drift_scan_discovers_new_files(self, tmp_path, monkeypatch):
+        v, db_path, real_open_db = self._setup(tmp_path, monkeypatch)
+        (v / "new_a.md").write_text(
+            "---\nid: newa0000000000000000000000000000a\ntitle: A\n"
+            "description: new file A.\n---\n"
+        )
+        (v / "new_b.md").write_text(
+            "---\nid: newb0000000000000000000000000000b\ntitle: B\n"
+            "description: new file B.\n---\n"
+        )
+        attempted = stop_hook._scan_vault_drift(v, limit=5)
+        assert attempted == 2
+        db = real_open_db(db_path)
+        count = db.execute(
+            "SELECT COUNT(*) FROM nodes WHERE orphaned_at IS NULL"
+        ).fetchone()[0]
+        assert count == 2
+
+    def test_drift_scan_respects_limit(self, tmp_path, monkeypatch):
+        v, db_path, real_open_db = self._setup(tmp_path, monkeypatch)
+        for i in range(5):
+            (v / f"n{i}.md").write_text(
+                f"---\nid: n{i}aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\ntitle: N{i}\n"
+                f"description: node {i}.\n---\n"
+            )
+        attempted = stop_hook._scan_vault_drift(v, limit=2)
+        # Up to 2 reembeds + up to 2 discoveries, but there are no tracked
+        # rows yet, so all 5 are discovery candidates and only 2 should fire.
+        db = real_open_db(db_path)
+        count = db.execute(
+            "SELECT COUNT(*) FROM nodes WHERE orphaned_at IS NULL"
+        ).fetchone()[0]
+        assert count == 2
+        assert attempted == 2
+
+    def test_drift_scan_skips_already_tracked(self, tmp_path, monkeypatch):
+        v, db_path, real_open_db = self._setup(tmp_path, monkeypatch)
+        (v / "tracked.md").write_text(
+            "---\nid: trkd0000000000000000000000000000a\ntitle: T\n"
+            "description: already here.\n---\n"
+        )
+        db = real_open_db(db_path)
+        mt.discover_node(v, "tracked.md", db)
+        db.close()
+        attempted = stop_hook._scan_vault_drift(v, limit=5)
+        # Tracked file is unchanged → reembed path no-ops, no new files → 0.
+        assert attempted == 0
+
+    def test_drift_scan_skips_session_logs_dir(self, tmp_path, monkeypatch):
+        v, db_path, real_open_db = self._setup(tmp_path, monkeypatch)
+        sess = v / "Session-Logs" / "2026-04-15"
+        sess.mkdir(parents=True)
+        (sess / "x.md").write_text(
+            "---\nid: sess0000000000000000000000000000a\ntitle: S\n"
+            "description: session log.\n---\n"
+        )
+        (v / "real.md").write_text(
+            "---\nid: real0000000000000000000000000000a\ntitle: R\n"
+            "description: real tree node.\n---\n"
+        )
+        attempted = stop_hook._scan_vault_drift(v, limit=5)
+        assert attempted == 1
+        db = real_open_db(db_path)
+        paths = [r[0] for r in db.execute(
+            "SELECT path FROM nodes WHERE orphaned_at IS NULL"
+        ).fetchall()]
+        assert paths == ["real.md"]
+
+    def test_drift_scan_noop_when_gate_off(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("DEUS_MEMORY_TREE", raising=False)
+        v = tmp_path / "vault"
+        v.mkdir()
+        (v / "x.md").write_text(
+            "---\nid: xx000000000000000000000000000000a\ntitle: X\n"
+            "description: x.\n---\n"
+        )
+        attempted = stop_hook._scan_vault_drift(v, limit=5)
+        assert attempted == 0
+
+
+# ── TestAutofixTree — check --auto-fix atomic pass ────────────────────────────
+
+class TestAutofixTree:
+    @pytest.fixture
+    def vault(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(mt, "embed_text", _stub_embed)
+        v = tmp_path / "vault"
+        v.mkdir()
+        return v
+
+    def test_autofix_discovers_new_files(self, vault, tmp_db):
+        (vault / "new.md").write_text(
+            "---\nid: new0000000000000000000000000000a\ntitle: New\n"
+            "description: fresh node.\n---\n"
+        )
+        counts = mt.autofix_tree(tmp_db, vault)
+        assert counts["discovered"] == 1
+        assert counts["orphaned"] == 0
+        row = tmp_db.execute(
+            "SELECT 1 FROM nodes WHERE path = ? AND orphaned_at IS NULL", ("new.md",)
+        ).fetchone()
+        assert row is not None
+
+    def test_autofix_orphans_missing_files(self, vault, tmp_db):
+        (vault / "a.md").write_text(
+            "---\nid: aa000000000000000000000000000000a\ntitle: A\n"
+            "description: A.\n---\n"
+        )
+        mt.discover_node(vault, "a.md", tmp_db)
+        (vault / "a.md").unlink()
+        counts = mt.autofix_tree(tmp_db, vault)
+        assert counts["orphaned"] == 1
+        row = tmp_db.execute(
+            "SELECT orphan_reason FROM nodes WHERE path = ?", ("a.md",)
+        ).fetchone()
+        assert row[0] == "missing_file"
+
+    def test_autofix_reembeds_stale_files(self, vault, tmp_db, monkeypatch):
+        import time as _time
+        (vault / "s.md").write_text(
+            "---\nid: sss0000000000000000000000000000a\ntitle: S\n"
+            "description: original desc.\n---\n"
+        )
+        mt.discover_node(vault, "s.md", tmp_db)
+        # Age the updated_at so file mtime will be newer.
+        tmp_db.execute("UPDATE nodes SET updated_at = 0 WHERE path = ?", ("s.md",))
+        tmp_db.commit()
+        (vault / "s.md").write_text(
+            "---\nid: sss0000000000000000000000000000a\ntitle: S\n"
+            "description: CHANGED description.\n---\n"
+        )
+        counts = mt.autofix_tree(tmp_db, vault)
+        assert counts["reembedded"] == 1
+        row = tmp_db.execute(
+            "SELECT description FROM nodes WHERE path = ?", ("s.md",)
+        ).fetchone()
+        assert row[0] == "CHANGED description."
+
+    def test_autofix_idempotent(self, vault, tmp_db):
+        (vault / "stable.md").write_text(
+            "---\nid: stbl0000000000000000000000000000a\ntitle: Stable\n"
+            "description: unchanged.\n---\n"
+        )
+        first = mt.autofix_tree(tmp_db, vault)
+        second = mt.autofix_tree(tmp_db, vault)
+        assert first["discovered"] == 1
+        assert second["discovered"] == 0
+        assert second["orphaned"] == 0
+        assert second["reembedded"] == 0
+
+    def test_autofix_mixed_pass(self, vault, tmp_db):
+        # Seed: one tracked file, one that will go missing, one brand new.
+        (vault / "keep.md").write_text(
+            "---\nid: keep0000000000000000000000000000a\ntitle: Keep\n"
+            "description: stays.\n---\n"
+        )
+        (vault / "gone.md").write_text(
+            "---\nid: gone0000000000000000000000000000a\ntitle: Gone\n"
+            "description: will be deleted.\n---\n"
+        )
+        mt.discover_node(vault, "keep.md", tmp_db)
+        mt.discover_node(vault, "gone.md", tmp_db)
+        (vault / "gone.md").unlink()
+        (vault / "new.md").write_text(
+            "---\nid: newx0000000000000000000000000000a\ntitle: NewX\n"
+            "description: appeared.\n---\n"
+        )
+        counts = mt.autofix_tree(tmp_db, vault)
+        assert counts["discovered"] == 1
+        assert counts["orphaned"] == 1
+
+    def test_autofix_skips_session_logs(self, vault, tmp_db):
+        sess = vault / "Session-Logs" / "2026-04-15"
+        sess.mkdir(parents=True)
+        (sess / "x.md").write_text(
+            "---\nid: sess0000000000000000000000000000a\ntitle: Sess\n"
+            "description: session log.\n---\n"
+        )
+        counts = mt.autofix_tree(tmp_db, vault)
+        assert counts["discovered"] == 0
