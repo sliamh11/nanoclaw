@@ -166,9 +166,9 @@ def _list_ollama_models() -> list[str]:
 
 
 def _auto_detect_models() -> list[str]:
-    """Find all gemma4 and qwen variants available locally."""
+    """Find all gemma4 variants available locally."""
     all_models = _list_ollama_models()
-    return [m for m in all_models if "gemma4" in m or "qwen3.5" in m]
+    return [m for m in all_models if "gemma4" in m]
 
 
 def benchmark(models: list[str], interactions: list[dict], verbose: bool = True) -> list[ModelResult]:

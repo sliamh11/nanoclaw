@@ -1,24 +1,32 @@
 /**
- * Step: ollama — Detect hardware, recommend a judge model, pull if approved.
+ * Step: ollama — Enforce Ollama as a hard requirement, kick off background
+ * downloads for every required model, and return immediately.
  *
- * This step is optional — Ollama is not required for Deus to function.
- * If Ollama is not installed the step exits gracefully without failing setup.
+ * Deus depends on Ollama for local embeddings (memory-tree) and the default
+ * judge model. When this step runs:
+ *   1. If the `ollama` CLI is missing → fail setup with install instructions.
+ *   2. Compute the required-model list (embedder + hardware-recommended judge).
+ *   3. Check which are already pulled; skip those.
+ *   4. For each missing model, spawn a detached `ollama pull` that writes
+ *      progress to a per-model log, then return immediately.
  *
- * Flow:
- *   1. Check if `ollama` CLI exists — skip entirely if not found.
- *   2. Call `python3 -m evolution.hardware` for hardware info + recommendation.
- *   3. Check if the recommended model is already pulled (skip pull if so).
- *   4. Pull the model and write OLLAMA_MODEL to ~/.config/deus/.env.
+ * Downloads continue in the background after `deus setup` exits. Users can
+ * tail the log files under ~/.config/deus/ollama-downloads/ to monitor.
  */
-import { execSync, spawnSync } from 'child_process';
+import { execSync, spawn, spawnSync } from 'child_process';
 import fs from 'fs';
-import os from 'os';
 import path from 'path';
 
 import { CONFIG_DIR } from '../src/config.js';
 import { logger } from '../src/logger.js';
 import { commandExists } from './platform.js';
 import { emitStatus } from './status.js';
+
+const DOWNLOAD_DIR = path.join(CONFIG_DIR, 'ollama-downloads');
+const OLLAMA_INSTALL_URL = 'https://ollama.ai/download';
+
+/** The embedder is required by memory-tree and has no alternative. */
+const EMBEDDER_MODEL = 'embeddinggemma';
 
 interface HardwareInfo {
   os: string;
@@ -30,11 +38,15 @@ interface HardwareInfo {
 
 interface HardwareReport {
   hardware: HardwareInfo;
-  recommendation: {
-    model: string;
-    size_gb: number;
-    fits: boolean;
-  };
+  recommendation: { model: string; size_gb: number; fits: boolean };
+}
+
+interface PullResult {
+  model: string;
+  status: 'already_present' | 'started' | 'failed';
+  pid?: number;
+  log?: string;
+  reason?: string;
 }
 
 /** Read a single KEY=value from a .env file, return undefined if not present. */
@@ -53,30 +65,24 @@ function readEnvKey(envPath: string, key: string): string | undefined {
 /** Write or update a single KEY=value in a .env file, preserving other lines. */
 function writeEnvKey(envPath: string, key: string, value: string): void {
   const dir = path.dirname(envPath);
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
-  }
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 
   let content = '';
   if (fs.existsSync(envPath)) {
     const lines = fs.readFileSync(envPath, 'utf-8').split('\n');
-    const filtered = lines.filter((l) => !l.trim().startsWith(`${key}=`));
-    content = filtered.join('\n');
-    if (content.length > 0 && !content.endsWith('\n')) {
-      content += '\n';
-    }
+    content = lines
+      .filter((l) => !l.trim().startsWith(`${key}=`))
+      .join('\n');
+    if (content.length > 0 && !content.endsWith('\n')) content += '\n';
   }
-
   content += `${key}=${value}\n`;
   fs.writeFileSync(envPath, content, 'utf-8');
 }
 
 /** Check if a model is already pulled by scanning `ollama list` output. */
-function isModelPulled(modelName: string): boolean {
+export function isModelPulled(modelName: string): boolean {
   try {
     const result = execSync('ollama list', { encoding: 'utf-8' });
-    // ollama list output: "NAME  ID  SIZE  MODIFIED"
-    // Model name is in the first column; strip the tag suffix for partial match
     const baseName = modelName.split(':')[0];
     const tag = modelName.includes(':') ? modelName.split(':')[1] : '';
     return result.split('\n').some((line) => {
@@ -90,6 +96,11 @@ function isModelPulled(modelName: string): boolean {
   }
 }
 
+/** Normalize a model name for filesystem use (`gemma4:e4b` → `gemma4_e4b`). */
+export function sanitizeModelName(name: string): string {
+  return name.replace(/[^a-zA-Z0-9_.-]/g, '_');
+}
+
 /** Invoke `python3 -m evolution.hardware` and parse the JSON output. */
 function getHardwareReport(): HardwareReport | null {
   try {
@@ -98,7 +109,6 @@ function getHardwareReport(): HardwareReport | null {
       cwd: process.cwd(),
       env: process.env,
     });
-
     if (result.status !== 0 || !result.stdout) {
       logger.warn(
         { stderr: result.stderr },
@@ -106,120 +116,109 @@ function getHardwareReport(): HardwareReport | null {
       );
       return null;
     }
-
     return JSON.parse(result.stdout.trim()) as HardwareReport;
   } catch {
     return null;
   }
 }
 
-export async function run(_args: string[]): Promise<void> {
-  // ── 1. Check if Ollama is installed ────────────────────────────────────────
-  if (!commandExists('ollama')) {
-    logger.info('Ollama not found — skipping model advisor step');
-    emitStatus('OLLAMA', {
-      STATUS: 'skipped',
-      REASON: 'ollama_not_installed',
-      NOTE: 'Install Ollama from https://ollama.ai to enable local judge models',
-    });
-    return;
+/**
+ * Spawn `ollama pull` detached. Returns the PID; the process continues after
+ * this function returns and the parent exits.
+ */
+export function startBackgroundPull(model: string): { pid: number; logPath: string } {
+  if (!fs.existsSync(DOWNLOAD_DIR)) {
+    fs.mkdirSync(DOWNLOAD_DIR, { recursive: true });
   }
+  const stem = sanitizeModelName(model);
+  const logPath = path.join(DOWNLOAD_DIR, `${stem}.log`);
+  const pidPath = path.join(DOWNLOAD_DIR, `${stem}.pid`);
 
-  logger.info('Ollama detected — running hardware advisor');
-
-  // ── 2. Get hardware report ──────────────────────────────────────────────────
-  const report = getHardwareReport();
-
-  if (!report) {
-    logger.warn('Hardware detection unavailable — skipping model pull');
-    emitStatus('OLLAMA', {
-      STATUS: 'skipped',
-      REASON: 'hardware_detection_unavailable',
-      NOTE: 'Run: python3 -m evolution.hardware to diagnose',
-    });
-    return;
-  }
-
-  const { hardware: hw, recommendation: rec } = report;
-
-  logger.info({ hw, recommendation: rec }, 'Hardware detection complete');
-
-  const ramDisplay = hw.ram_gb > 0 ? `${Math.round(hw.ram_gb)} GB` : 'unknown';
-  const gpuDisplay = hw.gpu !== 'unknown' ? hw.gpu : 'unknown GPU';
-
-  // ── 3. Check if model is already pulled ────────────────────────────────────
-  const envPath = path.join(CONFIG_DIR, '.env');
-  const existingModel = readEnvKey(envPath, 'OLLAMA_MODEL');
-
-  if (isModelPulled(rec.model)) {
-    logger.info({ model: rec.model }, 'Recommended model already pulled');
-
-    // Ensure the .env reflects the current recommendation
-    if (existingModel !== rec.model) {
-      writeEnvKey(envPath, 'OLLAMA_MODEL', rec.model);
-      logger.info({ model: rec.model, envPath }, 'Updated OLLAMA_MODEL in env');
-    }
-
-    emitStatus('OLLAMA', {
-      STATUS: 'success',
-      MODEL: rec.model,
-      MODEL_SIZE_GB: rec.size_gb,
-      RAM_GB: hw.ram_gb,
-      GPU: hw.gpu,
-      PULLED: false,
-      ALREADY_PRESENT: true,
-      ENV_UPDATED: existingModel !== rec.model,
-    });
-    return;
-  }
-
-  // ── 4. Pull the model ───────────────────────────────────────────────────────
-  console.log(
-    `\nDetected ${ramDisplay} RAM, ${gpuDisplay}. ` +
-      `Recommended model: ${rec.model} (${rec.size_gb} GB)\n`,
-  );
-
-  if (!rec.fits) {
-    console.warn(
-      `Warning: ${rec.model} may not fit in available RAM (${ramDisplay}). ` +
-        'Proceeding anyway — Ollama will page if needed.\n',
-    );
-  }
-
-  logger.info({ model: rec.model }, 'Pulling Ollama model');
-  console.log(`Pulling ${rec.model}...`);
-
-  const pull = spawnSync('ollama', ['pull', rec.model], {
-    stdio: 'inherit',
-    encoding: 'utf-8',
+  const out = fs.openSync(logPath, 'a');
+  const child = spawn('ollama', ['pull', model], {
+    detached: true,
+    stdio: ['ignore', out, out],
   });
+  fs.writeFileSync(pidPath, String(child.pid ?? ''), 'utf-8');
+  child.unref();
+  return { pid: child.pid ?? 0, logPath };
+}
 
-  if (pull.status !== 0) {
-    logger.error(
-      { model: rec.model, status: pull.status },
-      'ollama pull failed',
-    );
+/** Compute the full list of required models for this install. */
+export function computeRequiredModels(judgeModel: string | null): string[] {
+  const models = new Set<string>([EMBEDDER_MODEL]);
+  if (judgeModel) models.add(judgeModel);
+  return [...models];
+}
+
+export async function run(_args: string[]): Promise<void> {
+  // ── 1. Ollama CLI is required ──────────────────────────────────────────────
+  if (!commandExists('ollama')) {
+    const msg =
+      `Ollama is required for Deus (local embeddings + judge). ` +
+      `Install from ${OLLAMA_INSTALL_URL} and re-run \`deus setup\`.`;
+    logger.error(msg);
     emitStatus('OLLAMA', {
       STATUS: 'failed',
-      MODEL: rec.model,
-      ERROR: `ollama pull exited with code ${pull.status ?? 'unknown'}`,
+      REASON: 'ollama_not_installed',
+      INSTALL_URL: OLLAMA_INSTALL_URL,
     });
-    // Non-fatal: don't exit(1) — Ollama is optional
-    return;
+    throw new Error(msg);
   }
 
-  // ── 5. Write OLLAMA_MODEL to ~/.config/deus/.env ───────────────────────────
-  writeEnvKey(envPath, 'OLLAMA_MODEL', rec.model);
-  logger.info({ model: rec.model, envPath }, 'Wrote OLLAMA_MODEL to env');
+  // ── 2. Hardware-driven judge recommendation (best-effort) ──────────────────
+  const report = getHardwareReport();
+  const judgeModel = report?.recommendation.model ?? null;
+  const required = computeRequiredModels(judgeModel);
+
+  logger.info({ required, judgeModel }, 'Ollama required-model list resolved');
+
+  // ── 3. Check which are present; kick off background pulls for the rest ────
+  const results: PullResult[] = [];
+  for (const model of required) {
+    if (isModelPulled(model)) {
+      results.push({ model, status: 'already_present' });
+      continue;
+    }
+    try {
+      const { pid, logPath } = startBackgroundPull(model);
+      results.push({ model, status: 'started', pid, log: logPath });
+      logger.info({ model, pid, log: logPath }, 'Background ollama pull started');
+    } catch (err) {
+      const reason = (err as Error).message ?? 'spawn_failed';
+      results.push({ model, status: 'failed', reason });
+      logger.warn({ model, reason }, 'Failed to start background ollama pull');
+    }
+  }
+
+  // ── 4. Persist the recommended judge model to .env (if any) ────────────────
+  if (judgeModel) {
+    const envPath = path.join(CONFIG_DIR, '.env');
+    const existing = readEnvKey(envPath, 'OLLAMA_MODEL');
+    if (existing !== judgeModel) writeEnvKey(envPath, 'OLLAMA_MODEL', judgeModel);
+  }
+
+  // ── 5. Emit status; setup returns immediately. ─────────────────────────────
+  const started = results.filter((r) => r.status === 'started');
+  const present = results.filter((r) => r.status === 'already_present');
+
+  if (started.length > 0) {
+    console.log(
+      `\nStarted ${started.length} Ollama model download(s) in the background. ` +
+        `Progress logs in ${DOWNLOAD_DIR}/\n`,
+    );
+    for (const r of started) {
+      console.log(`  - ${r.model}  (pid ${r.pid}, log: ${r.log})`);
+    }
+    console.log('');
+  }
 
   emitStatus('OLLAMA', {
     STATUS: 'success',
-    MODEL: rec.model,
-    MODEL_SIZE_GB: rec.size_gb,
-    RAM_GB: hw.ram_gb,
-    GPU: hw.gpu,
-    PULLED: true,
-    ALREADY_PRESENT: false,
-    ENV_UPDATED: true,
+    REQUIRED_COUNT: required.length,
+    ALREADY_PRESENT: present.length,
+    STARTED: started.length,
+    RECOMMENDED_JUDGE: judgeModel ?? 'none',
+    LOG_DIR: DOWNLOAD_DIR,
   });
 }
