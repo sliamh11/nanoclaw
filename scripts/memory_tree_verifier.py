@@ -34,24 +34,26 @@ MAX_TEXT_CHARS_PER_CANDIDATE = 500
 # title+description excerpt per candidate. Longer context hurts e2b latency
 # without improving accuracy on this task.
 _PROMPT_TEMPLATE = """\
-You are a relevance judge. For each CANDIDATE below, decide whether it \
-answers the QUESTION. Respond with exactly one line per candidate in the \
-format:
+You are a relevance judge. Judge each candidate against the question.
 
-  PATH|LABEL|REASON
+LABEL must be one of:
+  yes     — directly answers the question
+  partial — relevant topic but does not fully answer
+  no      — off-topic or does not contain the answer
 
-LABEL is one of:
-  - yes     : directly answers the question
-  - partial : relevant topic but does not fully answer
-  - no      : off-topic or does not contain the answer
+QUESTION: {query}
 
-QUESTION:
-{query}
-
-CANDIDATES:
+CANDIDATES ({n} total):
 {candidates_block}
 
-Output ONLY the PATH|LABEL|REASON lines. No preamble, no markdown."""
+Output EXACTLY {n} lines, in the same order as the candidates above. \
+Each line must use this exact format (no `PATH:` prefix, no markdown, no preamble):
+
+  <path>|LABEL|REASON
+
+Replace `<path>` with the exact path shown above. Use a short reason (<80 chars).
+
+Output:"""
 
 
 class VerifierUnreachable(Exception):
@@ -89,6 +91,7 @@ def verify_candidates(
     prompt = _PROMPT_TEMPLATE.format(
         query=query.strip(),
         candidates_block=_format_candidates(candidates),
+        n=len(candidates),
     )
     payload = {
         "model": model,
@@ -97,7 +100,7 @@ def verify_candidates(
         # gemma4 family has "thinking" capability; without think=false the model
         # spends its budget on hidden reasoning and returns an empty response.
         "think": False,
-        "options": {"temperature": 0.0, "num_predict": 256},
+        "options": {"temperature": 0.0, "num_predict": 512},
     }
     try:
         raw = (transport or _http_transport)(ollama_url, payload, timeout)
@@ -119,15 +122,16 @@ def verify_candidates(
 
 def _format_candidates(candidates: Iterable[dict[str, Any]]) -> str:
     blocks = []
-    for cand in candidates:
+    for i, cand in enumerate(candidates, 1):
         text = (cand.get("text") or "").strip().replace("\n", " ")
         if len(text) > MAX_TEXT_CHARS_PER_CANDIDATE:
             text = text[:MAX_TEXT_CHARS_PER_CANDIDATE].rstrip() + "…"
-        blocks.append(f"- PATH: {cand['path']}\n  TEXT: {text}")
+        blocks.append(f"{i}. {cand['path']}\n   {text}")
     return "\n".join(blocks)
 
 
 _LINE_RE = re.compile(r"^\s*([^\s|][^|]*?)\s*\|\s*(\w+)\s*\|\s*(.*?)\s*$")
+_PATH_PREFIX_RE = re.compile(r"^(?:\d+[.)]\s*)?(?:-\s*)?(?:PATH:\s*)?", re.IGNORECASE)
 _VALID_LABELS = {"yes", "partial", "no"}
 
 
@@ -136,6 +140,10 @@ def _parse_response(text: str, known_paths: list[str]) -> dict[str, dict[str, st
 
     Only records paths that appeared in the input — the verifier occasionally
     hallucinates extra lines with invented paths. Those are ignored.
+
+    Defensively strips common prefixes the model may emit (`PATH:`, `- `,
+    numbered list markers like `1.`), since some models echo the format we
+    used in the prompt even when asked not to.
     """
     known = set(known_paths)
     out: dict[str, dict[str, str]] = {}
@@ -143,7 +151,9 @@ def _parse_response(text: str, known_paths: list[str]) -> dict[str, dict[str, st
         m = _LINE_RE.match(line)
         if not m:
             continue
-        path, label, reason = m.group(1), m.group(2).lower(), m.group(3)
+        path = _PATH_PREFIX_RE.sub("", m.group(1)).strip()
+        label = m.group(2).lower()
+        reason = m.group(3)
         if path not in known:
             continue
         if label not in _VALID_LABELS:
