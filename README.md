@@ -14,7 +14,7 @@ A personal AI assistant that lives in your messaging apps, remembers everything,
 
 ## Features
 
-1. **Memory** — Remembers everything across all your conversations. Ask it something you discussed weeks ago and it'll recall it precisely, using semantic search to find the most relevant context.
+1. **Memory** — Remembers everything across all your conversations. Ask it something you discussed weeks ago and it'll recall it precisely, using semantic search plus a hierarchical memory tree that makes recall work even on a cold first turn, without you having to name the topic.
 2. **Messaging apps** — WhatsApp, Telegram, Slack, Discord, and Gmail — each a standalone MCP package you install as needed. Switch between them freely — memory and context follow you everywhere.
 3. **Voice** — Send a voice message and it transcribes and responds. Runs locally on Apple Silicon — nothing leaves your machine.
 4. **Vision** — Send a photo or screenshot and it sees and responds to it.
@@ -52,7 +52,7 @@ A personal AI assistant that lives in your messaging apps, remembers everything,
 - [Docker Desktop](https://www.docker.com/products/docker-desktop/) — the installer handles WSL 2 on Windows automatically
 - Node.js 20+, Python 3.11+
 - A [Gemini API key](https://aistudio.google.com/apikey) (free tier is enough)
-- [Ollama](https://ollama.ai/download) — required for local embeddings (memory-tree) and the default judge. `/setup` auto-pulls the right models in the background based on your hardware; you don't wait for the downloads to finish.
+- [Ollama](https://ollama.ai/download) — required for local embeddings (`embeddinggemma` for the memory tree) and the default judge. `/setup` auto-pulls the right models in the background based on your hardware; you don't wait for the downloads to finish.
 
 ### Setup
 
@@ -121,7 +121,7 @@ A fresh clone has **zero channels** — you add only the ones you need:
 ## Memory System
 
 <p align="center">
-  <img src="assets/brand-production/diagrams/deus-memory-system-diagram.png" alt="Memory tiers: Always Loaded → Warm → Cold" width="700">
+  <img src="assets/brand-production/diagrams/deus-memory-system-diagram.png" alt="Deus Memory — Tree (cold-start + cross-branch) and Indexer (semantic recall), routed by query type" width="700">
 </p>
 
 | Command | What it does |
@@ -149,9 +149,23 @@ Key differences from Karpathy's approach:
 - **Contradiction detection** — new facts are checked against semantically similar existing facts; conflicts are flagged and old facts invalidated rather than silently coexisting
 - **Forgetting curves** — facts decay based on access frequency; hot facts stay searchable, cold facts archive automatically
 
+### Hierarchical Memory Tree
+
+On top of flat semantic search, memory notes form a tree rooted at `MEMORY_TREE.md`: each note declares a parent and optional `see_also` cross-links. Retrieval walks from the root down the most relevant branches, then hops sideways via `see_also` to catch facts that live under a different topic than the query's wording would suggest.
+
+Why it matters:
+
+- **Cold-start recall** — finds the right note on the first turn, without the assistant needing to already know what to search for.
+- **Cross-branch discovery** — surfaces facts the flat embedding wouldn't rank highly (e.g. a persona preference that affects a coding decision).
+- **Auto-discovery** — new vault files are registered by a PostToolUse hook; no manual reindex.
+- **Self-healing** — `memory_tree.py check --auto-fix` repairs orphans and missing parents; drift-scan keeps the tree in sync with the vault.
+- **Abstention** — the retriever can return `abstained:true` instead of guessing, which falls back to the persona index.
+
+Gated by `DEUS_MEMORY_TREE=1` so it runs alongside flat search. Embeddings use local `embeddinggemma` (via Ollama).
+
 ### Retrieval Benchmarks
 
-Evaluated on [LongMemEval-S](https://arxiv.org/abs/2410.10813) (ICLR 2025) — a needle-in-a-haystack benchmark with multi-session reasoning across 500+ turn histories.
+Evaluated on [LongMemEval-S](https://arxiv.org/abs/2410.10813) (ICLR 2025) — a needle-in-a-haystack benchmark with multi-session reasoning across 500+ turn histories. Numbers below are for the flat hybrid retriever; memory-tree is benchmarked separately on identity/cross-branch queries.
 
 | Metric | Score |
 |---|---|
@@ -315,6 +329,7 @@ packages/
   mcp-gcal/               # Google Calendar MCP server (tool server for container agents)
 scripts/
   memory_indexer.py       # Semantic memory: index, query, extract, wander, prune, gaps
+  memory_tree.py          # Hierarchical cold-start retrieval: walk tree + see_also hops
   import_seeds.py         # Import curated seed reflections into evolution DB
   stop_hook.py            # Auto-checkpoint on session end
 seeds/
