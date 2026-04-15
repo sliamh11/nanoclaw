@@ -588,13 +588,21 @@ def retrieve(
     query_vec: list[float] | None = None,
     use_see_also: bool = True,
     use_abstain: bool = True,
+    use_verifier: bool = False,
+    verifier_model: str | None = None,
+    verifier_transport: Any = None,
 ) -> dict[str, Any]:
-    """3-phase retrieval: collapsed flat → graph expansion → abstain.
+    """3-phase retrieval + optional verifier: collapsed flat → graph expansion
+    → verifier filter (Phase 8) → abstain.
 
     `use_see_also=False` skips Phase 2 (flat-only mode). `use_abstain=False`
     skips Phase 3 (surface results regardless of confidence). Together they
     support V0/V1/V2/V3 ablation for benchmarking. Defaults keep current
     production behavior unchanged.
+
+    `use_verifier=True` enables Phase 8: a local Ollama model labels each
+    candidate yes/partial/no and candidates labelled 'no' are dropped.
+    Fails open — if the verifier is unreachable the original ranking stands.
 
     Returns {results: [{id, path, score, route}], confidence, fell_back, trace}.
     """
@@ -669,6 +677,48 @@ def retrieve(
         merged = sorted(expanded.values(), key=lambda r: r[3], reverse=True)[:k]
         top = merged
         trace.append(f"expanded→{len(expanded)}")
+
+    # Phase 8: verifier-augmented re-ranking. Drops candidates the local
+    # judge labels 'no' (topically adjacent but doesn't answer). Fails open:
+    # if the verifier is unreachable, keep the unverified ranking.
+    if use_verifier and top:
+        _here = str(Path(__file__).parent)
+        if _here not in sys.path:
+            sys.path.insert(0, _here)
+        try:
+            from memory_tree_verifier import (
+                verify_candidates,
+                rerank_by_verifier,
+                VerifierUnreachable,
+                DEFAULT_VERIFIER_MODEL,
+            )
+        except ImportError:
+            trace.append("verifier_import_failed")
+        else:
+            candidates = []
+            for (nid, npath, _ntitle, _score, _route) in top:
+                drow = db.execute(
+                    "SELECT description FROM nodes WHERE id = ?", (nid,)
+                ).fetchone()
+                candidates.append({
+                    "path": npath,
+                    "text": (drow[0] if drow else "") or "",
+                })
+            try:
+                labeled = verify_candidates(
+                    query,
+                    candidates,
+                    model=verifier_model or DEFAULT_VERIFIER_MODEL,
+                    transport=verifier_transport,
+                )
+            except VerifierUnreachable as exc:
+                trace.append(f"verifier_unreachable:{type(exc).__name__}")
+            else:
+                trace.append(f"verifier_labelled→{len(labeled)}")
+                top, dropped = rerank_by_verifier(top, labeled)
+                if dropped:
+                    trace.append(f"verifier_dropped→{len(dropped)}")
+                best = top[0][3] if top else 0.0
 
     # Phase 3: abstain when the best score is below the floor.
     if use_abstain and best < abstain_threshold:
@@ -1006,6 +1056,8 @@ def benchmark(
     abstain_threshold: float = DEFAULT_ABSTAIN_THRESHOLD,
     use_see_also: bool = True,
     use_abstain: bool = True,
+    use_verifier: bool = False,
+    verifier_model: str | None = None,
     wrong_confident_score: float = 0.65,
 ) -> dict[str, Any]:
     """Run dataset queries, compute recall@k, MRR@k, per-tag breakdown, latency.
@@ -1047,6 +1099,8 @@ def benchmark(
             abstain_threshold=abstain_threshold,
             use_see_also=use_see_also,
             use_abstain=use_abstain,
+            use_verifier=use_verifier,
+            verifier_model=verifier_model,
         )
         latencies.append(_time.monotonic() - t0)
 
@@ -1100,6 +1154,8 @@ def benchmark(
             "abstain_threshold": abstain_threshold,
             "use_see_also": use_see_also,
             "use_abstain": use_abstain,
+            "use_verifier": use_verifier,
+            "verifier_model": verifier_model,
         },
     }
 
@@ -1286,6 +1342,8 @@ def main(argv: list[str] | None = None) -> int:
     p_query.add_argument("--json", action="store_true")
     p_query.add_argument("--low", type=float, default=DEFAULT_LOW_THRESHOLD)
     p_query.add_argument("--abstain", type=float, default=DEFAULT_ABSTAIN_THRESHOLD)
+    p_query.add_argument("--verify", action="store_true", help="Phase 8: local-LLM verifier filter (drops candidates labelled 'no'). Overrides DEUS_TREE_VERIFY.")
+    p_query.add_argument("--verifier-model", help="Ollama model for verifier (default: gemma4:e2b, or DEUS_TREE_VERIFIER_MODEL)")
 
     p_reembed = sub.add_parser("reembed", help="Re-embed a single file")
     p_reembed.add_argument("path", help="Relative path from vault root")
@@ -1309,6 +1367,8 @@ def main(argv: list[str] | None = None) -> int:
     p_bench.add_argument("--abstain", type=float, default=DEFAULT_ABSTAIN_THRESHOLD)
     p_bench.add_argument("--ablation", action="store_true", help="Run V0/V1/V2/V3 variants side by side")
     p_bench.add_argument("--loo", action="store_true", help="Leave-one-out CV (honest generalization estimate)")
+    p_bench.add_argument("--verify", action="store_true", help="Phase 8: enable verifier filter for this benchmark run")
+    p_bench.add_argument("--verifier-model", help="Ollama model for verifier (default: gemma4:e2b)")
 
     args = parser.parse_args(argv)
     db = open_db()
@@ -1329,9 +1389,13 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.cmd == "query":
+        use_verifier = args.verify or os.environ.get("DEUS_TREE_VERIFY") == "1"
+        verifier_model = args.verifier_model or os.environ.get("DEUS_TREE_VERIFIER_MODEL")
         result = retrieve(
             db, args.text, k=args.k,
             low_threshold=args.low, abstain_threshold=args.abstain,
+            use_verifier=use_verifier,
+            verifier_model=verifier_model,
         )
         if args.json:
             print(json.dumps(result, indent=2))
@@ -1371,12 +1435,19 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.cmd == "benchmark":
         data = [json.loads(l) for l in Path(args.dataset_jsonl).read_text().splitlines() if l.strip()]
+        use_verifier = args.verify or os.environ.get("DEUS_TREE_VERIFY") == "1"
+        verifier_model = args.verifier_model or os.environ.get("DEUS_TREE_VERIFIER_MODEL")
         if args.ablation:
             report = benchmark_ablation(db, data, k=args.k, low_threshold=args.low, abstain_threshold=args.abstain)
         elif args.loo:
             report = benchmark_loo(db, data, k=args.k)
         else:
-            report = benchmark(db, data, k=args.k, low_threshold=args.low, abstain_threshold=args.abstain)
+            report = benchmark(
+                db, data, k=args.k,
+                low_threshold=args.low, abstain_threshold=args.abstain,
+                use_verifier=use_verifier,
+                verifier_model=verifier_model,
+            )
         print(json.dumps(report, indent=2))
         return 0
 
