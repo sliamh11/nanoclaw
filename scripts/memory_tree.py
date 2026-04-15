@@ -576,6 +576,75 @@ def reembed_file(vault: Path, rel_path: str, db: sqlite3.Connection) -> str:
     return "reembedded"
 
 
+TREE_SKIP_DIRS = frozenset(
+    {"Session-Logs", "Checkpoints", "Atoms", "ARCHIVE", ".git", ".obsidian"}
+)
+
+
+def discover_node(vault: Path, rel_path: str, db: sqlite3.Connection) -> str:
+    """Add a new vault markdown file to the tree if it has `id:` + `description:`.
+
+    Mirrors the node-creation path of build_tree but for a single file, so
+    PostToolUse / stop-hook drift scan can add files without a full rebuild.
+
+    Edges to siblings that aren't in the tree yet are skipped silently — they
+    will link next time the sibling is discovered or on the next build_tree.
+
+    Statuses: discovered | no_id | no_description | missing | skipped_dir |
+              already_tracked | embed_failed
+    """
+    parts = Path(rel_path).parts
+    if any(part in TREE_SKIP_DIRS for part in parts):
+        return "skipped_dir"
+    p = vault / rel_path
+    if not p.exists():
+        return "missing"
+    fm = parse_frontmatter(p.read_text(encoding="utf-8", errors="replace"))
+    node_id = fm.get("id")
+    if not node_id:
+        return "no_id"
+    desc = fm.get("description", "").strip()
+    if not desc:
+        return "no_description"
+    existing = db.execute(
+        "SELECT 1 FROM nodes WHERE path = ? AND orphaned_at IS NULL",
+        (rel_path,),
+    ).fetchone()
+    if existing is not None:
+        return "already_tracked"
+    try:
+        vec = embed_text(desc)
+    except Exception as exc:
+        print(f"ERROR: embed failed: {exc}", file=sys.stderr)
+        return "embed_failed"
+    title = fm.get("title") or p.stem
+    level = int(fm.get("level", 0))
+    node_type = fm.get("type", "persona-node")
+    ch = content_hash(desc)
+    upsert_node(
+        db,
+        node_id=node_id,
+        path=rel_path,
+        title=title,
+        description=desc,
+        level=level,
+        node_type=node_type,
+        embedding=vec,
+        content_hash_val=ch,
+    )
+    for kind, key in (("child", "children"), ("see_also", "see_also")):
+        for tgt_path in fm.get(key, []):
+            dst_row = db.execute(
+                "SELECT id FROM nodes WHERE path = ? AND orphaned_at IS NULL",
+                (tgt_path,),
+            ).fetchone()
+            if dst_row is None or dst_row[0] == node_id:
+                continue
+            upsert_edge(db, src=node_id, dst=dst_row[0], kind=kind)
+    db.commit()
+    return "discovered"
+
+
 # ── Query (3-phase) ───────────────────────────────────────────────────────────
 
 def retrieve(

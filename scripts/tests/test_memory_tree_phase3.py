@@ -646,3 +646,166 @@ class TestHookEdges:
         monkeypatch.setattr(_P, "expanduser", fake_expand)
         result = hook._vault_root()
         assert result is None
+
+
+# ── TestDiscoverNode — auto-discovery path ────────────────────────────────────
+
+def _stub_embed(text):
+    """Deterministic embedding stub — same shape as embed_text."""
+    v = [0.0] * mt.EMBED_DIM
+    for i, c in enumerate(text[:mt.EMBED_DIM]):
+        v[i] = (ord(c) % 17) / 17.0
+    return v
+
+
+class TestDiscoverNode:
+    @pytest.fixture
+    def vault(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(mt, "embed_text", _stub_embed)
+        v = tmp_path / "vault"
+        v.mkdir()
+        return v
+
+    def test_basic_discovery_adds_node(self, vault, tmp_db):
+        (vault / "new.md").write_text(
+            "---\nid: new0000000000000000000000000000a\ntitle: New\n"
+            "description: A freshly created file.\nlevel: 1\n---\n"
+        )
+        status = mt.discover_node(vault, "new.md", tmp_db)
+        assert status == "discovered"
+        row = tmp_db.execute(
+            "SELECT id, title, level FROM nodes WHERE path = ?", ("new.md",)
+        ).fetchone()
+        assert row == ("new0000000000000000000000000000a", "New", 1)
+
+    def test_missing_id_refuses(self, vault, tmp_db):
+        (vault / "noid.md").write_text(
+            "---\ntitle: NoID\ndescription: no id here.\n---\n"
+        )
+        status = mt.discover_node(vault, "noid.md", tmp_db)
+        assert status == "no_id"
+        row = tmp_db.execute("SELECT 1 FROM nodes WHERE path = ?", ("noid.md",)).fetchone()
+        assert row is None
+
+    def test_missing_description_refuses(self, vault, tmp_db):
+        (vault / "nodesc.md").write_text(
+            "---\nid: nodesc0000000000000000000000000a\ntitle: NoDesc\n---\n"
+        )
+        status = mt.discover_node(vault, "nodesc.md", tmp_db)
+        assert status == "no_description"
+        row = tmp_db.execute("SELECT 1 FROM nodes WHERE path = ?", ("nodesc.md",)).fetchone()
+        assert row is None
+
+    def test_missing_file_returns_missing(self, vault, tmp_db):
+        status = mt.discover_node(vault, "absent.md", tmp_db)
+        assert status == "missing"
+
+    def test_skipped_dir_refuses(self, vault, tmp_db):
+        session_dir = vault / "Session-Logs" / "2026-04-15"
+        session_dir.mkdir(parents=True)
+        (session_dir / "x.md").write_text(
+            "---\nid: sess0000000000000000000000000000a\ntitle: Sess\n"
+            "description: log.\n---\n"
+        )
+        status = mt.discover_node(vault, "Session-Logs/2026-04-15/x.md", tmp_db)
+        assert status == "skipped_dir"
+
+    def test_already_tracked_is_idempotent(self, vault, tmp_db):
+        (vault / "twice.md").write_text(
+            "---\nid: twice000000000000000000000000000a\ntitle: Twice\n"
+            "description: discovered twice.\n---\n"
+        )
+        first = mt.discover_node(vault, "twice.md", tmp_db)
+        second = mt.discover_node(vault, "twice.md", tmp_db)
+        assert first == "discovered"
+        assert second == "already_tracked"
+        count = tmp_db.execute(
+            "SELECT COUNT(*) FROM nodes WHERE path = ? AND orphaned_at IS NULL",
+            ("twice.md",),
+        ).fetchone()[0]
+        assert count == 1
+
+    def test_see_also_edge_to_existing_node(self, vault, tmp_db):
+        (vault / "a.md").write_text(
+            "---\nid: aa000000000000000000000000000000a\ntitle: A\n"
+            "description: node A.\n---\n"
+        )
+        mt.discover_node(vault, "a.md", tmp_db)
+        (vault / "b.md").write_text(
+            "---\nid: bb000000000000000000000000000000b\ntitle: B\n"
+            "description: node B references A.\nsee_also:\n  - a.md\n---\n"
+        )
+        status = mt.discover_node(vault, "b.md", tmp_db)
+        assert status == "discovered"
+        edge = tmp_db.execute(
+            "SELECT kind FROM edges WHERE src_id = ? AND dst_id = ? AND expired_at IS NULL",
+            ("bb000000000000000000000000000000b", "aa000000000000000000000000000000a"),
+        ).fetchone()
+        assert edge == ("see_also",)
+
+    def test_see_also_to_unknown_is_silent_skip(self, vault, tmp_db):
+        (vault / "lonely.md").write_text(
+            "---\nid: lonely00000000000000000000000000a\ntitle: Lonely\n"
+            "description: points to unknown sibling.\nsee_also:\n  - ghost.md\n---\n"
+        )
+        status = mt.discover_node(vault, "lonely.md", tmp_db)
+        assert status == "discovered"
+        edges = tmp_db.execute(
+            "SELECT COUNT(*) FROM edges WHERE src_id = ?",
+            ("lonely00000000000000000000000000a",),
+        ).fetchone()[0]
+        assert edges == 0
+
+
+# ── TestHookDiscovery — hook wires reembed → discover ─────────────────────────
+
+class TestHookDiscovery:
+    def test_not_in_tree_triggers_discover_node(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("DEUS_MEMORY_TREE", "1")
+        monkeypatch.setattr(mt, "embed_text", _stub_embed)
+        v = tmp_path / "vault"
+        v.mkdir()
+        (v / "fresh.md").write_text(
+            "---\nid: fresh000000000000000000000000000a\ntitle: Fresh\n"
+            "description: brand new file.\n---\n"
+        )
+        db_path = tmp_path / "t.db"
+        monkeypatch.setattr(mt, "DB_PATH", db_path)
+        real_open_db = mt.open_db
+        monkeypatch.setattr(mt, "open_db", lambda path=None: real_open_db(db_path))
+        monkeypatch.setattr(hook, "_vault_root", lambda: v)
+        status = hook.dispatch({"tool_input": {"file_path": str(v / "fresh.md")}})
+        assert status == "discovered"
+
+    def test_existing_file_still_reembeds(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("DEUS_MEMORY_TREE", "1")
+        monkeypatch.setattr(mt, "embed_text", _stub_embed)
+        v = tmp_path / "vault"
+        v.mkdir()
+        (v / "exists.md").write_text(
+            "---\nid: exists00000000000000000000000000a\ntitle: Exists\n"
+            "description: already in tree.\n---\n"
+        )
+        db_path = tmp_path / "t.db"
+        real_open_db = mt.open_db
+        monkeypatch.setattr(mt, "open_db", lambda path=None: real_open_db(db_path))
+        monkeypatch.setattr(hook, "_vault_root", lambda: v)
+        # Discover once so the node exists.
+        db = real_open_db(db_path)
+        mt.discover_node(v, "exists.md", db)
+        db.close()
+        status = hook.dispatch({"tool_input": {"file_path": str(v / "exists.md")}})
+        assert status == "unchanged"
+
+    def test_hook_returns_no_id_when_frontmatter_incomplete(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("DEUS_MEMORY_TREE", "1")
+        monkeypatch.setattr(mt, "embed_text", _stub_embed)
+        v = tmp_path / "vault"
+        v.mkdir()
+        (v / "bare.md").write_text("---\ntitle: Bare\ndescription: no id.\n---\n")
+        db_path = tmp_path / "t.db"
+        real_open_db = mt.open_db
+        monkeypatch.setattr(mt, "open_db", lambda path=None: real_open_db(db_path))
+        monkeypatch.setattr(hook, "_vault_root", lambda: v)
+        status = hook.dispatch({"tool_input": {"file_path": str(v / "bare.md")}})
+        assert status == "no_id"
