@@ -55,7 +55,8 @@ def _check_model_pulled(model: str) -> None:
 
 def _call_ollama(prompt: str, model: str = OLLAMA_MODEL) -> str:
     """Synchronous Ollama generate call."""
-    # /no_think prevents qwen3.5 thinking mode from returning empty — only needed for qwen
+    # Qwen is no longer the default, but keep the /no_think suffix in case a
+    # user sets OLLAMA_MODEL=qwen*: without it the thinking mode returns empty.
     full_prompt = f"{prompt}\n/no_think" if "qwen" in model.lower() else prompt
     body = json.dumps({
         "model": model,

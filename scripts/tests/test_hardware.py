@@ -58,17 +58,17 @@ class TestRecommendModel:
         smallest_size = min(MODEL_SIZES.values())
         assert size == smallest_size
 
-    def test_8gb_ram_returns_a_viable_model(self):
-        """8 GB RAM should fit the smallest model (3.4 * 1.2 = 4.08 GB)."""
-        name, size = recommend_model(8.0)
-        # Must fit: size * 1.2 <= 8.0
-        assert size * 1.2 <= 8.0, f"Model {name} ({size} GB) doesn't fit in 8 GB RAM"
+    def test_10gb_ram_returns_a_viable_model(self):
+        """10 GB RAM should fit the smallest model (7.2 * 1.2 = 8.64 GB)."""
+        name, size = recommend_model(10.0)
+        # Must fit: size * 1.2 <= 10.0
+        assert size * 1.2 <= 10.0, f"Model {name} ({size} GB) doesn't fit in 10 GB RAM"
 
-    def test_16gb_ram_picks_larger_than_8gb(self):
-        """16 GB RAM should allow a larger model than 8 GB RAM."""
-        name_8, size_8 = recommend_model(8.0)
+    def test_16gb_ram_picks_larger_than_10gb(self):
+        """16 GB RAM should allow a larger model than 10 GB RAM."""
+        name_10, size_10 = recommend_model(10.0)
         name_16, size_16 = recommend_model(16.0)
-        assert size_16 >= size_8
+        assert size_16 >= size_10
 
     def test_64gb_ram_returns_largest_viable(self):
         """64 GB RAM should fit all models — returns the largest one."""

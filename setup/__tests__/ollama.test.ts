@@ -209,14 +209,14 @@ describe('HardwareReport JSON parsing', () => {
         gpu: 'none',
       },
       recommendation: {
-        model: 'qwen3.5:4b',
-        size_gb: 3.4,
+        model: 'gemma4:e2b',
+        size_gb: 7.2,
         fits: false,
       },
     });
 
     const report = JSON.parse(rawJson);
-    // 3.4 * 1.2 = 4.08 > 4.0, so fits should be false
+    // 7.2 * 1.2 = 8.64 > 4.0, so fits should be false
     expect(report.recommendation.fits).toBe(false);
   });
 
@@ -230,8 +230,8 @@ describe('HardwareReport JSON parsing', () => {
         gpu: 'unknown',
       },
       recommendation: {
-        model: 'qwen3.5:4b',
-        size_gb: 3.4,
+        model: 'gemma4:e2b',
+        size_gb: 7.2,
         fits: false,
       },
     });
@@ -304,5 +304,55 @@ describe('commandExists integration', () => {
     expect(commandExists('definitely_not_a_real_command_xyz_abc_123')).toBe(
       false,
     );
+  });
+});
+
+// ── sanitizeModelName ─────────────────────────────────────────────────────
+
+describe('sanitizeModelName', () => {
+  it('replaces colon with underscore', async () => {
+    const { sanitizeModelName } = await import('../ollama.js');
+    expect(sanitizeModelName('gemma4:e4b')).toBe('gemma4_e4b');
+  });
+
+  it('preserves alphanumerics, hyphens, underscores, dots', async () => {
+    const { sanitizeModelName } = await import('../ollama.js');
+    expect(sanitizeModelName('embeddinggemma')).toBe('embeddinggemma');
+    expect(sanitizeModelName('model-name_v1.2')).toBe('model-name_v1.2');
+  });
+
+  it('replaces slashes and other non-safe chars', async () => {
+    const { sanitizeModelName } = await import('../ollama.js');
+    expect(sanitizeModelName('registry/model:tag')).toBe('registry_model_tag');
+  });
+});
+
+// ── computeRequiredModels ─────────────────────────────────────────────────
+
+describe('computeRequiredModels', () => {
+  it('always includes the embedder', async () => {
+    const { computeRequiredModels } = await import('../ollama.js');
+    const list = computeRequiredModels(null);
+    expect(list).toContain('embeddinggemma');
+  });
+
+  it('adds the judge model when provided', async () => {
+    const { computeRequiredModels } = await import('../ollama.js');
+    const list = computeRequiredModels('gemma4:e4b');
+    expect(list).toContain('embeddinggemma');
+    expect(list).toContain('gemma4:e4b');
+    expect(list.length).toBe(2);
+  });
+
+  it('deduplicates if the judge equals the embedder', async () => {
+    const { computeRequiredModels } = await import('../ollama.js');
+    const list = computeRequiredModels('embeddinggemma');
+    expect(list).toEqual(['embeddinggemma']);
+  });
+
+  it('returns only the embedder when judge is null', async () => {
+    const { computeRequiredModels } = await import('../ollama.js');
+    const list = computeRequiredModels(null);
+    expect(list).toEqual(['embeddinggemma']);
   });
 });

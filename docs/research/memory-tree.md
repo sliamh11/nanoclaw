@@ -187,7 +187,7 @@ MRR@5: 1.000 single · 0.822 multi · 0.950 cross-branch. All ship criteria met 
 
 ### Phase 6 — Parallel budget migrations (separate branch)
 
-Not part of memory-tree. Listed for context only. Moves entity extraction → `gemma4:e4b`, contradiction detection → `gemma4:e2b`, domain classifier fallback → `qwen3.5:4b`. Saves ~15–25 Gemini RPD. Adds daily Ollama daemon health ping to startup-gate.
+Not part of memory-tree. Listed for context only. Moves entity extraction → `gemma4:e4b`, contradiction detection → `gemma4:e2b`, domain classifier fallback → `gemma4:e2b`. Saves ~15–25 Gemini RPD. Adds daily Ollama daemon health ping to startup-gate.
 
 ### Phase 7 — Observability + tuning loop
 

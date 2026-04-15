@@ -18,8 +18,9 @@ from typing import Optional
 
 # Model size estimates (download size in GB).
 # Ordered from smallest to largest so recommend_model() can pick the largest viable.
+# qwen3.5:4b was dropped in favor of the gemma4 family — kept contiguous so the
+# recommendation logic returns a consistent family.
 MODEL_SIZES: dict[str, float] = {
-    "qwen3.5:4b": 3.4,
     "gemma4:e2b": 7.2,
     "gemma4:e4b": 9.6,
     "gemma4:26b": 18.0,
