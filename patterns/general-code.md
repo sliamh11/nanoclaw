@@ -54,6 +54,14 @@ Add new checks via `registerStartupCheck()` — never modify the gate's control 
 
 Never commit credentials, API keys, or tokens — not even in test files. New credentials go in `.env.example`. Design as if the repo is public.
 
+## Context hygiene
+
+To keep sessions token-efficient and avoid re-loading the same content:
+
+- **Don't re-read files you have already read** unless the file may have changed (you edited it, another process touched it, or a long time has passed).
+- **Skip files over 100KB** unless the task explicitly requires their full content. Use `Read` with `offset`/`limit`, `Grep`, or targeted `head` instead.
+- **Prefer pattern files + targeted doc loads** over reading full-size docs. The ROUTER already routes to the right pattern; follow the "Extra doc" pointer only when the task is clearly in that area.
+
 ## Universal rules (apply to all tasks)
 
 These apply regardless of which pattern file was loaded. Every contributor — human or AI — must follow them:
