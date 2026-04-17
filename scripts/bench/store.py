@@ -60,7 +60,8 @@ CREATE TABLE IF NOT EXISTS runs (
   tokens_out INTEGER NOT NULL DEFAULT 0,
   latency_ms INTEGER NOT NULL DEFAULT 0,
   cost_usd REAL NOT NULL DEFAULT 0.0,
-  meta TEXT
+  meta TEXT,
+  label TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_runs_suite_ts ON runs (suite, ts);
@@ -79,22 +80,45 @@ CREATE TABLE IF NOT EXISTS cases (
 );
 """
 
+_CURRENT_VERSION = 2
+
+
+def _migrate(con: sqlite3.Connection) -> None:
+    row = con.execute("SELECT version FROM schema_version").fetchone()
+    ver = row[0] if row else 0
+    if ver < 2:
+        con.execute("ALTER TABLE runs ADD COLUMN label TEXT")
+        con.execute("UPDATE schema_version SET version = 2")
+        con.commit()
+
 
 def _connect() -> sqlite3.Connection:
     path = _db_path()
     path.parent.mkdir(parents=True, exist_ok=True)
+    existing = path.exists()
     con = sqlite3.connect(str(path))
     con.row_factory = sqlite3.Row
     con.execute("PRAGMA foreign_keys = ON")
     con.executescript(_SCHEMA)
-    con.execute(
-        "INSERT OR IGNORE INTO schema_version (version) VALUES (1)"
-    )
-    con.commit()
+    if not existing:
+        # Fresh DB — set directly to current version
+        con.execute(
+            "INSERT OR IGNORE INTO schema_version (version) VALUES (?)",
+            (_CURRENT_VERSION,),
+        )
+        con.commit()
+    else:
+        row = con.execute("SELECT version FROM schema_version").fetchone()
+        if row is None:
+            con.execute(
+                "INSERT INTO schema_version (version) VALUES (1)"
+            )
+            con.commit()
+        _migrate(con)
     return con
 
 
-def save_run(result: RunResult) -> str:
+def save_run(result: RunResult, label: str | None = None) -> str:
     run_id = _make_run_id()
     ts = int(time.time())
     git_sha = _git_sha()
@@ -106,8 +130,8 @@ def save_run(result: RunResult) -> str:
             """
             INSERT INTO runs
               (run_id, ts, suite, git_sha, host, n_cases, score,
-               tokens_in, tokens_out, latency_ms, cost_usd, meta)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               tokens_in, tokens_out, latency_ms, cost_usd, meta, label)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 run_id,
@@ -122,6 +146,7 @@ def save_run(result: RunResult) -> str:
                 result.latency_ms,
                 result.cost_usd,
                 json.dumps(result.meta) if result.meta else None,
+                label,
             ),
         )
         for case in result.cases:
@@ -183,6 +208,63 @@ def recent_runs(
             params,
         ).fetchall()
         return [dict(row) for row in rows]
+    finally:
+        con.close()
+
+
+def get_cases(run_id: str) -> list[dict[str, Any]]:
+    con = _connect()
+    try:
+        rows = con.execute(
+            "SELECT * FROM cases WHERE run_id = ? ORDER BY case_id",
+            (run_id,),
+        ).fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        con.close()
+
+
+def resolve_run(arg: str, suite: str | None = None) -> dict[str, Any] | None:
+    """Return the most-recent run matching arg by run_id, label, or git_sha.
+
+    Resolution order: exact run_id → label → git_sha (prefix or full).
+    If suite is given, restrict candidates to that suite.
+    Returns None when no match is found.
+    """
+    con = _connect()
+    try:
+        conditions: list[str] = []
+        params: list[Any] = []
+        if suite is not None:
+            conditions.append("suite = ?")
+            params.append(suite)
+        where_suite = ("WHERE " + " AND ".join(conditions) + " AND ") if conditions else "WHERE "
+
+        # 1. exact run_id
+        row = con.execute(
+            f"SELECT * FROM runs {where_suite}run_id = ? ORDER BY ts DESC LIMIT 1",
+            [*params, arg],
+        ).fetchone()
+        if row:
+            return dict(row)
+
+        # 2. label
+        row = con.execute(
+            f"SELECT * FROM runs {where_suite}label = ? ORDER BY ts DESC LIMIT 1",
+            [*params, arg],
+        ).fetchone()
+        if row:
+            return dict(row)
+
+        # 3. git_sha (prefix match)
+        row = con.execute(
+            f"SELECT * FROM runs {where_suite}git_sha LIKE ? ORDER BY ts DESC LIMIT 1",
+            [*params, arg + "%"],
+        ).fetchone()
+        if row:
+            return dict(row)
+
+        return None
     finally:
         con.close()
 

@@ -148,3 +148,61 @@ def test_token_suite_case_meta(patched_harness):
     for c in result.cases:
         assert "chars" in c.meta
         assert "components" in c.meta
+
+
+def test_token_score_under_budget(patched_harness):
+    """tokens_in < budget → score 1.0."""
+    from scripts.bench.suites.token import _score
+    assert _score(100, 500) == 1.0
+
+
+def test_token_score_at_budget(patched_harness):
+    """tokens_in == budget → score 1.0."""
+    from scripts.bench.suites.token import _score
+    assert _score(500, 500) == 1.0
+
+
+def test_token_score_double_budget(patched_harness):
+    """tokens_in == 2× budget → score 0.5."""
+    from scripts.bench.suites.token import _score
+    assert abs(_score(1000, 500) - 0.5) < 1e-9
+
+
+def test_token_case_meta_includes_budget_and_over_by(patched_harness):
+    """Each case meta has 'budget' and 'over_by' keys."""
+    from scripts.bench.suites.token import run_token
+    result = run_token([])
+    for c in result.cases:
+        assert "budget" in c.meta, f"case {c.case_id!r} missing 'budget'"
+        assert "over_by" in c.meta, f"case {c.case_id!r} missing 'over_by'"
+        assert c.meta["over_by"] >= 0
+
+
+def test_token_case_over_budget_score_fractional(monkeypatch):
+    """A scenario over its per-scenario budget scores < 1.0."""
+    import scripts.bench.suites.token as tok_suite
+
+    h = _make_harness_mock()
+    # Make est_tokens return a value larger than the per-scenario budget.
+    # host_cc_session budget = 700; return 1400 → score should be 0.5
+    h.SCENARIOS = {"host_cc_session": ["host_claude_md"]}
+    h.STATIC_CONTEXT_TARGETS = [("host_claude_md", "CLAUDE.md")]
+    h.file_info.side_effect = lambda p: {
+        "path": str(p),
+        "exists": True,
+        "chars": 1400 * 3,  # chars don't matter; est_tokens mocked below
+        "lines": 50,
+        "est_tokens": 1400,
+        "sha256_8": "abcd1234",
+    }
+    h.est_tokens.side_effect = lambda chars: 1400
+
+    monkeypatch.setitem(sys.modules, "token_bench_harness", h)
+    monkeypatch.setattr(tok_suite, "_load_harness", lambda: h)
+
+    result = tok_suite.run_token([])
+    assert len(result.cases) == 1
+    c = result.cases[0]
+    # budget=700, tokens_in=1400 → score=0.5
+    assert abs(c.score - 0.5) < 1e-6
+    assert c.meta["over_by"] == 700

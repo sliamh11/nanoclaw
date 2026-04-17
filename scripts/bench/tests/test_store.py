@@ -1,10 +1,11 @@
 """Tests for scripts/bench/store.py"""
 import sqlite3
 import time
+from pathlib import Path
 
 import pytest
 
-from scripts.bench.store import _connect, _db_path, list_suites, recent_runs, save_run, trend
+from scripts.bench.store import _connect, _db_path, get_cases, list_suites, recent_runs, resolve_run, save_run, trend
 from scripts.bench.types import CaseResult, RunResult
 
 
@@ -40,7 +41,105 @@ def test_schema_version(isolate_bench_db):
     con = _connect()
     ver = con.execute("SELECT version FROM schema_version").fetchone()[0]
     con.close()
-    assert ver == 1
+    assert ver == 2
+
+
+def test_migration_v1_to_v2(tmp_path, monkeypatch):
+    """A version-1 DB (no label column) is migrated to version 2 with the column added."""
+    db_path = tmp_path / "v1_test.db"
+    monkeypatch.setenv("DEUS_BENCH_DB", str(db_path))
+
+    # Build a v1 schema manually (no label column)
+    con = sqlite3.connect(str(db_path))
+    con.executescript("""
+        CREATE TABLE schema_version (version INTEGER PRIMARY KEY);
+        CREATE TABLE runs (
+          run_id TEXT PRIMARY KEY,
+          ts INTEGER NOT NULL,
+          suite TEXT NOT NULL,
+          model TEXT,
+          git_sha TEXT,
+          host TEXT,
+          n_cases INTEGER NOT NULL DEFAULT 0,
+          score REAL,
+          tokens_in INTEGER NOT NULL DEFAULT 0,
+          tokens_out INTEGER NOT NULL DEFAULT 0,
+          latency_ms INTEGER NOT NULL DEFAULT 0,
+          cost_usd REAL NOT NULL DEFAULT 0.0,
+          meta TEXT
+        );
+        CREATE TABLE cases (
+          run_id TEXT NOT NULL,
+          case_id TEXT NOT NULL,
+          score REAL,
+          tokens_in INTEGER NOT NULL DEFAULT 0,
+          tokens_out INTEGER NOT NULL DEFAULT 0,
+          latency_ms INTEGER NOT NULL DEFAULT 0,
+          passed INTEGER NOT NULL DEFAULT 1,
+          meta TEXT,
+          PRIMARY KEY (run_id, case_id)
+        );
+        INSERT INTO schema_version (version) VALUES (1);
+    """)
+    con.commit()
+    con.close()
+
+    # Now call _connect() — should run migration
+    con = _connect()
+    ver = con.execute("SELECT version FROM schema_version").fetchone()[0]
+    cols = {row[1] for row in con.execute("PRAGMA table_info(runs)").fetchall()}
+    con.close()
+
+    assert ver == 2
+    assert "label" in cols
+
+
+def test_save_run_with_label(isolate_bench_db):
+    run_id = save_run(_make_result(suite="labeled"), label="pre-fix")
+    rows = recent_runs(suite="labeled")
+    assert len(rows) == 1
+    assert rows[0]["label"] == "pre-fix"
+
+
+def test_save_run_without_label(isolate_bench_db):
+    run_id = save_run(_make_result(suite="nolabel"))
+    rows = recent_runs(suite="nolabel")
+    assert rows[0]["label"] is None
+
+
+def test_resolve_run_by_run_id(isolate_bench_db):
+    run_id = save_run(_make_result(suite="res"))
+    row = resolve_run(run_id)
+    assert row is not None
+    assert row["run_id"] == run_id
+
+
+def test_resolve_run_by_label(isolate_bench_db):
+    run_id = save_run(_make_result(suite="res2"), label="my-label")
+    row = resolve_run("my-label")
+    assert row is not None
+    assert row["run_id"] == run_id
+
+
+def test_resolve_run_by_git_sha(isolate_bench_db, monkeypatch):
+    import scripts.bench.store as store_mod
+    monkeypatch.setattr(store_mod, "_git_sha", lambda: "abc1234")
+    run_id = save_run(_make_result(suite="res3"))
+    row = resolve_run("abc1234")
+    assert row is not None
+    assert row["run_id"] == run_id
+
+
+def test_resolve_run_not_found(isolate_bench_db):
+    row = resolve_run("definitely-not-there")
+    assert row is None
+
+
+def test_get_cases_returns_all(isolate_bench_db):
+    run_id = save_run(_make_result())
+    cases = get_cases(run_id)
+    assert len(cases) == 2
+    assert {c["case_id"] for c in cases} == {"c1", "c2"}
 
 
 def test_save_run_returns_id(isolate_bench_db):
