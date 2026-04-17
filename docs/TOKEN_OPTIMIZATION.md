@@ -133,3 +133,25 @@ work) is therefore not applicable.
    `updatedToolOutput` hook for non-MCP tools.
 3. Optional: broader ADR/dedup sweep across `patterns/` and root `CLAUDE.md`.
    Low gain, small maintenance cost.
+
+## Don't-regress note: `thinking.display`
+
+The SDK exposes `ThinkingConfig.display` with values `"summarized"` or
+`"omitted"`. Default behavior (we don't set `thinking` explicitly) uses
+`"omitted"` — no thinking blocks flow into the response stream, which
+keeps conversation history lean turn-over-turn.
+
+If a future commit enables explicit extended thinking (e.g. to cap
+reasoning cost), pair it with `display: 'omitted'` unless a specific
+downstream consumer actually needs the summary:
+
+```ts
+thinking: { type: 'enabled', budgetTokens: 1024, display: 'omitted' }
+```
+
+`display` does **not** affect billing for the thinking itself (that
+happens server-side regardless) — it affects whether summarized
+reasoning blocks land in the response and then get re-sent as input on
+every subsequent turn of an agent loop. Summarized thinking is useful
+for debugging and reasoning UIs; in a long-lived container agent loop
+it's pure per-turn overhead.
