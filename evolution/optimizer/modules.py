@@ -2,6 +2,8 @@
 DSPy module definitions for Deus task types.
 Each module maps to a learnable prompt that the optimizer can improve.
 """
+from __future__ import annotations
+
 try:
     import dspy
     _DSPY_AVAILABLE = True
