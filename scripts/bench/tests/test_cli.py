@@ -1,4 +1,4 @@
-"""Smoke tests for the CLI (list, run --dry, report)."""
+"""Smoke tests for the CLI (list, run --dry, report, diff)."""
 import os
 import subprocess
 import sys
@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from scripts.bench.store import save_run
+from scripts.bench.store import recent_runs, resolve_run, save_run
 from scripts.bench.types import CaseResult, RunResult
 
 _WORKTREE = Path(__file__).resolve().parent.parent.parent.parent
@@ -22,6 +22,17 @@ def _run_cli(*args: str, env: dict | None = None) -> subprocess.CompletedProcess
         cwd=str(_WORKTREE),
         env=e,
     )
+
+
+def _seed_run(suite: str, score: float, cases: list[tuple[str, float]], label: str | None = None) -> str:
+    """Helper: seed a run with given cases directly via store."""
+    result = RunResult(
+        suite=suite,
+        score=score,
+        cases=[CaseResult(case_id=cid, score=s) for cid, s in cases],
+        tokens_in=0,
+    )
+    return save_run(result, label=label)
 
 
 def test_list_shows_memory_and_token(isolate_bench_db):
@@ -61,3 +72,84 @@ def test_run_unknown_suite_exits_1(isolate_bench_db):
 def test_list_exit_code(isolate_bench_db):
     r = _run_cli("list", env={"DEUS_BENCH_DB": str(isolate_bench_db)})
     assert r.returncode == 0
+
+
+# ── --label flag ──────────────────────────────────────────────────────────────
+
+def test_report_shows_label_column(isolate_bench_db):
+    save_run(RunResult(
+        suite="memory",
+        score=0.9,
+        cases=[CaseResult(case_id="c1", score=0.9)],
+        tokens_in=10,
+    ), label="my-label")
+    r = _run_cli("report", env={"DEUS_BENCH_DB": str(isolate_bench_db)})
+    assert r.returncode == 0, r.stderr
+    assert "label" in r.stdout
+    assert "my-label" in r.stdout
+
+
+# ── diff subcommand ───────────────────────────────────────────────────────────
+
+def test_diff_basic_table(isolate_bench_db):
+    """Two runs with 3 cases: assert all case_ids and correct deltas appear."""
+    db = str(isolate_bench_db)
+    id_a = _seed_run("token", 0.8, [("c1", 0.8), ("c2", 1.0), ("c3", 0.5)], label="pre")
+    id_b = _seed_run("token", 0.9, [("c1", 0.9), ("c2", 1.0), ("c3", 0.6)], label="post")
+    r = _run_cli("diff", id_a, id_b, env={"DEUS_BENCH_DB": db})
+    assert r.returncode == 0, r.stderr + r.stdout
+    assert "c1" in r.stdout
+    assert "c2" in r.stdout
+    assert "c3" in r.stdout
+    # c1 improved by 0.1
+    assert "+0.100" in r.stdout or "+0.10" in r.stdout
+
+
+def test_diff_by_label(isolate_bench_db):
+    """Diff can be invoked using labels."""
+    db = str(isolate_bench_db)
+    _seed_run("token", 0.8, [("c1", 0.8)], label="before")
+    _seed_run("token", 0.9, [("c1", 0.9)], label="after")
+    r = _run_cli("diff", "before", "after", env={"DEUS_BENCH_DB": db})
+    assert r.returncode == 0, r.stderr + r.stdout
+    assert "c1" in r.stdout
+
+
+def test_diff_regression_exit_1(isolate_bench_db):
+    """At least one regression → exit code 1."""
+    db = str(isolate_bench_db)
+    id_a = _seed_run("token", 1.0, [("c1", 1.0)])
+    id_b = _seed_run("token", 0.5, [("c1", 0.5)])
+    r = _run_cli("diff", id_a, id_b, env={"DEUS_BENCH_DB": db})
+    assert r.returncode == 1, f"expected exit 1, got {r.returncode}\n{r.stdout}"
+    assert "-regressed" in r.stdout
+
+
+def test_diff_same_run_unchanged_exit_0(isolate_bench_db):
+    """Diffing a run against itself → all unchanged, exit 0."""
+    db = str(isolate_bench_db)
+    run_id = _seed_run("token", 0.8, [("c1", 0.8), ("c2", 0.6)])
+    r = _run_cli("diff", run_id, run_id, env={"DEUS_BENCH_DB": db})
+    assert r.returncode == 0, r.stderr + r.stdout
+    assert "unchanged" in r.stdout
+    assert "-regressed" not in r.stdout
+
+
+def test_diff_unknown_arg_exit_2(isolate_bench_db):
+    """Unknown argument → exit 2, stderr lists candidates."""
+    db = str(isolate_bench_db)
+    _seed_run("token", 0.8, [("c1", 0.8)], label="existing")
+    r = _run_cli("diff", "ghost-run-xyz", "also-ghost", env={"DEUS_BENCH_DB": db})
+    assert r.returncode == 2
+    assert "ghost-run-xyz" in r.stderr
+
+
+def test_diff_added_dropped_cases(isolate_bench_db):
+    """Cases only in A are 'dropped'; cases only in B are 'added'."""
+    db = str(isolate_bench_db)
+    id_a = _seed_run("token", 0.8, [("c1", 0.8), ("old_case", 1.0)])
+    id_b = _seed_run("token", 0.9, [("c1", 0.9), ("new_case", 1.0)])
+    r = _run_cli("diff", id_a, id_b, env={"DEUS_BENCH_DB": db})
+    assert r.returncode == 0, r.stderr + r.stdout
+    assert "dropped" in r.stdout
+    assert "added" in r.stdout
