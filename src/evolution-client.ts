@@ -10,9 +10,11 @@
  * is missing — the agent continues to work normally without reflections.
  */
 import { execFile, spawn } from 'child_process';
+import { randomUUID } from 'crypto';
 import path from 'path';
 
 import { logger } from './logger.js';
+import { emojiToSignal } from './reaction-signal.js';
 
 const EVOLUTION_CLI = path.join(process.cwd(), 'evolution', 'cli.py');
 const PYTHON_BIN = process.env.EVOLUTION_PYTHON ?? 'python3';
@@ -104,6 +106,34 @@ export function logInteraction(params: LogInteractionParams): void {
     );
   });
   // Do not await — fire and forget
+}
+
+export interface ReactionSignalParams {
+  emoji: string;
+  groupFolder: string;
+  sessionId?: string;
+  reactedToMessageId?: string;
+}
+
+/**
+ * Convert a channel-received emoji reaction into a userSignal log entry.
+ *
+ * No-op when the emoji doesn't map to a positive/negative signal. Session
+ * lookup happens on the Python side via get_previous_in_session; this call
+ * only needs groupFolder + sessionId to attach the signal to the right
+ * previous interaction.
+ */
+export function logReactionSignal(params: ReactionSignalParams): void {
+  const signal = emojiToSignal(params.emoji);
+  if (signal === null) return;
+  logInteraction({
+    id: randomUUID(),
+    prompt: '[reaction]',
+    response: null,
+    groupFolder: params.groupFolder,
+    sessionId: params.sessionId,
+    userSignal: signal,
+  });
 }
 
 function _runPython(args: string[], timeoutMs: number): Promise<string> {
