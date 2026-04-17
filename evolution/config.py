@@ -12,6 +12,8 @@ ARTIFACTS_DIR = EVOLUTION_DIR / "artifacts"
 DB_PATH = Path(os.environ.get("DEUS_DB", "~/.deus/memory.db")).expanduser()
 EVOLUTION_DB_PATH = Path(os.environ.get("DEUS_EVOLUTION_DB", "~/.deus/evolution.db")).expanduser()
 CONFIG_ENV = Path(__file__).resolve().parent.parent / ".env"
+USER_CONFIG_ENV = Path("~/.config/deus/.env").expanduser()
+_ENV_SEARCH_PATHS: list[Path] = [CONFIG_ENV, USER_CONFIG_ENV]
 
 # ── Ollama ────────────────────────────────────────────────────────────────────
 
@@ -77,14 +79,16 @@ JUDGE_BATCH_SIZE = int(os.environ.get("EVOLUTION_JUDGE_BATCH_SIZE", "5"))
 
 
 def load_api_key() -> str:
-    """Load GEMINI_API_KEY from project .env or environment."""
-    if CONFIG_ENV.exists():
-        for line in CONFIG_ENV.read_text().splitlines():
-            if line.startswith("GEMINI_API_KEY="):
-                return line.split("=", 1)[1].strip()
+    """Load GEMINI_API_KEY from .env files (in priority order) or environment."""
+    for path in _ENV_SEARCH_PATHS:
+        if path.exists():
+            for line in path.read_text().splitlines():
+                if line.startswith("GEMINI_API_KEY="):
+                    return line.split("=", 1)[1].strip()
     key = os.environ.get("GEMINI_API_KEY", "")
     if not key:
+        checked = ", ".join(str(p) for p in _ENV_SEARCH_PATHS)
         raise RuntimeError(
-            "GEMINI_API_KEY not found in .env or environment"
+            f"GEMINI_API_KEY not found. Checked: {checked}, and env var."
         )
     return key
