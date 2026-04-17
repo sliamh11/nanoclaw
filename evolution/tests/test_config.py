@@ -1,0 +1,87 @@
+"""Tests for evolution/config.py — load_api_key fallback chain."""
+import os
+from pathlib import Path
+
+import pytest
+
+import evolution.config as config_mod
+from evolution.config import load_api_key
+
+
+@pytest.fixture(autouse=True)
+def clear_env(monkeypatch):
+    """Ensure GEMINI_API_KEY is unset before each test."""
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+
+
+def _write_env(path: Path, key: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(f"GEMINI_API_KEY={key}\n")
+
+
+def test_repo_env_returned(tmp_path, monkeypatch):
+    """Case 1: GEMINI_API_KEY in repo .env → returned (current behavior preserved)."""
+    repo_env = tmp_path / ".env"
+    _write_env(repo_env, "repo-key-123")
+    user_env = tmp_path / "user" / ".env"
+
+    monkeypatch.setattr(config_mod, "CONFIG_ENV", repo_env)
+    monkeypatch.setattr(config_mod, "USER_CONFIG_ENV", user_env)
+    monkeypatch.setattr(config_mod, "_ENV_SEARCH_PATHS", [repo_env, user_env])
+
+    assert load_api_key() == "repo-key-123"
+
+
+def test_user_level_env_fallback(tmp_path, monkeypatch):
+    """Case 2: Repo .env missing, user-level .env has key → returned."""
+    repo_env = tmp_path / "missing" / ".env"
+    user_env = tmp_path / "user" / ".env"
+    _write_env(user_env, "user-key-456")
+
+    monkeypatch.setattr(config_mod, "CONFIG_ENV", repo_env)
+    monkeypatch.setattr(config_mod, "USER_CONFIG_ENV", user_env)
+    monkeypatch.setattr(config_mod, "_ENV_SEARCH_PATHS", [repo_env, user_env])
+
+    assert load_api_key() == "user-key-456"
+
+
+def test_env_var_fallback(tmp_path, monkeypatch):
+    """Case 3: Both .env files missing, env var set → env-var value returned."""
+    repo_env = tmp_path / "missing1" / ".env"
+    user_env = tmp_path / "missing2" / ".env"
+
+    monkeypatch.setattr(config_mod, "_ENV_SEARCH_PATHS", [repo_env, user_env])
+    monkeypatch.setenv("GEMINI_API_KEY", "envvar-key-789")
+
+    assert load_api_key() == "envvar-key-789"
+
+
+def test_all_sources_missing_raises(tmp_path, monkeypatch):
+    """Case 4: All sources empty → RuntimeError mentioning both paths + env var."""
+    repo_env = tmp_path / "missing1" / ".env"
+    user_env = tmp_path / "missing2" / ".env"
+
+    monkeypatch.setattr(config_mod, "_ENV_SEARCH_PATHS", [repo_env, user_env])
+
+    with pytest.raises(RuntimeError) as exc_info:
+        load_api_key()
+
+    msg = str(exc_info.value)
+    assert str(repo_env) in msg
+    assert str(user_env) in msg
+    assert "env var" in msg
+
+
+def test_repo_env_no_key_falls_through_to_user(tmp_path, monkeypatch):
+    """Case 5: Repo .env exists but has no GEMINI_API_KEY, user-level .env has it → user-level wins."""
+    repo_env = tmp_path / ".env"
+    repo_env.write_text("OTHER_KEY=something\nFOO=bar\n")
+
+    user_env = tmp_path / "user" / ".env"
+    _write_env(user_env, "user-fallback-key")
+
+    monkeypatch.setattr(config_mod, "CONFIG_ENV", repo_env)
+    monkeypatch.setattr(config_mod, "USER_CONFIG_ENV", user_env)
+    monkeypatch.setattr(config_mod, "_ENV_SEARCH_PATHS", [repo_env, user_env])
+
+    assert load_api_key() == "user-fallback-key"
