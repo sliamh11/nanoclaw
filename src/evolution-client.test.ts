@@ -86,5 +86,4 @@ describe('logReactionSignal', () => {
     expect(id1).not.toBe(id2);
     expect(id1).toMatch(/^[0-9a-f-]{36}$/);
   });
-
 });

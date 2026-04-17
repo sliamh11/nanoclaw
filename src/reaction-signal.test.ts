@@ -2,12 +2,22 @@ import { describe, it, expect } from 'vitest';
 import { emojiToSignal } from './reaction-signal.js';
 
 describe('emojiToSignal', () => {
-  it.each(['👍', '❤️', '🎉', '🔥', '👏', '🚀', '⭐', '✅', '😍', '🙏', '💯', '🤩'])(
-    'maps %s → positive',
-    (emoji) => {
-      expect(emojiToSignal(emoji)).toBe('positive');
-    },
-  );
+  it.each([
+    '👍',
+    '❤️',
+    '🎉',
+    '🔥',
+    '👏',
+    '🚀',
+    '⭐',
+    '✅',
+    '😍',
+    '🙏',
+    '💯',
+    '🤩',
+  ])('maps %s → positive', (emoji) => {
+    expect(emojiToSignal(emoji)).toBe('positive');
+  });
 
   it.each(['👎', '😞', '😢', '😡', '🤦', '💔', '❌', '🙁', '😕'])(
     'maps %s → negative',
