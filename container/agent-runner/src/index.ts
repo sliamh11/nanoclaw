@@ -20,6 +20,7 @@ import {
   query,
   HookCallback,
   PreCompactHookInput,
+  PostToolUseHookInput,
 } from '@anthropic-ai/claude-agent-sdk';
 import { fileURLToPath } from 'url';
 
@@ -258,6 +259,42 @@ function createPreCompactHook(assistantName?: string): HookCallback {
       );
     }
 
+    return {};
+  };
+}
+
+/**
+ * Log per-tool-call response size to JSONL. Measurement only; does not modify
+ * the tool output the model sees. Feeds the Headroom POC Phase A decision
+ * (docs/HEADROOM_POC.md). Opt-out via DEUS_TOOL_SIZE_LOG=0.
+ */
+function createToolSizeLogHook(): HookCallback {
+  const logPath = '/workspace/group/logs/tool-sizes.jsonl';
+  return async (input, _toolUseId, _context) => {
+    try {
+      const hookInput = input as PostToolUseHookInput;
+      const serialized =
+        typeof hookInput.tool_response === 'string'
+          ? hookInput.tool_response
+          : JSON.stringify(hookInput.tool_response ?? '');
+      const bytes = Buffer.byteLength(serialized, 'utf8');
+      // Rough heuristic: ~3.7 bytes per token for mixed English+code. Phase A
+      // uses this for relative comparison, not absolute budgeting.
+      const approxTokens = Math.round(bytes / 3.7);
+      const entry = {
+        ts: new Date().toISOString(),
+        tool: hookInput.tool_name,
+        tool_use_id: hookInput.tool_use_id,
+        bytes,
+        approx_tokens: approxTokens,
+      };
+      fs.mkdirSync(path.dirname(logPath), { recursive: true });
+      fs.appendFileSync(logPath, JSON.stringify(entry) + '\n');
+    } catch (err) {
+      log(
+        `tool-size-log failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
     return {};
   };
 }
@@ -662,6 +699,9 @@ async function runQuery(
         PreCompact: [
           { hooks: [createPreCompactHook(containerInput.assistantName)] },
         ],
+        ...(process.env.DEUS_TOOL_SIZE_LOG !== '0'
+          ? { PostToolUse: [{ hooks: [createToolSizeLogHook()] }] }
+          : {}),
       },
     },
   })) {
