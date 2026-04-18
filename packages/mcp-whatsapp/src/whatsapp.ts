@@ -33,6 +33,7 @@ import type {
   ChannelStatus,
   ChatInfo,
   IncomingMessage,
+  IncomingReaction,
 } from '@deus-ai/channel-core';
 
 // ── Config from env vars ────────────────────────────────────────────────
@@ -75,6 +76,9 @@ export class WhatsAppProvider implements ChannelProvider {
 
   // Set by server-base.ts — called for every incoming message
   onMessage: (msg: IncomingMessage) => void = () => {};
+
+  // Set by server-base.ts — called for every incoming reaction (add or remove).
+  onReaction?: (reaction: IncomingReaction) => void;
 
   async connect(): Promise<void> {
     this.readyPromise = new Promise<void>((resolve) => {
@@ -265,6 +269,34 @@ export class WhatsAppProvider implements ChannelProvider {
         }
       },
     );
+
+    this.sock.ev.on('messages.reaction', async (reactions) => {
+      if (!this.onReaction) return;
+      for (const r of reactions) {
+        try {
+          const rawJid = r.key.remoteJid;
+          if (!rawJid || rawJid === 'status@broadcast') continue;
+          const chatJid = await this.translateJid(rawJid);
+          const isGroup = chatJid.endsWith('@g.us');
+          const senderJid = r.key.participant || r.key.remoteJid || '';
+          const emoji = r.reaction?.text || '';
+          const reactedTo = r.reaction?.key?.id || '';
+          if (!reactedTo) continue;
+          this.onReaction({
+            chat_id: chatJid,
+            sender: senderJid,
+            sender_name: senderJid.split('@')[0],
+            reacted_to_message_id: reactedTo,
+            emoji,
+            timestamp: new Date().toISOString(),
+            is_group: isGroup,
+            chat_name: this.knownChats.get(chatJid)?.name,
+          });
+        } catch (err) {
+          logger.warn({ err }, 'Failed to handle WhatsApp reaction');
+        }
+      }
+    });
 
     this.sock.ev.on('messages.upsert', async ({ messages }) => {
       for (const msg of messages) {

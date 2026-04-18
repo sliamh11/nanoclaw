@@ -13,6 +13,21 @@ export interface IncomingMessage {
   metadata?: Record<string, unknown>;
 }
 
+/**
+ * Normalized incoming reaction from any channel.
+ * `emoji` is empty string when the user removed a reaction (no-op at sink).
+ */
+export interface IncomingReaction {
+  chat_id: string;
+  sender: string;
+  sender_name: string;
+  reacted_to_message_id: string;
+  emoji: string;
+  timestamp: string;
+  is_group?: boolean;
+  chat_name?: string;
+}
+
 /** Connection status returned by get_status. */
 export interface ChannelStatus {
   connected: boolean;
@@ -72,4 +87,10 @@ export interface ChannelProvider {
    * The channel calls this function whenever a new message arrives.
    */
   onMessage: (msg: IncomingMessage) => void;
+
+  /**
+   * Optional reaction handler. Channels that support reactions (WhatsApp, Telegram)
+   * call this when a user adds or removes a reaction. Empty-string emoji = removal.
+   */
+  onReaction?: (reaction: IncomingReaction) => void;
 }

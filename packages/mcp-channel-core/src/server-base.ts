@@ -2,7 +2,11 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 
 import { MessageBuffer } from './message-buffer.js';
-import type { ChannelProvider, IncomingMessage } from './types.js';
+import type {
+  ChannelProvider,
+  IncomingMessage,
+  IncomingReaction,
+} from './types.js';
 
 /**
  * Register the common MCP tools that all channel servers share.
@@ -23,6 +27,15 @@ export function registerCommonTools(
       level: 'info',
       logger: 'incoming_message',
       data: msg,
+    });
+  };
+
+  // Reactions are ephemeral signals — push to client, don't buffer for polling.
+  provider.onReaction = (reaction: IncomingReaction) => {
+    server.server.sendLoggingMessage({
+      level: 'info',
+      logger: 'incoming_reaction',
+      data: reaction,
     });
   };
 

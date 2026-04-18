@@ -14,8 +14,10 @@ import { logger } from '../logger.js';
 import type {
   Channel,
   NewMessage,
+  NewReaction,
   OnChatMetadata,
   OnInboundMessage,
+  OnInboundReaction,
 } from '../types.js';
 
 export interface McpChannelAdapterOpts {
@@ -29,6 +31,8 @@ export interface McpChannelAdapterOpts {
   env?: Record<string, string>;
   /** Callback for incoming messages. */
   onMessage: OnInboundMessage;
+  /** Callback for incoming reactions. Channels without reaction support never call it. */
+  onReaction?: OnInboundReaction;
   /** Callback for chat metadata discovery. */
   onChatMetadata: OnChatMetadata;
   /** JID ownership check — return true if this channel owns the JID. */
@@ -64,10 +68,26 @@ export class McpChannelAdapter implements Channel {
       LoggingMessageNotificationSchema,
       (notification) => {
         const params = notification.params;
-        if (params.logger !== 'incoming_message') return;
-
         const data = params.data as Record<string, unknown> | undefined;
         if (!data) return;
+
+        if (params.logger === 'incoming_reaction') {
+          if (!opts.onReaction) return;
+          const chatJid = data.chat_id as string;
+          const reaction: NewReaction = {
+            chat_jid: chatJid,
+            sender: data.sender as string,
+            sender_name: data.sender_name as string,
+            reacted_to_message_id: data.reacted_to_message_id as string,
+            emoji: (data.emoji as string) ?? '',
+            timestamp: data.timestamp as string,
+            is_group: data.is_group as boolean | undefined,
+          };
+          opts.onReaction(chatJid, reaction);
+          return;
+        }
+
+        if (params.logger !== 'incoming_message') return;
 
         const chatJid = data.chat_id as string;
         const msg: NewMessage = {
