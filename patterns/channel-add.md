@@ -2,12 +2,13 @@
 governs:
   - src/channels
   - packages/
-last_verified: "2026-04-09"
+last_verified: "2026-04-18"  # re-reviewed for reactions channel wiring (PR B, #194)
 test_tasks:
   - "Add a Discord channel with OAuth login"
   - "Add capabilities: logging to a new MCP channel server so notifications are delivered"
   - "Register a new MCP tool on the Telegram channel with a Zod input schema"
   - "Create a new Slack channel package under packages/mcp-slack/"
+  - "Wire a new channel to emit incoming_reaction notifications via onReaction"
 ---
 # Pattern: channel-add
 
@@ -50,6 +51,10 @@ Then restart the service to pick up the change.
 - Channel skill PRs touch only `.claude/skills/` (and optionally `docs/`, `README.md`).
 - Core changes (`src/`, `packages/`, `package.json`) go in a separate PR first.
 - Never commit `host.ts`, `scripts/`, `node_modules/`, or `package-lock.json`.
+
+## Reactions (optional)
+
+If the channel supports message reactions (WhatsApp, Telegram), implement the optional `onReaction` callback on the `ChannelProvider`. `registerCommonTools` wires it to `sendLoggingMessage({ logger: 'incoming_reaction' })` — reactions are ephemeral signals, not buffered for polling. The host dispatches to `logReactionSignal` via the `incoming_reaction` branch in `src/channels/mcp-adapter.ts`. Empty-string emoji = reaction removed (no-op at the sink).
 
 ## Tool registration
 

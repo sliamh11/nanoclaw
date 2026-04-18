@@ -73,6 +73,17 @@ export interface NewMessage {
   is_bot_message?: boolean;
 }
 
+export interface NewReaction {
+  chat_jid: string;
+  sender: string;
+  sender_name: string;
+  reacted_to_message_id: string;
+  /** Empty string when the user removed a reaction. */
+  emoji: string;
+  timestamp: string;
+  is_group?: boolean;
+}
+
 export interface ScheduledTask {
   id: string;
   group_folder: string;
@@ -114,6 +125,12 @@ export interface Channel {
 
 // Callback type that channels use to deliver inbound messages
 export type OnInboundMessage = (chatJid: string, message: NewMessage) => void;
+
+// Callback for inbound reactions (add or remove) — optional per channel.
+export type OnInboundReaction = (
+  chatJid: string,
+  reaction: NewReaction,
+) => void;
 
 // Callback for chat metadata discovery.
 // name is optional — channels that deliver names inline (Telegram) pass it here;

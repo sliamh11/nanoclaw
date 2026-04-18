@@ -46,6 +46,7 @@ registerChannel('whatsapp', (opts) => {
       ASSISTANT_HAS_OWN_NUMBER: ASSISTANT_HAS_OWN_NUMBER ? 'true' : 'false',
     },
     onMessage: opts.onMessage,
+    onReaction: opts.onReaction,
     onChatMetadata: opts.onChatMetadata,
     ownsJid: (jid) => jid.endsWith('@g.us') || jid.endsWith('@s.whatsapp.net'),
   });

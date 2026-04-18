@@ -14,6 +14,7 @@ import type {
   ChannelStatus,
   ChatInfo,
   IncomingMessage,
+  IncomingReaction,
 } from '@deus-ai/channel-core';
 
 const ASSISTANT_NAME = process.env.ASSISTANT_NAME || 'Deus';
@@ -58,6 +59,9 @@ export class TelegramProvider implements ChannelProvider {
 
   // Set by server-base.ts
   onMessage: (msg: IncomingMessage) => void = () => {};
+
+  // Set by server-base.ts — called on Telegram message_reaction updates.
+  onReaction?: (reaction: IncomingReaction) => void;
 
   async connect(): Promise<void> {
     if (!BOT_TOKEN) {
@@ -211,6 +215,70 @@ export class TelegramProvider implements ChannelProvider {
     this.bot.on('message:location', (ctx) => storeMedia(ctx, '[Location]'));
     this.bot.on('message:contact', (ctx) => storeMedia(ctx, '[Contact]'));
 
+    // Reactions: Telegram delivers an `old_reaction` + `new_reaction` diff.
+    // We emit one IncomingReaction per emoji added. Removal = empty emoji string.
+    this.bot.on('message_reaction', (ctx) => {
+      if (!this.onReaction) return;
+      try {
+        const upd = ctx.messageReaction;
+        if (!upd) return;
+        const chatId = `tg:${upd.chat.id}`;
+        const isGroup =
+          upd.chat.type === 'group' || upd.chat.type === 'supergroup';
+        const chatName = (upd.chat as any).title || undefined;
+        const senderId =
+          upd.user?.id != null
+            ? String(upd.user.id)
+            : `actor:${upd.actor_chat?.id ?? 'unknown'}`;
+        const senderName = upd.user
+          ? [upd.user.first_name, upd.user.last_name].filter(Boolean).join(' ')
+          : senderId;
+        const reactedTo = String(upd.message_id);
+        const timestamp = new Date(upd.date * 1000).toISOString();
+
+        const oldSet = new Set(
+          (upd.old_reaction || [])
+            .filter((r) => r.type === 'emoji')
+            .map((r) => (r as { type: 'emoji'; emoji: string }).emoji),
+        );
+        const newList = (upd.new_reaction || [])
+          .filter((r) => r.type === 'emoji')
+          .map((r) => (r as { type: 'emoji'; emoji: string }).emoji);
+
+        const added = newList.filter((e) => !oldSet.has(e));
+
+        if (added.length === 0) {
+          // Pure removal — emit one empty-emoji event (host treats as no-op).
+          this.onReaction({
+            chat_id: chatId,
+            sender: senderId,
+            sender_name: senderName,
+            reacted_to_message_id: reactedTo,
+            emoji: '',
+            timestamp,
+            is_group: isGroup,
+            chat_name: chatName,
+          });
+          return;
+        }
+
+        for (const emoji of added) {
+          this.onReaction({
+            chat_id: chatId,
+            sender: senderId,
+            sender_name: senderName,
+            reacted_to_message_id: reactedTo,
+            emoji,
+            timestamp,
+            is_group: isGroup,
+            chat_name: chatName,
+          });
+        }
+      } catch (err) {
+        logger.warn({ err }, 'Failed to handle Telegram reaction');
+      }
+    });
+
     this.bot.catch((err) => {
       this.consecutiveErrors++;
       logger.error(
@@ -225,6 +293,8 @@ export class TelegramProvider implements ChannelProvider {
 
     return new Promise<void>((resolve) => {
       this.bot!.start({
+        // message_reaction is not in the default allowed_updates set — opt in.
+        allowed_updates: ['message', 'edited_message', 'message_reaction'],
         onStart: (botInfo) => {
           this.botUsername = botInfo.username;
           this.connectTime = Date.now();

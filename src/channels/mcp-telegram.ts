@@ -39,6 +39,7 @@ registerChannel('telegram', (opts) => {
       ASSISTANT_NAME: ASSISTANT_NAME,
     },
     onMessage: opts.onMessage,
+    onReaction: opts.onReaction,
     onChatMetadata: opts.onChatMetadata,
     ownsJid: (jid) => jid.startsWith('tg:'),
   });

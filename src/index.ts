@@ -37,7 +37,8 @@ import { runStartupChecks, printStartupReport } from './startup-gate.js';
 import { startSchedulerLoop } from './task-scheduler.js';
 import { getAllTasks } from './db.js';
 import { writeGroupsSnapshot, writeTasksSnapshot } from './container-runner.js';
-import { Channel, NewMessage } from './types.js';
+import { Channel, NewMessage, NewReaction } from './types.js';
+import { logReactionSignal } from './evolution-client.js';
 import { logger } from './logger.js';
 
 export { getAvailableGroups } from './router-state.js';
@@ -190,6 +191,16 @@ async function main(): Promise<void> {
       }
 
       storeMessage(msg);
+    },
+    onReaction: (chatJid: string, reaction: NewReaction) => {
+      const group = state.registeredGroups[chatJid];
+      if (!group) return; // Reaction in an unregistered chat — ignore.
+      logReactionSignal({
+        emoji: reaction.emoji,
+        groupFolder: group.folder,
+        sessionId: state.getSession(group.folder),
+        reactedToMessageId: reaction.reacted_to_message_id,
+      });
     },
     onChatMetadata: (
       chatJid: string,
