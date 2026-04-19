@@ -184,7 +184,12 @@ export class DiscordProvider implements ChannelProvider {
         resolve();
       });
 
-      this.client!.login(BOT_TOKEN);
+      this.client!.login(BOT_TOKEN).catch((err: unknown) => {
+        logger.error(
+          { err, task: 'discord.connect.login' },
+          'floating-promise',
+        );
+      });
     });
   }
 
@@ -230,7 +235,12 @@ export class DiscordProvider implements ChannelProvider {
 
   async disconnect(): Promise<void> {
     if (this.client) {
-      this.client.destroy();
+      this.client.destroy().catch((err: unknown) => {
+        logger.error(
+          { err, task: 'discord.disconnect.destroy' },
+          'floating-promise',
+        );
+      });
       this.client = null;
       logger.info('Discord bot stopped');
     }
