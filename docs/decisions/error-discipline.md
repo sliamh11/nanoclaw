@@ -186,6 +186,8 @@ TrueCourse flagged 13 `security/deterministic/sql-injection` HIGHs in `evolution
 - **Identifier regex** (`_SAFE_IDENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")`) before interpolating a name from `sqlite_master` into DDL. Rejects payloads that survived a corrupted-DB or hostile-environment edge case.
 - **Int-coerce + clamp** for time-window parameters that interpolate into `DATETIME('now', '-N days')`: `max(1, int(days))`. The clamp also prevents `days=0` from silently widening the window to all rows.
 
+PR #11 audited the remaining 10 non-evolution `sql-injection` HIGHs in `scripts/bench/store.py`, `scripts/memory_indexer.py`, and `scripts/memory_tree.py`; all confirmed structural-safe (vec0 dims from module int constants, ALTER TABLE col/coltype from literal tuple-lists, WHERE clauses joined from local literal-string fragments, DELETE FROM iterating a hard-coded schema list). Annotated with `# safe: <reason>` per the PR #9 convention. SQL injection backlog from the TrueCourse 2026-04-19 scan is closed.
+
 ## For future contributors
 
 When you catch or throw an error in Deus:
