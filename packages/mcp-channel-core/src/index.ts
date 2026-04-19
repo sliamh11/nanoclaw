@@ -5,4 +5,5 @@ export type {
   ChannelStatus,
   ChatInfo,
   IncomingMessage,
+  IncomingReaction,
 } from './types.js';
