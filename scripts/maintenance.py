@@ -15,8 +15,11 @@ Usage:
 """
 import subprocess
 import sys
-from datetime import datetime
 from pathlib import Path
+
+# Local helpers — _time.py lives next to this script.
+sys.path.insert(0, str(Path(__file__).parent))
+from _time import local_now  # noqa: E402
 
 SCRIPTS_DIR = Path(__file__).resolve().parent
 PYTHON = sys.executable
@@ -59,14 +62,14 @@ def main():
     parser.add_argument("--dry-run", action="store_true", help="Preview without changes")
     args = parser.parse_args()
 
-    is_sunday = datetime.now().weekday() == 6
+    is_sunday = local_now().weekday() == 6
     run_weekly = args.weekly or is_sunday
     dry_run = args.dry_run
 
     indexer = str(SCRIPTS_DIR / "memory_indexer.py")
     gc = str(SCRIPTS_DIR / "memory_gc.py")
 
-    print(f"=== Deus maintenance — {datetime.now().strftime('%Y-%m-%d %H:%M')} ===")
+    print(f"=== Deus maintenance — {local_now().strftime('%Y-%m-%d %H:%M')} ===")
     if dry_run:
         print("(dry-run mode)\n")
 

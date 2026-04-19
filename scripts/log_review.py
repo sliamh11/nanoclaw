@@ -30,9 +30,13 @@ import shutil
 import sys
 import urllib.error
 import urllib.request
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
+
+# Local helpers — _time.py lives next to this script.
+sys.path.insert(0, str(Path(__file__).parent))
+from _time import local_now, utc_now  # noqa: E402
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
 
@@ -141,11 +145,13 @@ def parse_container_log(path: Path) -> dict:
 
 def rotate_container_logs() -> int:
     """Delete container logs older than retention period. Returns count deleted."""
-    cutoff = datetime.now() - timedelta(days=CONTAINER_LOG_RETENTION_DAYS)
+    cutoff = utc_now() - timedelta(days=CONTAINER_LOG_RETENTION_DAYS)
     deleted = 0
     for log_file in GROUPS_DIR.glob('*/logs/container-*.log'):
         try:
-            mtime = datetime.fromtimestamp(log_file.stat().st_mtime)
+            mtime = datetime.fromtimestamp(
+                log_file.stat().st_mtime, tz=timezone.utc
+            )
             if mtime < cutoff:
                 log_file.unlink()
                 deleted += 1
@@ -168,10 +174,13 @@ def rotate_main_logs() -> list[str]:
     archive_dir.mkdir(parents=True, exist_ok=True)
 
     # Remove stale archives
-    cutoff = datetime.now() - timedelta(days=ARCHIVE_RETENTION_DAYS)
+    cutoff = utc_now() - timedelta(days=ARCHIVE_RETENTION_DAYS)
     for f in archive_dir.glob('*.gz'):
         try:
-            if datetime.fromtimestamp(f.stat().st_mtime) < cutoff:
+            if (
+                datetime.fromtimestamp(f.stat().st_mtime, tz=timezone.utc)
+                < cutoff
+            ):
                 f.unlink()
                 actions.append(f'deleted old archive: {f.name}')
         except OSError:
@@ -183,7 +192,7 @@ def rotate_main_logs() -> list[str]:
         size_mb = log_file.stat().st_size / (1024 * 1024)
         if size_mb <= MAIN_LOG_MAX_MB:
             continue
-        stamp = datetime.now().strftime('%Y-%m-%d-%H%M%S')
+        stamp = local_now().strftime('%Y-%m-%d-%H%M%S')
         archive = archive_dir / f'{log_file.stem}.{stamp}.log.gz'
         try:
             with open(log_file, 'rb') as f_in, gzip.open(archive, 'wb') as f_out:
@@ -281,7 +290,7 @@ def run_review() -> Optional[Path]:
 
     # ── Save state ────────────────────────────────────────────────────────
     state['offsets'] = {**offsets, **new_offsets}
-    state['last_review_ts'] = datetime.now().timestamp()
+    state['last_review_ts'] = utc_now().timestamp()
     _save_state(state)
 
     total = len(all_entries) + sum(len(c['errors']) for c in container_errors)
@@ -361,7 +370,7 @@ Respond in EXACTLY this format (no extra text before or after):
 
     # ── Save report ───────────────────────────────────────────────────────
     REPORTS_DIR.mkdir(parents=True, exist_ok=True)
-    today = datetime.now().strftime('%Y-%m-%d')
+    today = local_now().strftime('%Y-%m-%d')
     report_path = REPORTS_DIR / f'{today}.md'
     report_content = (
         f'---\ndate: {today}\n'
