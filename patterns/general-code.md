@@ -5,7 +5,7 @@ governs:
   - src/startup-gate.ts
   - src/checks.ts
   - setup/
-last_verified: "2026-04-19"  # re-reviewed for entry-point bootstrap wiring (PR #3/10) — pattern rules unchanged, drop-in main()→bootstrap() replacements at three call sites
+last_verified: "2026-04-20"  # re-reviewed for floating-promise migration (PR #5/10) — pattern rules unchanged, ipc.ts + task-scheduler.ts kickoffs now routed through src/async/fireAndForget with named owners
 test_tasks:
   - "Refactor src/router.ts into smaller modules"
   - "Add a new utility function for parsing timestamps"

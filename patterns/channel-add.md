@@ -2,7 +2,7 @@
 governs:
   - src/channels
   - packages/
-last_verified: "2026-04-19"  # re-reviewed for error-discipline ADR (PR #214) — channel patterns unaffected by error taxonomy
+last_verified: "2026-04-20"  # re-reviewed for floating-promise migration (PR #5/10) — packages/ inline .catch pattern (no workspace root → no cross-package src/async/ import); IncomingReaction now re-exported from mcp-channel-core entry point
 test_tasks:
   - "Add a Discord channel with OAuth login"
   - "Add capabilities: logging to a new MCP channel server so notifications are delivered"
