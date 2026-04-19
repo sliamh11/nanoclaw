@@ -16,8 +16,12 @@ Input: JSON from Claude Code on stdin
 import json
 import os
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
+# Local helpers — _time.py lives next to this script.
+sys.path.insert(0, str(Path(__file__).parent))
+from _time import local_now, utc_now  # noqa: E402
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
@@ -65,7 +69,9 @@ def should_checkpoint() -> bool:
     )
     if not files:
         return True
-    age = datetime.now() - datetime.fromtimestamp(files[0].stat().st_mtime)
+    age = utc_now() - datetime.fromtimestamp(
+        files[0].stat().st_mtime, tz=timezone.utc
+    )
     return age > timedelta(minutes=THROTTLE_MINUTES)
 
 
@@ -128,7 +134,7 @@ def extract_topic(turns: list[dict]) -> str:
 
 def write_checkpoint(turns: list[dict]):
     CHECKPOINTS_DIR.mkdir(parents=True, exist_ok=True)
-    now = datetime.now()
+    now = local_now()
     path = CHECKPOINTS_DIR / f"{now.strftime('%Y-%m-%d-%H')}.md"
 
     topic = extract_topic(turns)

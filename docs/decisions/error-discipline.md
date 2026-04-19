@@ -149,6 +149,26 @@ PR #7 adds an ESLint rule (`no-restricted-syntax`) banning `process.exit` in `pa
 
 2. **Library code generally.** A package or module should throw; the caller decides whether that's fatal. If you find yourself wanting `process.exit` in a file other than the three categories above, the correct question is "where is the upstream catcher, and why doesn't it exit on this error?" — not "how do I exit here?"
 
+### PR #8 addendum: datetime-TZ policy (Python `scripts/`)
+
+TrueCourse flagged 25 `datetime.now()` calls in `scripts/` (rule `bugs/deterministic/datetime-without-timezone`). Naive datetime is dangerous for two reasons in this codebase:
+
+1. **DST in Asia/Jerusalem.** Twice a year a naive `datetime.now()` is ambiguous (fall-back hour) or non-existent (spring-forward hour). Comparisons across the boundary silently produce wrong answers.
+2. **Mixed UTC + naive comparisons.** `datetime.fromtimestamp(file.st_mtime)` returns a naive datetime in *local* time, while every other datetime in the codebase is implicitly UTC (db timestamps, log timestamps, Unix epochs). Comparing the two raises `TypeError: can't compare offset-naive and offset-aware datetimes` if either side is later made tz-aware — and silently produces an off-by-(local-utc) timedelta if both stay naive.
+
+The literal "blanket UTC" recommendation produces a worse bug for a user-facing tool: at 01:30 IST, `datetime.now(timezone.utc).strftime("%Y-%m-%d")` produces yesterday's date string. Liam reads daily-atom filenames, weekday checks, and the maintenance display in `ls`/stdout — they must match his calendar day.
+
+**Policy: split by intent.**
+
+| Intent | Helper | Examples |
+|---|---|---|
+| Internal timestamps, age comparisons against UTC st_mtime, ISO frontmatter | `utc_now()` | DB rows, retention cutoffs, last-review epochs |
+| User-facing date/filename strings, weekday checks, day-grouped indexing | `local_now()` | `bak-YYYYMMDD-HHMMSS`, daily-atom buckets, `weekday() == 6` |
+
+Both helpers live in `scripts/_time.py` and return tz-aware datetimes. `datetime.fromtimestamp(st_mtime, tz=timezone.utc)` must be used when reading file mtimes for comparison with `utc_now()`.
+
+**Rule for new Python code in `scripts/`:** never write bare `datetime.now()`. Pick `utc_now()` or `local_now()` explicitly. The choice forces an answer to "is this a moment, or is this a calendar day?".
+
 ## For future contributors
 
 When you catch or throw an error in Deus:
@@ -158,6 +178,7 @@ When you catch or throw an error in Deus:
 3. **Wrapping a third-party error?** Pass it as `cause`. Never stringify it into the message.
 4. **Awaiting a promise you don't plan to block on?** Use `fireAndForget` (PR #4). Don't let it float.
 5. **Static analyzer flagging a `.connect()` site as "missing error handler"?** Check the return type first. `Promise<T>` → structured `.catch()` or try/catch with an owner label (PR #6 pattern). `EventEmitter` → `.on('error', ...)`. SDK-internal transports (e.g. `StdioServerTransport`) wire their own stdin/stdout error listeners — leave them alone.
+6. **Writing Python in `scripts/`?** Never `datetime.now()`. Use `utc_now()` for internal timestamps, `local_now()` for user-facing strings (PR #8). The naming forces you to answer "moment or calendar day?".
 
 See `src/errors/index.ts` for the full API and `src/errors/index.test.ts` for examples.
 

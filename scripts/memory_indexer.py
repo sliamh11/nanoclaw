@@ -19,13 +19,19 @@ import sqlite3
 import struct
 import sys
 import time
-from datetime import datetime
+from datetime import datetime  # noqa: F401 -- kept for fromtimestamp / type imports
 from pathlib import Path
 
 # Allow running as a direct script — add project root to sys.path
 _project_root = str(Path(__file__).resolve().parent.parent)
 if _project_root not in sys.path:
     sys.path.insert(0, _project_root)
+
+# Local helpers — _time.py lives next to this script.
+_scripts_dir = str(Path(__file__).resolve().parent)
+if _scripts_dir not in sys.path:
+    sys.path.insert(0, _scripts_dir)
+from _time import local_now, utc_now  # noqa: E402
 
 import sqlite_vec
 from google import genai
@@ -335,7 +341,7 @@ def entry_exists(db: sqlite3.Connection, path: str) -> bool:
 
 def soft_delete_entries(db: sqlite3.Connection, path: str, reason: str = "re-indexed"):
     """Mark entries for a path as orphaned (soft-delete). See ADR: no-db-deletion.md."""
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    now = utc_now().strftime("%Y-%m-%d %H:%M:%S")
     db.execute(
         "UPDATE entries SET orphaned_at = ?, orphan_reason = ? WHERE path = ? AND orphaned_at IS NULL",
         [now, reason, path],
@@ -1223,7 +1229,7 @@ def cmd_wander(seeds: list[str], steps: int = 3, top_k: int = 10, graph: bool = 
         print(f"ERROR: session logs not found at {VAULT_SESSION_LOGS}", file=sys.stderr)
         sys.exit(1)
 
-    today = datetime.now().date()
+    today = local_now().date()
 
     # Build weighted co-occurrence graph: edge_weight[t1][t2] += recency_weight
     edge_weight: dict[str, dict[str, float]] = defaultdict(lambda: defaultdict(float))
@@ -1504,7 +1510,7 @@ def bump_corroboration(db: sqlite3.Connection, entry_id: int):
             cat = m.group(1)
     prior = CONFIDENCE_PRIOR.get(cat, 0.50)
     new_conf = min(prior + new_corr * 0.1, 0.95)
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = local_now().strftime("%Y-%m-%d")
     db.execute(
         "UPDATE entries SET corroborations = ?, confidence = ? WHERE id = ?",
         [new_corr, new_conf, entry_id],
@@ -1523,7 +1529,7 @@ def invalidate_atom(db: sqlite3.Connection, entry_id: int, reason: str):
     row = db.execute("SELECT path FROM entries WHERE id = ?", [entry_id]).fetchone()
     if not row:
         return
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = local_now().strftime("%Y-%m-%d")
     db.execute(
         "UPDATE entries SET expired_at = ?, expired_reason = ? WHERE id = ?",
         [today, reason, entry_id],
@@ -1719,7 +1725,7 @@ def detect_contradictions(db: sqlite3.Connection, new_atom_id: int,
                 conflicts.append({"older_id": existing_id, "newer_id": new_atom_id,
                                   "older_text": existing_text})
                 # Log to pending_conflicts for user review — never auto-invalidate
-                today = datetime.now().strftime("%Y-%m-%d")
+                today = local_now().strftime("%Y-%m-%d")
                 try:
                     db.execute(
                         "INSERT OR IGNORE INTO pending_conflicts "
@@ -1945,7 +1951,7 @@ def generate_entity_article(db: sqlite3.Connection, entity_id: int) -> Path:
 
     slug = slugify(entity["name"])
     path = VAULT_ENTITIES / f"{slug}.md"
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = local_now().strftime("%Y-%m-%d")
     source_hash = _compute_entity_source_hash(db, entity_id)
 
     path.write_text(
@@ -2055,7 +2061,7 @@ def compress_period(db: sqlite3.Connection, level: str, period_key: str) -> str:
     if not digest_text:
         return ""
 
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = local_now().strftime("%Y-%m-%d")
     db.execute(
         "INSERT INTO digests (level, period_key, content, created_at) "
         "VALUES (?, ?, ?, ?) "
@@ -2117,7 +2123,7 @@ import math
 
 def log_access(db: sqlite3.Connection, entry_id: int, access_type: str):
     """Record an access event for temperature computation."""
-    now = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+    now = utc_now().strftime("%Y-%m-%dT%H:%M:%S")
     db.execute(
         "INSERT INTO access_log (entry_id, accessed_at, access_type) VALUES (?, ?, ?)",
         [entry_id, now, access_type],
@@ -2128,7 +2134,7 @@ def log_access(db: sqlite3.Connection, entry_id: int, access_type: str):
 def log_query(db: sqlite3.Connection, query: str, intent: str,
               result_count: int = 0, atom_hit: int = 0):
     """Record a query for blind-spot analysis."""
-    now = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+    now = utc_now().strftime("%Y-%m-%dT%H:%M:%S")
     db.execute(
         "INSERT INTO query_log (query_text, intent, result_count, atom_hit, queried_at) "
         "VALUES (?, ?, ?, ?, ?)",
@@ -2333,7 +2339,7 @@ def generate_synthesis(db: sqlite3.Connection, entity_a_id: int,
     if not synthesis_text:
         return ""
 
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = local_now().strftime("%Y-%m-%d")
     db.execute(
         "INSERT INTO synthesis_suggestions (entity_a_id, entity_b_id, bridge_text, created_at) "
         "VALUES (?, ?, ?, ?) "
@@ -2505,7 +2511,7 @@ def cmd_export(output_path: str, privacy_levels: list[str] | None = None):
 
     out_path = Path(output_path).expanduser()
     lines = [f"# Deus Knowledge Export\n", f"Privacy levels: {', '.join(levels)}\n",
-             f"Exported: {datetime.now().strftime('%Y-%m-%d')}\n", f"Atoms: {len(atoms)}\n", ""]
+             f"Exported: {local_now().strftime('%Y-%m-%d')}\n", f"Atoms: {len(atoms)}\n", ""]
     for path, chunk, confidence, domain, privacy in atoms:
         lines.append(f"- [{domain}/{privacy}] ({confidence:.2f}) {chunk}")
 
@@ -2572,7 +2578,7 @@ def cmd_extract(session_path: str, no_contradict: bool = False):
         return
 
     db = open_db()
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = local_now().strftime("%Y-%m-%d")
     new_count, corroborated_count = 0, 0
     new_atom_ids: list[tuple[int, str, list[float]]] = []  # (entry_id, text, vec)
 
@@ -2704,13 +2710,13 @@ def cmd_rebuild():
 
         # Always back up before rebuild
         import shutil
-        backup_path = DB_PATH.with_suffix(f".bak-{datetime.now().strftime('%Y%m%d-%H%M%S')}")
+        backup_path = DB_PATH.with_suffix(f".bak-{local_now().strftime('%Y%m%d-%H%M%S')}")
         shutil.copy2(DB_PATH, backup_path)
         print(f"Backed up to {backup_path}")
 
         # Soft-delete entries; clear derived tables (see ADR: no-db-deletion.md)
         db = open_db()
-        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        now = utc_now().strftime("%Y-%m-%d %H:%M:%S")
         db.execute(
             "UPDATE entries SET orphaned_at = ?, orphan_reason = ? WHERE orphaned_at IS NULL",
             [now, "rebuild"],
@@ -3128,7 +3134,7 @@ def cmd_prune(dry_run: bool = False):
 
     # 2. Orphan cleanup: DB rows whose file is gone — soft-delete (see ADR: no-db-deletion.md)
     orphans = 0
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    now = utc_now().strftime("%Y-%m-%d %H:%M:%S")
     all_atom_rows = db.execute("SELECT id, path FROM entries WHERE type = 'atom' AND orphaned_at IS NULL").fetchall()
     for entry_id, path_str in all_atom_rows:
         if not Path(path_str).exists():

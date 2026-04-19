@@ -3,7 +3,7 @@ governs:
   - evolution/
   - eval/
   - scripts/memory_indexer.py
-last_verified: "2026-04-19"  # re-verified for Gemini cascade fix (PR #213) + NameError side-fix in cmd_add_dir (PR #217) — eval rules unchanged
+last_verified: "2026-04-20"  # re-verified for datetime-TZ migration in memory_indexer.py (PR #8/10) — eval rules unchanged, just UTC vs local-Jerusalem split for DB timestamps vs user-facing date strings
 test_tasks:
   - "Add a new DeepEval metric under eval/ for the core_qa test suite"
   - "Add a new judge backend to evolution/judge/ using the provider registry"

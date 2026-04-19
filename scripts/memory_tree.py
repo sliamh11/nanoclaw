@@ -23,13 +23,19 @@ import sqlite3
 import struct
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timezone  # noqa: F401 -- timezone re-exported through _time
 from pathlib import Path
+
+# Local helpers — _time.py lives next to this script.
+_SCRIPTS_DIR = Path(__file__).resolve().parent
+if str(_SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(_SCRIPTS_DIR))
+from _time import local_now, utc_now  # noqa: E402
 
 
 def _utc_iso() -> str:
     """Naive-looking UTC timestamp — tz-aware internally, stripped on write."""
-    return datetime.now(timezone.utc).replace(tzinfo=None).isoformat(timespec="seconds")
+    return utc_now().replace(tzinfo=None).isoformat(timespec="seconds")
 
 from typing import Any
 
@@ -607,7 +613,7 @@ def build_tree(
 def _backup_db() -> None:
     if not DB_PATH.exists():
         return
-    ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+    ts = local_now().strftime("%Y%m%d-%H%M%S")
     bak = DB_PATH.with_suffix(f".{ts}.bak")
     bak.write_bytes(DB_PATH.read_bytes())
 
