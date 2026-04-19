@@ -6,6 +6,7 @@
 |-----------|--------------|------------------------------------------------|
 | channel-add | `patterns/channel-add.md` | `docs/CONTRIBUTING-AI.md` §MCP Channel Servers, `docs/ENVIRONMENT.md` |
 | skill-add | `patterns/skill-add.md` | — |
+| claude-md-edit | `patterns/claude-md-edit.md` | `docs/TOKEN_OPTIMIZATION.md` (only if reshaping fact list) |
 | eval-change | `patterns/eval-change.md` | `docs/decisions/INDEX.md`, `docs/ENVIRONMENT.md` |
 | deployment | `patterns/deployment.md` | — |
 | debugging | `patterns/debugging.md` | `docs/DEBUG_CHECKLIST.md` |

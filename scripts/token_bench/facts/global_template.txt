@@ -4,12 +4,12 @@
 CRITICAL: Output is sent to the user or group
 CRITICAL: mcp__deus__send_message is used to acknowledge mid-task before longer work
 CRITICAL: Internal reasoning should be wrapped in <internal>...</internal> tags
-CRITICAL: Text inside <internal> tags is logged but not sent to the user
+CRITICAL: Text inside <internal> tags is logged but not sent to the user   # kw=internal,logged,sent
 CRITICAL: Sub-agents and teammates only use send_message if the main agent told them to
 CRITICAL: Files at /workspace/group/ persist and are used for notes and research
 CRITICAL: Past-session conversation history lives in conversations/
 CRITICAL: When learning important info, create structured files and keep an index
-CRITICAL: Large files should be split into folders (>500 lines)
+CRITICAL: Large files should be split into folders (>500 lines)   # kw=split,500,folders
 CRITICAL: Never use markdown formatting for messages
 CRITICAL: Use single-asterisk *bold* for bold (never double-asterisk)
 CRITICAL: Use _underscores_ for italic

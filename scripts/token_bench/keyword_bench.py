@@ -110,6 +110,8 @@ def main() -> int:
     ap.add_argument("--compressed", required=True)
     ap.add_argument("--facts", required=True)
     ap.add_argument("--out", default=None)
+    ap.add_argument("--threshold", type=float, default=95.0,
+                    help="Minimum critical-coverage %% for PASS verdict (default: 95)")
     args = ap.parse_args()
 
     compressed = Path(args.compressed).read_text()
@@ -141,7 +143,7 @@ def main() -> int:
     print()
     print(f"Critical coverage: {crit_preserved}/{crit_total} = {crit_pct:.1f}%")
     print(f"Overall coverage:  {crit_preserved + supp_preserved}/{total} = {overall_pct:.1f}%")
-    verdict = "PASS" if crit_pct >= 95.0 else "REVIEW"
+    verdict = "PASS" if crit_pct >= args.threshold else "REVIEW"
     print(f"Verdict: {verdict}  (MISS items deserve a manual eyeball — keyword-only test can false-negative on paraphrase)")
 
     report = {
