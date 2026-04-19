@@ -25,6 +25,8 @@ import {
 } from '@anthropic-ai/claude-agent-sdk';
 import { fileURLToPath } from 'url';
 
+import { bootstrap } from './bootstrap.js';
+
 interface ContainerInput {
   prompt: string;
   sessionId?: string;
@@ -1024,4 +1026,4 @@ async function main(): Promise<void> {
   }
 }
 
-main();
+bootstrap(main, { name: 'agent-runner' });

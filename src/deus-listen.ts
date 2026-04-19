@@ -14,6 +14,7 @@ import os from 'os';
 import path from 'path';
 import { promisify } from 'util';
 
+import { bootstrap } from './bootstrap.js';
 import { IS_MACOS, IS_LINUX, IS_WINDOWS, killProcess } from './platform.js';
 import {
   transcribeFile,
@@ -533,7 +534,4 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((err: unknown) => {
-  console.error(err instanceof Error ? err.message : String(err));
-  process.exit(1);
-});
+bootstrap(main, { name: 'deus-listen' });

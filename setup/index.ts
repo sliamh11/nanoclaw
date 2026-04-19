@@ -5,6 +5,7 @@
 import fs from 'fs';
 import path from 'path';
 
+import { bootstrap } from '../src/bootstrap.js';
 import { logger } from '../src/logger.js';
 import { emitStatus } from './status.js';
 
@@ -73,4 +74,4 @@ async function main(): Promise<void> {
   }
 }
 
-main();
+bootstrap(main, { name: 'setup' });
