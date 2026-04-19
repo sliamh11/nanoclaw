@@ -203,6 +203,9 @@ def recent_runs(
             params.append(since_ts)
         where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
         params.append(limit)
+        # safe: `where` is built from local literal-string fragments
+        # ("suite = ?", "ts >= ?"); user values bound through `params`.
+        # See PR #9 in docs/decisions/error-discipline.md.
         rows = con.execute(
             f"SELECT * FROM runs {where} ORDER BY ts DESC LIMIT ?",
             params,
@@ -239,6 +242,11 @@ def resolve_run(arg: str, suite: str | None = None) -> dict[str, Any] | None:
             conditions.append("suite = ?")
             params.append(suite)
         where_suite = ("WHERE " + " AND ".join(conditions) + " AND ") if conditions else "WHERE "
+
+        # safe (3 sites below): `where_suite` is "WHERE suite = ? AND " or
+        # "WHERE " — both built entirely from local literal-string fragments.
+        # The `arg` lookup value is bound through `?` params on every call.
+        # See PR #9 in docs/decisions/error-discipline.md.
 
         # 1. exact run_id
         row = con.execute(
