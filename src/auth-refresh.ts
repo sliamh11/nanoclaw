@@ -17,6 +17,7 @@
  *   0 — no-op (not yet expiring, lock held, or refresh succeeded)
  *   1 — refresh failed (message dropped to control-group IPC + macOS notif)
  */
+import { execFileSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 
@@ -63,15 +64,15 @@ function logLine(obj: Record<string, unknown>): void {
  * Returns undefined if the DB, table, or row doesn't exist (fresh install
  * or pre-migration state).
  */
-function findControlGroup(): { folder: string; jid: string } | undefined {
+async function findControlGroup(): Promise<
+  { folder: string; jid: string } | undefined
+> {
   const dbPath = path.join(STORE_DIR, 'messages.db');
   if (!fs.existsSync(dbPath)) return undefined;
   try {
-    // Lazy-require so the CLI doesn't pay the better-sqlite3 load cost
-    // on the happy path where no IPC drop is needed.
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const Database =
-      require('better-sqlite3') as typeof import('better-sqlite3');
+    // Lazy-load the native addon only when the failure path is hit,
+    // so fresh installs without better-sqlite3 built don't crash.
+    const { default: Database } = await import('better-sqlite3');
     const db = new Database(dbPath, { readonly: true, fileMustExist: true });
     try {
       const row = db
@@ -96,9 +97,9 @@ function findControlGroup(): { folder: string; jid: string } | undefined {
  * the failure. Falls back to a macOS desktop notification if no control
  * group is registered yet (fresh install).
  */
-function notifyFailure(reason: string): void {
+async function notifyFailure(reason: string): Promise<void> {
   const ts = Date.now();
-  const controlGroup = findControlGroup();
+  const controlGroup = await findControlGroup();
   if (controlGroup) {
     const messagesDir = path.join(
       DATA_DIR,
@@ -139,9 +140,6 @@ function notifyFailure(reason: string): void {
   if (IS_MACOS) {
     try {
       // Mirror scripts/log_review.py:409-414 notification style.
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const { execFileSync } =
-        require('child_process') as typeof import('child_process');
       execFileSync(
         'osascript',
         [
@@ -265,7 +263,7 @@ export async function runRefresh(opts: {
       reason: 'no-refresh-token',
     };
     logLine({ action: result.action, reason: result.reason });
-    notifyFailure(result.reason!);
+    await notifyFailure(result.reason!);
     return result;
   }
 
@@ -318,7 +316,7 @@ export async function runRefresh(opts: {
         reason: 'no-refresh-token',
       };
       logLine({ action: result.action, reason: result.reason });
-      notifyFailure(result.reason!);
+      await notifyFailure(result.reason!);
       return result;
     }
 
@@ -329,7 +327,7 @@ export async function runRefresh(opts: {
         reason: 'refresh-endpoint-rejected',
       };
       logLine({ action: result.action, reason: result.reason });
-      notifyFailure(result.reason!);
+      await notifyFailure(result.reason!);
       return result;
     }
 
@@ -368,7 +366,7 @@ async function main(): Promise<void> {
   } catch (err) {
     logLine({ action: 'crashed', err: String(err) });
     try {
-      notifyFailure('crashed');
+      await notifyFailure('crashed');
     } catch {
       // notification itself can't fail the process
     }
