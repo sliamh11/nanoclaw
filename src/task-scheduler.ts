@@ -2,6 +2,7 @@ import { ChildProcess } from 'child_process';
 import { CronExpressionParser } from 'cron-parser';
 import fs from 'fs';
 
+import { fireAndForget } from './async/index.js';
 import { ASSISTANT_NAME, SCHEDULER_POLL_INTERVAL, TIMEZONE } from './config.js';
 import {
   ContainerOutput,
@@ -273,7 +274,7 @@ export function startSchedulerLoop(deps: SchedulerDependencies): void {
     setTimeout(loop, SCHEDULER_POLL_INTERVAL);
   };
 
-  loop();
+  fireAndForget(() => loop(), { name: 'scheduler.loop' });
 }
 
 /** @internal - for tests only. */
