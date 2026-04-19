@@ -1,7 +1,7 @@
 ---
 governs:
   - .claude/skills
-last_verified: "2026-04-18"  # re-reviewed for slim vault restructure (compress/resume/setup now write STATE.md) — skill contract unchanged
+last_verified: "2026-04-19"  # re-reviewed after compress/resume robustness fixes — skill contract (what a skill PR contains) unchanged
 test_tasks:
   - "Create a new skill under .claude/skills/ that fetches recent Gmail threads"
   - "Add a new skill SKILL.md that documents log rotation steps"
