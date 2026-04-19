@@ -3,7 +3,7 @@ governs:
   - src/
   - setup/
   - packages/
-last_verified: "2026-04-19"  # re-reviewed for async-boundary helpers (PR #216) — deploy rules unchanged, async primitives are pure additions
+last_verified: "2026-04-19"  # re-reviewed for entry-point bootstrap wiring (PR #3/10) — deploy rules unchanged, harness adds attribution + crash logging without changing dist/ shape
 test_tasks:
   - "Deploy a hotfix to a running service and restart it after rebuilding dist/"
   - "Rebuild the WhatsApp MCP package and pick up the change live"
