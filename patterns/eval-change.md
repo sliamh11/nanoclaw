@@ -3,7 +3,7 @@ governs:
   - evolution/
   - eval/
   - scripts/memory_indexer.py
-last_verified: "2026-04-18"  # re-reviewed for Ollama batch embed + --add-dir (PR #198)
+last_verified: "2026-04-19"  # re-verified for Gemini cascade fix in memory_indexer (PR #213) — eval rules unchanged
 test_tasks:
   - "Add a new DeepEval metric under eval/ for the core_qa test suite"
   - "Add a new judge backend to evolution/judge/ using the provider registry"
