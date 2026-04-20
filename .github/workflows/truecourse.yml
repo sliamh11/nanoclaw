@@ -1,0 +1,137 @@
+name: TrueCourse Diff Gate
+
+# Static-analysis diff gate — fail the PR if it introduces NEW critical
+# violations vs origin/main. Existing baseline (4256+ violations as of
+# 2026-04-19) is intentionally ignored; the gate only catches regressions.
+#
+# How it works:
+#   1. Check out the PR head with full history (--diff needs to traverse).
+#   2. Switch to the merge-base with main, run `truecourse analyze` to
+#      establish the baseline analysis at .truecourse/analyses/.
+#   3. Switch back to the PR head, run `truecourse analyze --diff` which
+#      re-scans and compares against the just-stored baseline.
+#   4. Run `truecourse list --diff` to surface any new findings in the
+#      job log so the failure is actionable.
+#   5. Fail (exit 1) only on NEW criticals — new highs warn (visible in
+#      the log) but don't block merge.
+#
+# Isolated workflow file (separate from ci.yml) — truecourse@0.5.0 was
+# published 2026-04-19 and is bleeding-edge; if it crashes or proves
+# flaky, this workflow can be disabled with one click without touching
+# the main CI gate.
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  truecourse-diff:
+    name: TrueCourse --diff vs main
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out PR head with full history
+        uses: actions/checkout@v6
+        with:
+          # full history required so we can `git checkout` origin/main
+          # for the baseline scan and back to the PR head for the diff
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 20
+          cache: npm
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"  # truecourse bundles pyright
+
+      - name: Cache npx download cache
+        # truecourse@0.5.0 is ~43 MB unpacked (web-tree-sitter + pyright);
+        # caching by package-lock keeps cold starts under a second once warm.
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm/_npx
+          key: npx-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            npx-${{ runner.os }}-
+
+      - name: Install repo deps (incl. truecourse)
+        run: npm ci
+
+      - name: Install Claude Code CLI (truecourse runtime requirement)
+        # truecourse@0.5.0 hard-checks for the `claude` binary on PATH at
+        # startup, even with `enableLlmRules: false`. Installing the CLI
+        # (no auth, no API calls — only the binary-existence check matters
+        # for our deterministic-only configuration).
+        run: npm install -g @anthropic-ai/claude-code
+
+      - name: Configure truecourse (no LLM rules — deterministic only)
+        # The interactive "Run LLM-powered rules?" prompt would hang CI.
+        # Pre-creating the config file with enableLlmRules:false is the
+        # documented escape hatch (see .truecourse/config.json on first run).
+        run: |
+          mkdir -p .truecourse
+          echo '{"enableLlmRules": false}' > .truecourse/config.json
+
+      - name: Establish baseline (scan origin/main)
+        # Save the PR-head SHA so we can return to it after the baseline scan.
+        # `git stash --include-untracked` preserves the .truecourse/config.json
+        # we just wrote so it doesn't get clobbered by the checkout.
+        run: |
+          PR_HEAD=$(git rev-parse HEAD)
+          echo "PR_HEAD=$PR_HEAD" >> "$GITHUB_ENV"
+          git stash push --include-untracked -m "truecourse-config" || true
+          git checkout origin/main
+          git stash pop || true
+          npx truecourse analyze
+          # baseline now lives in .truecourse/analyses/ + LATEST.json points at it
+
+      - name: Switch back to PR head + run diff
+        # `analyze --diff` re-scans the working tree and compares against
+        # the stored LATEST analysis (the baseline from the previous step).
+        # Exits 0 on clean diff, non-zero on hard failure (e.g. missing
+        # baseline). New violations are reported in the summary line and
+        # exposed in detail by the `list --diff` step below.
+        id: diff
+        run: |
+          # Stash again so the freshly-built .truecourse/ baseline is
+          # preserved across the checkout back to PR_HEAD.
+          git stash push --include-untracked -m "truecourse-baseline" || true
+          git checkout "$PR_HEAD"
+          git stash pop || true
+          npx truecourse analyze --diff | tee /tmp/diff-summary.txt
+
+      - name: Show new + resolved violations
+        if: always()
+        run: npx truecourse list --diff --all || true
+
+      - name: Fail on new criticals
+        # `list --diff` prints lines like
+        # `[critical] <rule>` for new criticals. We grep for any new
+        # critical row in the diff output. New highs print as `[high] ...`
+        # but only WARN (logged here, not exit 1) per the error-discipline
+        # ADR — see "PR #10 addendum: TrueCourse CI gate".
+        run: |
+          DIFF_OUT=$(npx truecourse list --diff --all 2>/dev/null || true)
+
+          NEW_CRITICALS=$(printf '%s\n' "$DIFF_OUT" | grep -cE '^\+.*\[critical\]' || true)
+          NEW_HIGHS=$(printf '%s\n' "$DIFF_OUT" | grep -cE '^\+.*\[high\]' || true)
+
+          echo "::group::TrueCourse diff summary"
+          echo "New criticals: $NEW_CRITICALS"
+          echo "New highs: $NEW_HIGHS (warning only)"
+          echo "::endgroup::"
+
+          if [ "$NEW_HIGHS" -gt 0 ]; then
+            echo "::warning::TrueCourse: $NEW_HIGHS new high-severity finding(s) introduced — see job log + npx truecourse list --diff for detail"
+          fi
+
+          if [ "$NEW_CRITICALS" -gt 0 ]; then
+            echo "::error::TrueCourse: $NEW_CRITICALS new CRITICAL finding(s) introduced. Reproduce locally with: npx truecourse analyze --diff"
+            exit 1
+          fi
