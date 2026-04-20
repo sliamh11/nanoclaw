@@ -250,9 +250,6 @@ BEHAVIORAL_TESTS: dict[str, list[tuple[str, str]]] = {
     "claude_vault": [
         # Identity
         ("Where is the user located?", "Israel"),
-        # Personal identity/bio Q&A intentionally excluded from the public
-        # benchmark to avoid committing PII. See follow-up Slice C2 for moving
-        # personal benchmark cases to a gitignored file (src/private/ or similar).
         # Architecture
         ("What is the basic system architecture?", "Single Node.js process with skill-based channel system, messages route to Claude Agent SDK in containers"),
         ("What channels are supported?", "WhatsApp, Telegram, Slack, Discord, Gmail"),
@@ -268,7 +265,6 @@ BEHAVIORAL_TESTS: dict[str, list[tuple[str, str]]] = {
         ("What are the design principles?", "machine-adaptive, token-efficient, secure-by-default, performance-aware, no-db-deletion"),
         # Memory
         ("What is the memory startup loading sequence?", "CLAUDE.md always + warm (recent-days 3) + learnings + cold (query top 2 recency-boost)"),
-        # Trading Q&A excluded from public benchmark (personal portfolio).
         # Provider layers
         ("How many ABC+Registry provider layers exist?", "4: judge, generative, storage, auth"),
         # Task routing / debugging
@@ -279,7 +275,6 @@ BEHAVIORAL_TESTS: dict[str, list[tuple[str, str]]] = {
         ("How should I create a feature branch?", "Use git worktree add, never checkout in main repo"),
         ("What's the dev workflow sequence?", "plan -> branch -> implement -> test -> commit -> merge"),
         ("What must happen before committing code?", "Show commit msg and wait for explicit approval"),
-        # Courses Q&A excluded from public benchmark (specific enrollment).
         # Terminal
         ("What is the Ghostty terminal resolution?", "Retina 2x, 3448x2088 physical for 43x156 terminal"),
         # Skills
@@ -310,7 +305,6 @@ BEHAVIORAL_TESTS: dict[str, list[tuple[str, str]]] = {
         ("How to classify features before implementing?", "Classify as public or private first (feedback_public_vs_private)"),
         # Identity / persona
         ("Where to find user preferences and personality?", "Persona vault at ~/Desktop/... /Deus/Persona/INDEX.md"),
-        # Relationship/third-party Q&A excluded from public benchmark.
         # Monitoring
         ("What's the rule about background task monitoring?", "Check every 2-3 min; report status proactively (feedback_monitor_background + feedback_monitor_self)"),
         # Research

@@ -392,14 +392,10 @@ def test_behavioral_tests_has_required_keys():
 
 
 def test_behavioral_tests_claude_vault_count():
-    # Count reduced from 25 to 21 after removing 4 PII Q&A pairs
-    # (full name, education/employer, portfolio, course enrollment).
-    # Personal benchmark cases move to a gitignored fixture in follow-up Slice C2.
     assert len(cb.BEHAVIORAL_TESTS["claude_vault"]) == 21
 
 
 def test_behavioral_tests_memory_index_count():
-    # Count reduced from 25 to 24 after removing 1 relationship Q&A pair.
     assert len(cb.BEHAVIORAL_TESTS["memory_index"]) == 24
 
 
