@@ -63,6 +63,13 @@ jobs:
       - name: Install repo deps (incl. truecourse)
         run: npm ci
 
+      - name: Install Claude Code CLI (truecourse runtime requirement)
+        # truecourse@0.5.0 hard-checks for the `claude` binary on PATH at
+        # startup, even with `enableLlmRules: false`. Installing the CLI
+        # (no auth, no API calls — only the binary-existence check matters
+        # for our deterministic-only configuration).
+        run: npm install -g @anthropic-ai/claude-code
+
       - name: Configure truecourse (no LLM rules — deterministic only)
         # The interactive "Run LLM-powered rules?" prompt would hang CI.
         # Pre-creating the config file with enableLlmRules:false is the
