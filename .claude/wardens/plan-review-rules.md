@@ -89,3 +89,14 @@
 **Check:** Does the plan articulate how the change will be verified end-to-end? Can be existing tests, new tests, manual verification steps, or a benchmark — but *something* concrete.
 **Rule:** Every non-trivial plan answers "how will we know this works?" Unverifiable plans are incomplete plans.
 **Cite:** Phase 4 pattern from ExitPlanMode workflow; `feedback_predict_before_testing`
+
+## premise-verification
+**Severity:** blocking
+**Applies when:** Plan cites repo state as the problem — e.g. "X is tracked in git," "dep Y is unused," "dir Z is orphaned," "files are drifting," "A and B have diverged."
+**Check:** For each premise, is there a concrete verification command and its expected output? If absent, run the verification yourself before issuing SHIP.
+**Rule:** Repo-state premises must be verified, not assumed. Minimum checks by premise type:
+- "tracked" / "stop committing X" → `git ls-files <path>` (must return non-empty) and `git check-ignore -v <path>` (must return nothing).
+- "unused dep" → `grep -r '<pkg>' src/ scripts/ container/ packages/` returns no imports.
+- "orphan file" → `grep -r '<filename>' .` returns no callers across `.ts`, `.sh`, `.json`, `.py`, launchd plists, `package.json` scripts.
+- "drift between two paths" → grep for code that writes to the derived path (`cpSync`, `shutil.copytree`, `fs.mkdirSync` + write). If a writer exists, the divergence is a cache, not a bug — plan must address why the cache is wrong, not treat it as rot.
+**Cite:** Slice A postmortem (2026-04-20 — the agent-runner-src cache was wrongly flagged as tracked drift); system-prompt "Trust but verify."
