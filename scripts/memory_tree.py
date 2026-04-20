@@ -297,6 +297,9 @@ def open_db(db_path: Path = None) -> sqlite3.Connection:
     db.execute("CREATE INDEX IF NOT EXISTS idx_edges_dst ON edges(dst_id, kind)")
     db.execute("CREATE INDEX IF NOT EXISTS idx_edges_src ON edges(src_id, kind)")
     if sqlite_vec is not None:
+        # safe: EMBED_DIM is a module-level int constant defined at line 49
+        # of this file. SQLite cannot parameterize vec0 dimensions.
+        # See PR #9 in docs/decisions/error-discipline.md.
         db.execute(f"""
             CREATE VIRTUAL TABLE IF NOT EXISTS embeddings
             USING vec0(embedding float[{EMBED_DIM}])

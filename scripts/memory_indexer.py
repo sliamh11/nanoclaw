@@ -185,6 +185,9 @@ def open_db() -> sqlite3.Connection:
             decisions TEXT
         )
     """)
+    # safe: EMBED_DIM is a module-level int constant imported from
+    # evolution.config. SQLite cannot parameterize vec0 dimensions.
+    # See PR #9 in docs/decisions/error-discipline.md.
     db.execute(f"""
         CREATE VIRTUAL TABLE IF NOT EXISTS embeddings
         USING vec0(embedding float[{EMBED_DIM}])
@@ -199,6 +202,8 @@ def open_db() -> sqlite3.Connection:
         ("domain", "TEXT DEFAULT 'general'"),
     ]:
         try:
+            # safe: col + definition come from the literal tuple-list above.
+            # SQLite DDL cannot parameterize identifiers or column types.
             db.execute(f"ALTER TABLE entries ADD COLUMN {col} {definition}")
         except sqlite3.OperationalError:
             pass
@@ -326,6 +331,8 @@ def open_db() -> sqlite3.Connection:
         ("orphan_reason", "TEXT DEFAULT NULL"),
     ]:
         try:
+            # safe: col + definition come from the literal tuple-list above.
+            # SQLite DDL cannot parameterize identifiers or column types.
             db.execute(f"ALTER TABLE entries ADD COLUMN {col} {definition}")
         except sqlite3.OperationalError:
             pass
@@ -1012,6 +1019,9 @@ def cmd_query(query: str, top: int = 3, recency_boost: bool = False,
         where_clauses.append("e.date <= ?")
         params.append(as_of)
 
+    # safe: where_clauses is built from local literal-string fragments
+    # ("v.embedding MATCH ?", "k = ?", ..., "e.date <= ?"); user values
+    # bound through `params`. See PR #9 in docs/decisions/error-discipline.md.
     rows = db.execute(
         f"""
         SELECT e.path, e.date, e.tldr, e.topics, e.decisions, e.type,
@@ -2724,6 +2734,9 @@ def cmd_rebuild():
         # Derived tables (no primary user data) — safe to clear during rebuild
         for table in ["embeddings", "entries_fts", "entities", "relationships", "atom_entities"]:
             try:
+                # safe: `table` iterates the literal list above; SQLite cannot
+                # parameterize identifiers in DELETE FROM. The `[...]` quoting
+                # is belt-and-suspenders on an already-fixed schema-name set.
                 db.execute(f"DELETE FROM [{table}]")
             except sqlite3.OperationalError:
                 pass
