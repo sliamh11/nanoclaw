@@ -201,6 +201,26 @@ The actual risk — silent drift between the two copies — is closed mechanical
 
 If a future PR resolves the logger divergence (e.g., a `LogAdapter` shipped in another initiative, or the container gains pino), the extraction becomes straightforward and the mirror check can be retired. Until then, two files + one mechanical check is the proportionate trade-off.
 
+### PR #10 addendum: TrueCourse `--diff` CI gate
+
+PR #10 closes the 10-PR initiative by mechanically guarding against regressions: every PR re-runs TrueCourse against `origin/main` as a baseline and fails the build on **new criticals**. New highs warn (visible in the job log) but don't block merge.
+
+**Install:** `truecourse@0.5.0` (npm, MIT, by `mushgev`) is pinned in root `package.json` devDependencies. The CLI is also exposed via four `npm run truecourse:*` scripts (`analyze`, `diff`, `list`, `list-diff`) so contributors can reproduce CI failures locally with the exact same version that ran in GitHub Actions.
+
+**Workflow file:** `.github/workflows/truecourse.yml` runs in isolation from the main `ci.yml` job. The split was deliberate — truecourse@0.5.0 is bleeding-edge (published 2026-04-19) and the workflow can be disabled with one click without touching the main CI gate. The workflow:
+
+1. Checks out the PR head with `fetch-depth: 0`.
+2. Pre-creates `.truecourse/config.json` with `enableLlmRules: false` to skip the interactive "Run LLM-powered rules?" prompt that would otherwise hang CI. The config is preserved across the baseline checkout via `git stash --include-untracked`.
+3. Switches to `origin/main` and runs `truecourse analyze` — this writes the baseline to `.truecourse/analyses/<id>.json` and points `LATEST.json` at it.
+4. Switches back to the PR head and runs `truecourse analyze --diff` — re-scans the working tree and compares against the freshly-stored baseline.
+5. Surfaces the diff via `truecourse list --diff --all` and counts `[critical]`/`[high]` rows in the new-violations section. Exits 1 on any new critical; emits a `::warning::` annotation on any new high.
+
+**Baseline management:** `.truecourse/` is gitignored locally (the directory's own `.gitignore` excludes `analyses/`, `LATEST.json`, etc.). CI re-builds the baseline from scratch every run rather than committing it — this avoids baseline-rot (every refactor would otherwise need a baseline-update commit), at the cost of running `analyze` twice per PR (~28s + 28s, plus a cached `.npm/_npx/` install). The `actions/cache@v4` step keys on `package-lock.json` so cold starts only pay the unpack cost once per dep change.
+
+**Reproducing locally:** `npx truecourse analyze` once on `main` to build the baseline, then `npx truecourse analyze --diff` after your changes. The output mirrors what CI sees. `npx truecourse list --diff` shows the actual new findings.
+
+**What "criticals" means here:** TrueCourse classifies its 1083 deterministic rules into critical/high/medium/low by impact. Critical findings include `eval` injection, hardcoded secrets, command injection from user input, missing transaction boundaries on multi-statement writes, and similar production-fatal classes. The 87 critical findings on the 2026-04-19 baseline are mostly false positives or known-acceptable (placeholder OAuth, single-row table UPDATEs, rebuild DELETEs documented in `no-db-deletion.md`); the gate ignores them by design. **Only NEW criticals introduced by a PR diff fail the build.**
+
 ## For future contributors
 
 When you catch or throw an error in Deus:
@@ -212,6 +232,7 @@ When you catch or throw an error in Deus:
 5. **Static analyzer flagging a `.connect()` site as "missing error handler"?** Check the return type first. `Promise<T>` → structured `.catch()` or try/catch with an owner label (PR #6 pattern). `EventEmitter` → `.on('error', ...)`. SDK-internal transports (e.g. `StdioServerTransport`) wire their own stdin/stdout error listeners — leave them alone.
 6. **Writing Python in `scripts/`?** Never `datetime.now()`. Use `utc_now()` for internal timestamps, `local_now()` for user-facing strings (PR #8). The naming forces you to answer "moment or calendar day?".
 7. **Building SQL?** Always parameterize data values. Identifiers (table/column names) and DDL must come from a closed allow-list (a literal tuple in code) or pass through `_SAFE_IDENT` regex validation (PR #9). Annotate the unavoidable f-string `.execute()` sites with `# safe: <reason>`.
+8. **TrueCourse CI flagged your PR?** Reproduce locally with `npx truecourse analyze --diff` (after a baseline `npx truecourse analyze` on `main`). The workflow only fires on **new criticals** introduced by the PR; new highs warn but don't block. If the rule is a false positive, document the safety argument in code (`# safe:` for SQL, `// MIRROR-IGNORE-START` for mirrored files, etc.) so the next reviewer doesn't re-derive it.
 
 See `src/errors/index.ts` for the full API and `src/errors/index.test.ts` for examples.
 

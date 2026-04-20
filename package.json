@@ -30,7 +30,11 @@
     "pattern-contradictions": "python3 scripts/drift_check.py --contradictions",
     "benchmark:review": "python3 scripts/review_benchmark.py run --count 10",
     "benchmark:review:inject": "python3 scripts/review_benchmark.py inject --count 10",
-    "benchmark:review:revert": "python3 scripts/review_benchmark.py revert"
+    "benchmark:review:revert": "python3 scripts/review_benchmark.py revert",
+    "truecourse:analyze": "truecourse analyze",
+    "truecourse:diff": "truecourse analyze --diff",
+    "truecourse:list": "truecourse list",
+    "truecourse:list-diff": "truecourse list --diff"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
@@ -58,6 +62,7 @@
     "playwright": "^1.59.1",
     "prettier": "^3.8.2",
     "qrcode-terminal": "^0.12.0",
+    "truecourse": "0.5.0",
     "tsx": "^4.19.0",
     "typescript": "^6.0.2",
     "typescript-eslint": "^8.58.2",
