@@ -3,7 +3,7 @@ governs:
   - evolution/
   - eval/
   - scripts/memory_indexer.py
-last_verified: "2026-04-20"  # re-verified for non-evolution SQL injection annotations (PR #11) — scripts/memory_indexer.py has 5 # safe: comments added; eval rules unchanged
+last_verified: "2026-04-21"  # re-verified for PII scrub (PR #233) — eval rules unchanged
 test_tasks:
   - "Add a new DeepEval metric under eval/ for the core_qa test suite"
   - "Add a new judge backend to evolution/judge/ using the provider registry"
