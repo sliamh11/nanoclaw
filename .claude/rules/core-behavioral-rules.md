@@ -3,7 +3,7 @@
 # Each rule: what + why. Adding a rule requires justification in the PR.
 
 ## Data & Security
-- Never lose, overwrite, or downgrade user data. Merge, don't replace. (Prior incident: 566 atoms silently reset.)
+- Never lose, overwrite, or downgrade user data. Merge, don't replace.
 - Audit security before every commit. Treat the repo as public.
 - Public repo changes must be user-agnostic. Personal fixtures/IDs stay in local paths.
 - Private code goes to src/private/ (gitignored). Never PR private features.

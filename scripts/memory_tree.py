@@ -668,7 +668,10 @@ def reembed_file(vault: Path, rel_path: str, db: sqlite3.Connection) -> str:
             ext_dir = os.environ.get(EXTERNAL_DIR_ENV)
             if ext_dir:
                 filename = rel_path[len(EXTERNAL_NAMESPACE):]
-                p = Path(ext_dir).expanduser() / filename
+                base = Path(ext_dir).expanduser().resolve()
+                p = (base / filename).resolve()
+                if not p.is_relative_to(base):
+                    return "missing"
                 if not p.exists():
                     return "missing"
             else:

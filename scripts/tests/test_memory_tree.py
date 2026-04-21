@@ -431,6 +431,16 @@ class TestReembed:
         status = mt.reembed_file(fake_vault, "Persona/life/household.md", tmp_db)
         assert status == "reembedded"
 
+    def test_path_traversal_blocked(self, tmp_db, fake_vault, stub_embed, tmp_path, monkeypatch):
+        mt.build_tree(fake_vault, tmp_db)
+        ext_dir = tmp_path / "ext"
+        ext_dir.mkdir()
+        monkeypatch.setenv(mt.EXTERNAL_DIR_ENV, str(ext_dir))
+        secret = tmp_path / "secret.md"
+        secret.write_text("---\ndescription: leaked\n---\nsensitive data")
+        status = mt.reembed_file(fake_vault, "auto-memory/../secret.md", tmp_db)
+        assert status in ("missing", "not_in_tree")
+
 
 # ── Check ─────────────────────────────────────────────────────────────────────
 
