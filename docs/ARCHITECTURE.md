@@ -146,14 +146,14 @@ graph LR
         S_GM["@deus-ai/gmail-mcp"]
     end
 
-    CORE["@deus-ai/channel-core<br/>registerCommonTools()"]
+    CORE["@deus-ai/channel-core<br/>registerCommonTools"]
 
     IDX -->|side-effect import| F_WA & F_TG & F_SL & F_DC & F_GM
-    F_WA -->|registerChannel()| REG
-    F_TG -->|registerChannel()| REG
-    F_SL -->|registerChannel()| REG
-    F_DC -->|registerChannel()| REG
-    F_GM -->|registerChannel()| REG
+    F_WA -->|register| REG
+    F_TG -->|register| REG
+    F_SL -->|register| REG
+    F_DC -->|register| REG
+    F_GM -->|register| REG
     F_WA -->|spawn| S_WA
     F_TG -->|spawn| S_TG
     F_SL -->|spawn| S_SL
