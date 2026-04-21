@@ -508,7 +508,8 @@ def build_tree(
 
     if rebuild:
         current_active = db.execute(
-            "SELECT COUNT(*) FROM nodes WHERE orphaned_at IS NULL AND path NOT LIKE 'auto-memory/%'"
+            "SELECT COUNT(*) FROM nodes WHERE orphaned_at IS NULL AND path NOT LIKE ? || '%'",
+            (EXTERNAL_NAMESPACE,),
         ).fetchone()[0]
         threshold = max(1, int(current_active * REBUILD_MIN_RETENTION))
         if current_active > 0 and len(node_inputs) < threshold and not force:
@@ -530,8 +531,8 @@ def build_tree(
         now_iso = _utc_iso()
         db.execute(
             "UPDATE nodes SET orphaned_at = ?, orphan_reason = 'rebuild' "
-            "WHERE orphaned_at IS NULL AND path NOT LIKE 'auto-memory/%'",
-            (now_iso,),
+            "WHERE orphaned_at IS NULL AND path NOT LIKE ? || '%'",
+            (now_iso, EXTERNAL_NAMESPACE),
         )
         db.execute(
             "UPDATE edges SET expired_at = ? WHERE expired_at IS NULL", (now_iso,)
@@ -1206,7 +1207,7 @@ def reindex_external(
         if p.name == "MEMORY.md":
             continue
 
-        ns_path = EXTERNAL_NAMESPACE + p.name
+        ns_path = EXTERNAL_NAMESPACE + str(rel_to_ext)
         walked_paths.add(ns_path)
 
         try:
@@ -1261,7 +1262,8 @@ def reindex_external(
     # Orphan external nodes no longer on disk.
     now_iso = _utc_iso()
     ext_active = db.execute(
-        "SELECT id, path FROM nodes WHERE orphaned_at IS NULL AND path LIKE 'auto-memory/%'"
+        "SELECT id, path FROM nodes WHERE orphaned_at IS NULL AND path LIKE ? || '%'",
+        (EXTERNAL_NAMESPACE,),
     ).fetchall()
     for (nid, npath) in ext_active:
         if npath not in walked_paths:

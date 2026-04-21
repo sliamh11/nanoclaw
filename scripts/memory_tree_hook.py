@@ -79,10 +79,13 @@ def dispatch(data: dict) -> str:
             try:
                 db = mt.open_db()
                 status = mt.reembed_file(mt.resolve_vault_path(), ns_path, db)
+                if status == "reembedded":
+                    return "ext_reembedded"
                 if status == "not_in_tree":
                     return "ext_not_in_tree"
-                return f"ext_{status}" if status != "unchanged" else status
-            except Exception:
+                return status
+            except Exception as exc:
+                print(f"WARN: ext reembed failed: {exc}", file=sys.stderr)
                 return "embed_failed"
         except (ValueError, OSError):
             pass
