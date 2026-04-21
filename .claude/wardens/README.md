@@ -8,6 +8,7 @@ Specialized review agents that guard the codebase. Validator wardens check corre
 | **code-reviewer** | Validator | Sonnet | `code-review-rules.md` | Manual: `Agent(subagent_type="code-reviewer", prompt="review my changes")` |
 | **threat-modeler** | Validator | Opus | `threat-modeling-rules.md` | Manual: invoke when plan touches auth, credentials, external APIs, or trust boundaries |
 | **architecture-snapshot** | Generator | Sonnet | `architecture-schema.md` | Manual: `Agent(subagent_type="architecture-snapshot", prompt="snapshot the architecture")` |
+| **session-retrospective** | Generator | Opus | `retrospective-schema.md` | Manual: `Agent(subagent_type="session-retrospective", prompt="retrospective for last 20 sessions")` |
 
 ## Directory
 
@@ -16,13 +17,15 @@ Specialized review agents that guard the codebase. Validator wardens check corre
   plan-reviewer.md          ← agent definition (read by Claude Code)
   code-reviewer.md          ← agent definition
   threat-modeler.md         ← agent definition
-  architecture-snapshot.md  ← agent definition
+  architecture-snapshot.md   ← agent definition
+  session-retrospective.md  ← agent definition
 ~/deus/.claude/wardens/
   README.md                 ← this file
   plan-review-rules.md      ← rules loaded by plan-reviewer
   code-review-rules.md      ← rules loaded by code-reviewer
   threat-modeling-rules.md  ← rules loaded by threat-modeler
   architecture-schema.md    ← output schema for architecture-snapshot
+  retrospective-schema.md   ← output schema for session-retrospective
 ```
 
 ## How the plan-review gate works
