@@ -10,6 +10,8 @@ const envConfig = readEnvFile([
   'ASSISTANT_NAME',
   'ASSISTANT_HAS_OWN_NUMBER',
   'DEUS_AGENT_BACKEND',
+  'DEUS_CONTEXT_FILE_MAX_CHARS',
+  'DEUS_OPENAI_MODEL',
 ]);
 
 export const ASSISTANT_NAME =
@@ -91,3 +93,11 @@ const rawAgentBackend = (
 ).toLowerCase();
 export const DEFAULT_AGENT_BACKEND =
   rawAgentBackend === 'openai' ? 'openai' : 'claude';
+
+export const DEUS_OPENAI_MODEL =
+  process.env.DEUS_OPENAI_MODEL || envConfig.DEUS_OPENAI_MODEL || '';
+
+export const DEUS_CONTEXT_FILE_MAX_CHARS =
+  process.env.DEUS_CONTEXT_FILE_MAX_CHARS ||
+  envConfig.DEUS_CONTEXT_FILE_MAX_CHARS ||
+  '';

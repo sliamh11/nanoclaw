@@ -16,10 +16,12 @@ function writeContextFile(relativePath: string, content: string): void {
 
 describe('context registry', () => {
   beforeEach(() => {
+    delete process.env.DEUS_CONTEXT_FILE_MAX_CHARS;
     workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'deus-context-'));
   });
 
   afterEach(() => {
+    delete process.env.DEUS_CONTEXT_FILE_MAX_CHARS;
     fs.rmSync(workspaceRoot, { recursive: true, force: true });
   });
 
@@ -99,6 +101,19 @@ describe('context registry', () => {
     ).toEqual([
       '=== PROJECT RULES: docs/AGENT_DEUS_101.md ===\ndeus onboarding',
     ]);
+  });
+
+  it('honors DEUS_CONTEXT_FILE_MAX_CHARS for registered context surfaces', () => {
+    process.env.DEUS_CONTEXT_FILE_MAX_CHARS = '8';
+    writeContextFile('group/CLAUDE.md', '1234567890');
+
+    expect(
+      loadRegisteredContextFiles({
+        isControlGroup: false,
+        hasProject: false,
+        workspaceRoot,
+      }),
+    ).toEqual(['=== GROUP RULES: CLAUDE.md ===\n12345678']);
   });
 
   it('keeps Claude system append to non-native surfaces only', () => {

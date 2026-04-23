@@ -15,8 +15,9 @@ preserve.
 
 ## Quick Context
 
-Single Node.js process with a skill-based channel system. Channels (WhatsApp,
-Telegram, Slack, Discord, Gmail) are skills that self-register at startup.
+Single Node.js process with a skill-based channel system. Supported channels
+include WhatsApp, Telegram, Slack, Discord, and Gmail; each channel is a skill
+that self-registers at startup.
 Messages route to a backend-neutral agent runtime running in isolated
 containers. Claude Code is the default compatibility backend; Codex/OpenAI is
 an opt-in backend being brought to parity. Each group has isolated filesystem
@@ -63,5 +64,5 @@ npm run build        # Compile TypeScript
 ./container/build.sh # Rebuild agent container
 ```
 
-See [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) for key files, service
+Further dev info is in [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) for key files, service
 management, and troubleshooting.

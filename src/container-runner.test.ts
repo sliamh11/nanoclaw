@@ -22,6 +22,8 @@ vi.mock('./config.js', () => ({
   CONFIG_DIR: '/tmp/deus-test-config',
   CREDENTIAL_PROXY_PORT: 3001,
   DATA_DIR: '/tmp/deus-test-data',
+  DEUS_CONTEXT_FILE_MAX_CHARS: '12345',
+  DEUS_OPENAI_MODEL: 'gpt-test-model',
   GROUPS_DIR: '/tmp/deus-test-groups',
   HOME_DIR: '/tmp/deus-test-home',
   IDLE_TIMEOUT: 1800000, // 30min
@@ -1260,6 +1262,8 @@ describe.skipIf(onWindows)('OpenAI backend container env', () => {
       'OPENAI_BASE_URL=http://host.docker.internal:3001/openai',
     );
     expect(args).toContain('OPENAI_API_KEY=placeholder');
+    expect(args).toContain('DEUS_OPENAI_MODEL=gpt-test-model');
+    expect(args).toContain('DEUS_CONTEXT_FILE_MAX_CHARS=12345');
     expect(args.join(' ')).not.toContain('ANTHROPIC_BASE_URL=');
     expect(args.join(' ')).not.toContain('ANTHROPIC_API_KEY=');
   });

@@ -18,6 +18,8 @@ import {
   CONTAINER_MAX_OUTPUT_SIZE,
   CONTAINER_TIMEOUT,
   CREDENTIAL_PROXY_PORT,
+  DEUS_CONTEXT_FILE_MAX_CHARS,
+  DEUS_OPENAI_MODEL,
   IDLE_TIMEOUT,
   TIMEZONE,
 } from './config.js';
@@ -76,6 +78,12 @@ function buildContainerArgs(
 
   // Pass host timezone so container's local time matches the user's
   args.push('-e', `TZ=${TIMEZONE}`);
+  if (DEUS_CONTEXT_FILE_MAX_CHARS) {
+    args.push(
+      '-e',
+      `DEUS_CONTEXT_FILE_MAX_CHARS=${DEUS_CONTEXT_FILE_MAX_CHARS}`,
+    );
+  }
 
   // Inject per-channel memory privacy allowlist if configured
   if (group?.containerConfig?.memoryPrivacy?.length) {
@@ -91,6 +99,9 @@ function buildContainerArgs(
       `OPENAI_BASE_URL=http://${CONTAINER_HOST_GATEWAY}:${CREDENTIAL_PROXY_PORT}/openai`,
     );
     args.push('-e', 'OPENAI_API_KEY=placeholder');
+    if (DEUS_OPENAI_MODEL) {
+      args.push('-e', `DEUS_OPENAI_MODEL=${DEUS_OPENAI_MODEL}`);
+    }
   } else {
     // Route API traffic through the credential proxy (containers never see real secrets)
     args.push(

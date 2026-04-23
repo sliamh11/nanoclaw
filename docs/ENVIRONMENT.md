@@ -29,6 +29,7 @@ All variables are set in `.env` at the project root. Copy `.env.example` to get 
 | `DEUS_CLI_AGENT` | `DEUS_AGENT_BACKEND` | Default `deus` global command agent: `claude`, `codex`, or `openai` |
 | `DEUS_OPENAI_MODEL` | `gpt-5.2` | Default OpenAI model for the `openai` agent backend |
 | `DEUS_CODEX_MODEL` | `DEUS_OPENAI_MODEL` | Optional Codex CLI model override for the `deus codex` launcher |
+| `DEUS_CONTEXT_FILE_MAX_CHARS` | `20000` | Per-file cap for registered agent context surfaces before provider tokenization |
 | `OPENAI_API_KEY` | — | OpenAI API key for the `openai` agent backend and Whisper transcription |
 | `OPENAI_BASE_URL` | `https://api.openai.com` | Optional OpenAI-compatible upstream base URL for the credential proxy |
 | `GEMINI_API_KEY` | — | Gemini API key for embeddings, memory indexer, and production judge |

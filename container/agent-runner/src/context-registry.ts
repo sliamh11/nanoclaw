@@ -149,7 +149,22 @@ function extraContextEntries(root: string): ContextEntry[] {
     });
 }
 
-function readOptionalFile(filePath: string, maxChars = 60_000): string {
+const DEFAULT_CONTEXT_FILE_MAX_CHARS = 20_000;
+
+function contextFileMaxChars(): number {
+  const parsed = Number.parseInt(
+    process.env.DEUS_CONTEXT_FILE_MAX_CHARS || '',
+    10,
+  );
+  return Number.isFinite(parsed) && parsed > 0
+    ? parsed
+    : DEFAULT_CONTEXT_FILE_MAX_CHARS;
+}
+
+function readOptionalFile(
+  filePath: string,
+  maxChars = contextFileMaxChars(),
+): string {
   try {
     if (!fs.existsSync(filePath)) return '';
     return fs.readFileSync(filePath, 'utf-8').slice(0, maxChars);

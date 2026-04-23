@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  assertOpenAIResponse,
   parseOpenAISessionMetadata,
   shouldResumeOpenAIResponse,
 } from './openai-backend.js';
@@ -108,5 +109,22 @@ describe('OpenAI backend safety helpers', () => {
     expect(shouldResumeOpenAIResponse('resp_123')).toBe(true);
     expect(shouldResumeOpenAIResponse('openai-compact-1')).toBe(false);
     expect(shouldResumeOpenAIResponse(undefined)).toBe(false);
+  });
+
+  it('validates OpenAI response ids and output item shapes at the boundary', () => {
+    expect(
+      assertOpenAIResponse({
+        id: 'resp_123',
+        output: [{ type: 'message', content: [] }],
+      }),
+    ).toEqual({
+      id: 'resp_123',
+      output: [{ type: 'message', content: [] }],
+      output_text: undefined,
+    });
+    expect(() => assertOpenAIResponse({ output: [] })).toThrow(/valid id/);
+    expect(() =>
+      assertOpenAIResponse({ id: 'resp_123', output: ['bad'] }),
+    ).toThrow(/output item/);
   });
 });

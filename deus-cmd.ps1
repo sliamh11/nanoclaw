@@ -421,25 +421,17 @@ $gitContext
 
 # -- Commands -----------------------------------------------------------------
 
+if ($Command.ToLower() -in @("codex", "openai", "claude")) {
+    $env:DEUS_CLI_AGENT = if ($Command.ToLower() -eq "claude") { "claude" } else { "codex" }
+    if ($args.Count -gt 0) {
+        $Command = $args[0]
+        $args = if ($args.Count -gt 1) { $args[1..($args.Count - 1)] } else { @() }
+    } else {
+        $Command = ""
+    }
+}
+
 switch ($Command.ToLower()) {
-    "codex" {
-        $env:DEUS_CLI_AGENT = "codex"
-        $target = if ($args.Count -gt 0 -and $args[0].ToLower() -eq "home") { $DeusHome } else { (Get-Location).Path }
-        Invoke-ClaudeWithContext -WorkDir $target
-    }
-
-    "openai" {
-        $env:DEUS_CLI_AGENT = "codex"
-        $target = if ($args.Count -gt 0 -and $args[0].ToLower() -eq "home") { $DeusHome } else { (Get-Location).Path }
-        Invoke-ClaudeWithContext -WorkDir $target
-    }
-
-    "claude" {
-        $env:DEUS_CLI_AGENT = "claude"
-        $target = if ($args.Count -gt 0 -and $args[0].ToLower() -eq "home") { $DeusHome } else { (Get-Location).Path }
-        Invoke-ClaudeWithContext -WorkDir $target
-    }
-
     "auth" {
         # Validate credentials before restarting
         $credPath = "$env:USERPROFILE\.claude\.credentials.json"

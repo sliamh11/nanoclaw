@@ -103,6 +103,38 @@ function isControlGroup(containerInput: ContainerInput): boolean {
   return containerInput.isControlGroup ?? containerInput.isMain ?? false;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === 'object');
+}
+
+export function assertOpenAIResponse(value: unknown): OpenAIResponse {
+  if (!isRecord(value)) {
+    throw new Error('OpenAI response payload was not an object');
+  }
+
+  if (typeof value.id !== 'string' || value.id.length === 0) {
+    throw new Error('OpenAI response payload did not include a valid id');
+  }
+  if (value.output !== undefined && !Array.isArray(value.output)) {
+    throw new Error('OpenAI response payload included invalid output');
+  }
+  if (Array.isArray(value.output) && !value.output.every(isRecord)) {
+    throw new Error('OpenAI response payload included invalid output item');
+  }
+  if (
+    value.output_text !== undefined &&
+    typeof value.output_text !== 'string'
+  ) {
+    throw new Error('OpenAI response payload included invalid output_text');
+  }
+
+  return {
+    id: value.id,
+    output: value.output,
+    output_text: value.output_text,
+  };
+}
+
 function getRuntimeContext(containerInput: ContainerInput): {
   cwd: string;
   systemInstructions: string;
@@ -244,7 +276,7 @@ async function createResponse(
       `OpenAI response failed (${res.status}): ${text.slice(0, 300)}`,
     );
   }
-  return (await res.json()) as OpenAIResponse;
+  return assertOpenAIResponse(await res.json());
 }
 
 async function runSingleTurn(

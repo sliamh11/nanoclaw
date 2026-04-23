@@ -23,6 +23,13 @@ Context and rules are provider-neutral. Adapters must load the same Deus memory/
 
 Current implementation scope is intentionally phased: this change lands the backend-aware session/config/auth/context contracts and an opt-in OpenAI/Codex adapter foundation. Full OpenAI Agents SDK sessions, handoffs, and tracing remain parity work before OpenAI becomes a default backend.
 
+## Alternatives Considered
+
+- Keep Claude-specific runtime logic and add OpenAI beside it. Rejected because memory, scheduling, IPC, and tool semantics would drift across duplicated runners.
+- Rename the vault and root instruction files away from Claude conventions immediately. Rejected because `CLAUDE.md` remains part of the live Claude Code compatibility contract during the migration.
+- Rely on provider-hosted tools for OpenAI parity. Rejected because Deus-owned tools are the stable product surface; provider-native tools can be accelerators later, not the source of truth.
+- Introduce a generic runtime contract and migrate Claude through the same contract. Chosen because it preserves current behavior while moving provider lock-in into adapters instead of product architecture.
+
 ## Consequences
 
 - Claude remains the safest default path and must not regress.
