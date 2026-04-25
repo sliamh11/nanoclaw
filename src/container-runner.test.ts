@@ -22,6 +22,8 @@ vi.mock('./config.js', () => ({
   CONFIG_DIR: '/tmp/deus-test-config',
   CREDENTIAL_PROXY_PORT: 3001,
   DATA_DIR: '/tmp/deus-test-data',
+  DEUS_CONTEXT_FILE_MAX_CHARS: '12345',
+  DEUS_OPENAI_MODEL: 'gpt-test-model',
   GROUPS_DIR: '/tmp/deus-test-groups',
   HOME_DIR: '/tmp/deus-test-home',
   IDLE_TIMEOUT: 1800000, // 30min
@@ -1203,5 +1205,66 @@ describe.skipIf(onWindows)('OAuth session-based auth', () => {
 
     // Restore default
     vi.mocked(detectAuthMode).mockReturnValue('api-key');
+  });
+});
+
+describe.skipIf(onWindows)('OpenAI backend container env', () => {
+  beforeEach(() => {
+    vi.useRealTimers();
+    fakeProc = createFakeProcess();
+
+    const fsMocked = vi.mocked((fsMod as any).default as typeof fsMod);
+    fsMocked.existsSync.mockReset();
+    fsMocked.existsSync.mockReturnValue(false);
+    fsMocked.mkdirSync.mockReset();
+    fsMocked.writeFileSync.mockReset();
+    fsMocked.readdirSync.mockReset();
+    fsMocked.readdirSync.mockReturnValue([]);
+    fsMocked.statSync.mockReset();
+    fsMocked.statSync.mockReturnValue({
+      isDirectory: () => false,
+    } as ReturnType<typeof fsMod.statSync>);
+
+    vi.mocked(getProjectById).mockReturnValue(undefined);
+    vi.mocked(childProcess.spawn).mockReturnValue(
+      fakeProc as unknown as ReturnType<typeof childProcess.spawn>,
+    );
+  });
+
+  it('injects OpenAI proxy env vars without Anthropic env vars', async () => {
+    const group: RegisteredGroup = {
+      name: 'Main',
+      folder: 'main-group',
+      trigger: '@Deus',
+      added_at: new Date().toISOString(),
+      isControlGroup: true,
+    };
+
+    setImmediate(() => fakeProc.emit('close', 0));
+
+    await runContainerAgent(
+      group,
+      {
+        prompt: 'test',
+        backend: 'openai',
+        groupFolder: group.folder,
+        chatJid: 'x@g.us',
+        isControlGroup: true,
+      },
+      () => {},
+    );
+
+    const spawnMock = vi.mocked(childProcess.spawn);
+    const lastCall = spawnMock.mock.calls[spawnMock.mock.calls.length - 1];
+    const args = lastCall[1] as string[];
+
+    expect(args).toContain(
+      'OPENAI_BASE_URL=http://host.docker.internal:3001/openai',
+    );
+    expect(args).toContain('OPENAI_API_KEY=placeholder');
+    expect(args).toContain('DEUS_OPENAI_MODEL=gpt-test-model');
+    expect(args).toContain('DEUS_CONTEXT_FILE_MAX_CHARS=12345');
+    expect(args.join(' ')).not.toContain('ANTHROPIC_BASE_URL=');
+    expect(args.join(' ')).not.toContain('ANTHROPIC_API_KEY=');
   });
 });
