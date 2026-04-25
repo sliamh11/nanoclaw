@@ -857,6 +857,17 @@ async function main(): Promise<void> {
   // No real secrets exist in the container environment.
   const sdkEnv: Record<string, string | undefined> = { ...process.env };
 
+  // Forward proxy auth token to the Claude SDK via ANTHROPIC_CUSTOM_HEADERS.
+  // The SDK parses this env var as newline-separated "key: value" pairs and
+  // merges them into every upstream API request.
+  if (process.env.DEUS_PROXY_TOKEN) {
+    const existing = sdkEnv.ANTHROPIC_CUSTOM_HEADERS || '';
+    const proxyHeader = `x-deus-proxy-token: ${process.env.DEUS_PROXY_TOKEN}`;
+    sdkEnv.ANTHROPIC_CUSTOM_HEADERS = existing
+      ? `${existing}\n${proxyHeader}`
+      : proxyHeader;
+  }
+
   const __dirname = path.dirname(fileURLToPath(import.meta.url));
   const mcpServerPath = path.join(__dirname, 'ipc-mcp-stdio.js');
 

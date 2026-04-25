@@ -20,6 +20,7 @@ import {
   CREDENTIAL_PROXY_PORT,
   DEUS_CONTEXT_FILE_MAX_CHARS,
   DEUS_OPENAI_MODEL,
+  DEUS_PROXY_TOKEN,
   IDLE_TIMEOUT,
   TIMEZONE,
 } from './config.js';
@@ -78,6 +79,7 @@ function buildContainerArgs(
 
   // Pass host timezone so container's local time matches the user's
   args.push('-e', `TZ=${TIMEZONE}`);
+  args.push('-e', `DEUS_PROXY_TOKEN=${DEUS_PROXY_TOKEN}`);
   if (DEUS_CONTEXT_FILE_MAX_CHARS) {
     args.push(
       '-e',

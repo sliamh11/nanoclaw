@@ -32,11 +32,13 @@ vi.mock('./config.js', () => ({
   DATA_DIR: '/tmp/deus-test-data',
   DEUS_CONTEXT_FILE_MAX_CHARS: '12345',
   DEUS_OPENAI_MODEL: 'gpt-test-model',
+  DEUS_PROXY_TOKEN: 'test-proxy-token-for-containers',
   GROUPS_DIR: '/tmp/deus-test-groups',
   HOME_DIR: '/tmp/deus-test-home',
   IDLE_TIMEOUT: 1800000, // 30min
   TIMEZONE: 'America/Los_Angeles',
 }));
+const TEST_PROXY_TOKEN = 'test-proxy-token-for-containers';
 
 // Mock logger
 vi.mock('./logger.js', () => ({
@@ -1442,5 +1444,13 @@ describe.skipIf(onWindows)('Backend parity — system-level equivalence', () => 
 
     expect(claudeEnv.get('ANTHROPIC_BASE_URL')).toContain(':3001');
     expect(openaiEnv.get('OPENAI_BASE_URL')).toContain(':3001');
+  });
+
+  it('both receive DEUS_PROXY_TOKEN for proxy authentication', () => {
+    const claudeEnv = extractEnvVars(claudeArgs);
+    const openaiEnv = extractEnvVars(openaiArgs);
+
+    expect(claudeEnv.get('DEUS_PROXY_TOKEN')).toBe(TEST_PROXY_TOKEN);
+    expect(openaiEnv.get('DEUS_PROXY_TOKEN')).toBe(TEST_PROXY_TOKEN);
   });
 });

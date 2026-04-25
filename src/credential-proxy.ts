@@ -18,6 +18,7 @@
 import { createServer, Server } from 'http';
 import { request as httpsRequest } from 'https';
 import { request as httpRequest, RequestOptions } from 'http';
+import { DEUS_PROXY_TOKEN, DEUS_PROXY_AUTH_ENABLED } from './config.js';
 import { readEnvFile } from './env.js';
 import { logger } from './logger.js';
 import {
@@ -93,6 +94,22 @@ export function startCredentialProxy(
       req.on('data', (c) => chunks.push(c));
       req.on('end', () => {
         const body = Buffer.concat(chunks);
+
+        if (DEUS_PROXY_AUTH_ENABLED) {
+          const token = req.headers['x-deus-proxy-token'];
+          if (token !== DEUS_PROXY_TOKEN) {
+            logger.warn(
+              { url: req.url, hasToken: !!token },
+              'Credential proxy rejected unauthenticated request',
+            );
+            res.writeHead(401);
+            res.end('Unauthorized');
+            return;
+          }
+        }
+
+        // Strip the proxy auth header before forwarding upstream
+        delete req.headers['x-deus-proxy-token'];
 
         // Resolve which provider handles this request
         let provider: AuthProvider;
