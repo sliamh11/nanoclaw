@@ -108,9 +108,9 @@ A fresh clone has **zero channels** — you add only the ones you need:
 
 ## Architecture
 
-One Node.js process on the host. Each conversation group runs in its own Linux container with an isolated filesystem. Containers never see API keys -- all calls route through a credential proxy that injects credentials at request time.
+One Node.js process on the host. Each conversation group runs in its own Linux container with an isolated filesystem. Containers never see API keys -- all calls route through a credential proxy that injects credentials at request time. The agent runtime is backend-neutral: Claude is the default, OpenAI is opt-in, and new backends can be added without changing the core.
 
-See **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** for the full reference with Mermaid diagrams covering the system overview, message flow, channel system, container mounts, memory retrieval, evolution loop, security model, and eval layer.
+See **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** for the full reference with Mermaid diagrams. See **[docs/MULTI_BACKEND.md](docs/MULTI_BACKEND.md)** for how to use different AI backends.
 
 ---
 

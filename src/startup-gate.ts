@@ -19,6 +19,7 @@ import {
   hasContainerImage,
   countRegisteredGroups,
 } from './checks.js';
+import { DEFAULT_AGENT_BACKEND } from './config.js';
 import { logger } from './logger.js';
 import { containerBuildHint } from './platform.js';
 
@@ -129,6 +130,17 @@ registerStartupCheck({
     level: 'suggest',
     ok: countRegisteredGroups() > 0,
     hint: 'No groups registered yet. Use /setup to add your first group. (This is normal for fresh installations.)',
+  }),
+});
+
+registerStartupCheck({
+  name: 'Agent backend',
+  level: 'suggest',
+  run: () => ({
+    name: 'Agent backend',
+    level: 'suggest',
+    ok: DEFAULT_AGENT_BACKEND === 'claude',
+    hint: `Using "${DEFAULT_AGENT_BACKEND}" backend. Parity with Claude is in progress — see docs/MULTI_BACKEND.md for known gaps.`,
   }),
 });
 
