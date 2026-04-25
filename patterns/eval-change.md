@@ -3,7 +3,7 @@ governs:
   - evolution/
   - eval/
   - scripts/memory_indexer.py
-last_verified: "2026-04-25"
+last_verified: "2026-04-25" # parity-testing
 test_tasks:
   - "Add a new DeepEval metric under eval/ for the core_qa test suite"
   - "Add a new judge backend to evolution/judge/ using the provider registry"
