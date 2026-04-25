@@ -6,6 +6,11 @@ import { request as httpsRequest } from 'https';
 import net, { type LookupFunction } from 'net';
 import path from 'path';
 
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import {
+  StdioClientTransport,
+  type StdioServerParameters,
+} from '@modelcontextprotocol/sdk/client/stdio.js';
 import { CronExpressionParser } from 'cron-parser';
 
 export type AgentBackendName = 'claude' | 'openai';
@@ -20,6 +25,31 @@ export interface ToolBrokerContainerInput {
 export interface ToolBrokerContext {
   cwd: string;
   containerInput: ToolBrokerContainerInput;
+}
+
+export interface OpenAIFunctionToolDefinition {
+  type: 'function';
+  name: string;
+  description: string;
+  parameters: Record<string, unknown>;
+}
+
+export interface OpenAIMcpServerConfig {
+  serverName: string;
+  command: string;
+  args?: string[];
+  env?: Record<string, string>;
+  cwd?: string;
+  required?: boolean;
+}
+
+export interface OpenAIMcpToolBridge {
+  definitions: OpenAIFunctionToolDefinition[];
+  execute(
+    name: string,
+    args: Record<string, unknown>,
+  ): Promise<Record<string, unknown> | null>;
+  close(): Promise<void>;
 }
 
 const IPC_DIR = '/workspace/ipc';
@@ -311,7 +341,9 @@ function schema(properties: Record<string, unknown>, required: string[]) {
   };
 }
 
-export function getOpenAIToolDefinitions() {
+export function getOpenAIToolDefinitions(
+  extraTools: OpenAIFunctionToolDefinition[] = [],
+): OpenAIFunctionToolDefinition[] {
   return [
     {
       type: 'function',
@@ -487,7 +519,126 @@ export function getOpenAIToolDefinitions() {
         ['jid', 'name', 'folder', 'trigger'],
       ),
     },
+    ...extraTools,
   ];
+}
+
+export function buildOpenAIMcpToolName(
+  serverName: string,
+  toolName: string,
+): string {
+  return `mcp__${serverName}__${toolName}`;
+}
+
+function normalizeMcpInputSchema(
+  inputSchema: Record<string, unknown> | undefined,
+): Record<string, unknown> {
+  if (inputSchema && inputSchema.type === 'object') {
+    return inputSchema;
+  }
+  return schema({}, []);
+}
+
+function buildMcpTransportConfig(
+  config: OpenAIMcpServerConfig,
+): StdioServerParameters {
+  return {
+    command: config.command,
+    args: config.args,
+    env: config.env,
+    cwd: config.cwd,
+    stderr: 'pipe',
+  };
+}
+
+export async function createOpenAIMcpToolBridge(
+  configs: OpenAIMcpServerConfig[],
+  log?: (message: string) => void,
+): Promise<OpenAIMcpToolBridge> {
+  const definitions: OpenAIFunctionToolDefinition[] = [];
+  const clients: Client[] = [];
+  const toolBindings = new Map<
+    string,
+    { client: Client; serverName: string; toolName: string }
+  >();
+
+  for (const config of configs) {
+    const client = new Client({
+      name: 'deus-openai-mcp-bridge',
+      version: '1.0.0',
+    });
+    const transport = new StdioClientTransport(buildMcpTransportConfig(config));
+    const stderr = transport.stderr;
+    if (stderr) {
+      stderr.on('data', (chunk) => {
+        const text = chunk.toString().trim();
+        if (text) log?.(`[mcp:${config.serverName}] ${text}`);
+      });
+    }
+
+    try {
+      await client.connect(transport);
+      clients.push(client);
+      const listed = await client.listTools();
+      for (const tool of listed.tools) {
+        const openaiName = buildOpenAIMcpToolName(config.serverName, tool.name);
+        definitions.push({
+          type: 'function',
+          name: openaiName,
+          description:
+            tool.description ||
+            `${config.serverName} MCP tool ${tool.name.replace(/_/g, ' ')}`,
+          parameters: normalizeMcpInputSchema(tool.inputSchema),
+        });
+        toolBindings.set(openaiName, {
+          client,
+          serverName: config.serverName,
+          toolName: tool.name,
+        });
+      }
+      log?.(
+        `Loaded ${listed.tools.length} MCP tool(s) from ${config.serverName}`,
+      );
+    } catch (err) {
+      await client.close().catch(() => {});
+      const message = `Failed to load ${config.required ? 'required ' : ''}MCP tools from ${config.serverName}: ${err instanceof Error ? err.message : String(err)}`;
+      log?.(message);
+      if (config.required) {
+        throw new Error(message);
+      }
+    }
+  }
+
+  return {
+    definitions,
+    async execute(name: string, args: Record<string, unknown>) {
+      const binding = toolBindings.get(name);
+      if (!binding) return null;
+      try {
+        const result = await binding.client.callTool({
+          name: binding.toolName,
+          arguments: args,
+        });
+        return result as Record<string, unknown>;
+      } catch (err) {
+        return {
+          ok: false,
+          error: err instanceof Error ? err.message : String(err),
+        };
+      }
+    },
+    async close() {
+      await Promise.all(
+        clients.map((client) =>
+          client.close().catch((err) => {
+            log?.(
+              `Failed to close MCP client: ${err instanceof Error ? err.message : String(err)}`,
+            );
+          }),
+        ),
+      );
+    },
+  };
 }
 
 function parseScheduleType(

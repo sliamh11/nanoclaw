@@ -1,3 +1,6 @@
+import fs from 'fs';
+import path from 'path';
+
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -7,6 +10,8 @@ import {
 } from './openai-backend.js';
 import {
   buildRipgrepSearchArgs,
+  buildOpenAIMcpToolName,
+  createOpenAIMcpToolBridge,
   getOpenAIToolDefinitions,
   normalizeTaskContextMode,
   resolveGroupAttachmentPath,
@@ -126,5 +131,119 @@ describe('OpenAI backend safety helpers', () => {
     expect(() =>
       assertOpenAIResponse({ id: 'resp_123', output: ['bad'] }),
     ).toThrow(/output item/);
+  });
+
+  it('bridges MCP tools into OpenAI tool definitions with Claude-style prefixes', async () => {
+    const tempDir = fs.mkdtempSync(
+      path.join(process.cwd(), '.tmp-mcp-bridge-'),
+    );
+    const serverPath = path.join(tempDir, 'echo-mcp.mjs');
+    fs.writeFileSync(
+      serverPath,
+      `
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { z } from 'zod';
+
+const server = new McpServer({ name: 'echo', version: '1.0.0' });
+server.tool(
+  'echo_tool',
+  'Echoes text back to the caller.',
+  { text: z.string().optional() },
+  async (args) => ({
+    content: [{ type: 'text', text: \`echo:\${args.text ?? ''}\` }],
+  }),
+);
+
+await server.connect(new StdioServerTransport());
+      `.trim(),
+    );
+
+    const bridge = await createOpenAIMcpToolBridge([
+      {
+        serverName: 'deus',
+        command: process.execPath,
+        args: [serverPath],
+      },
+    ]);
+
+    expect(bridge.definitions).toEqual([
+      expect.objectContaining({
+        type: 'function',
+        name: buildOpenAIMcpToolName('deus', 'echo_tool'),
+        description: 'Echoes text back to the caller.',
+      }),
+    ]);
+
+    const result = await bridge.execute(
+      buildOpenAIMcpToolName('deus', 'echo_tool'),
+      { text: 'hi' },
+    );
+    expect(result).toMatchObject({
+      content: [{ type: 'text', text: 'echo:hi' }],
+    });
+
+    await bridge.close();
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it('returns a tool error payload when a bridged MCP tool is called after disconnect', async () => {
+    const tempDir = fs.mkdtempSync(
+      path.join(process.cwd(), '.tmp-mcp-bridge-error-'),
+    );
+    const serverPath = path.join(tempDir, 'echo-mcp.mjs');
+    fs.writeFileSync(
+      serverPath,
+      `
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { z } from 'zod';
+
+const server = new McpServer({ name: 'echo', version: '1.0.0' });
+server.tool(
+  'echo_tool',
+  'Echoes text back to the caller.',
+  { text: z.string().optional() },
+  async (args) => ({
+    content: [{ type: 'text', text: \`echo:\${args.text ?? ''}\` }],
+  }),
+);
+
+await server.connect(new StdioServerTransport());
+      `.trim(),
+    );
+
+    const bridge = await createOpenAIMcpToolBridge([
+      {
+        serverName: 'deus',
+        command: process.execPath,
+        args: [serverPath],
+      },
+    ]);
+
+    await bridge.close();
+    const result = await bridge.execute(
+      buildOpenAIMcpToolName('deus', 'echo_tool'),
+      { text: 'hi' },
+    );
+    expect(result).toMatchObject({
+      ok: false,
+      error: expect.any(String),
+    });
+
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it('fails closed when the required deus MCP bridge cannot start', async () => {
+    await expect(
+      createOpenAIMcpToolBridge([
+        {
+          serverName: 'deus',
+          command: process.execPath,
+          args: [path.join(process.cwd(), 'does-not-exist.mjs')],
+          required: true,
+        },
+      ]),
+    ).rejects.toThrow(/required MCP tools from deus/);
   });
 });

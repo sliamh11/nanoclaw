@@ -18,13 +18,13 @@ function workspacePath(root: string, ...parts: string[]): string {
 function baseContextEntries(root: string): ContextEntry[] {
   return [
     {
-      label: 'GROUP RULES: CLAUDE.md',
-      path: workspacePath(root, 'group', 'CLAUDE.md'),
-    },
-    {
       label: 'GROUP RULES: AGENTS.md',
       path: workspacePath(root, 'group', 'AGENTS.md'),
       claudeSystemAppend: true,
+    },
+    {
+      label: 'GROUP RULES: CLAUDE.md',
+      path: workspacePath(root, 'group', 'CLAUDE.md'),
     },
     {
       label: 'GROUP RULES: AI_AGENT_GUIDELINES.md',
@@ -32,19 +32,14 @@ function baseContextEntries(root: string): ContextEntry[] {
       claudeSystemAppend: true,
     },
     {
-      label: 'GROUP RULES: docs/AGENT_DEUS_101.md',
-      path: workspacePath(root, 'group', 'docs', 'AGENT_DEUS_101.md'),
+      label: 'GLOBAL RULES: AGENTS.md',
+      path: workspacePath(root, 'global', 'AGENTS.md'),
+      skipForControlGroup: true,
       claudeSystemAppend: true,
     },
     {
       label: 'GLOBAL RULES: CLAUDE.md',
       path: workspacePath(root, 'global', 'CLAUDE.md'),
-      skipForControlGroup: true,
-      claudeSystemAppend: true,
-    },
-    {
-      label: 'GLOBAL RULES: AGENTS.md',
-      path: workspacePath(root, 'global', 'AGENTS.md'),
       skipForControlGroup: true,
       claudeSystemAppend: true,
     },
@@ -55,9 +50,9 @@ function baseContextEntries(root: string): ContextEntry[] {
       claudeSystemAppend: true,
     },
     {
-      label: 'GLOBAL RULES: docs/AGENT_DEUS_101.md',
-      path: workspacePath(root, 'global', 'docs', 'AGENT_DEUS_101.md'),
-      skipForControlGroup: true,
+      label: 'PROJECT RULES: AGENTS.md',
+      path: workspacePath(root, 'project', 'AGENTS.md'),
+      projectOnly: true,
       claudeSystemAppend: true,
     },
     {
@@ -66,26 +61,9 @@ function baseContextEntries(root: string): ContextEntry[] {
       projectOnly: true,
     },
     {
-      label: 'PROJECT RULES: AGENTS.md',
-      path: workspacePath(root, 'project', 'AGENTS.md'),
-      projectOnly: true,
-      claudeSystemAppend: true,
-    },
-    {
       label: 'PROJECT RULES: AI_AGENT_GUIDELINES.md',
       path: workspacePath(root, 'project', 'AI_AGENT_GUIDELINES.md'),
       projectOnly: true,
-      claudeSystemAppend: true,
-    },
-    {
-      label: 'PROJECT RULES: docs/AGENT_DEUS_101.md',
-      path: workspacePath(root, 'project', 'docs', 'AGENT_DEUS_101.md'),
-      projectOnly: true,
-      claudeSystemAppend: true,
-    },
-    {
-      label: 'VAULT: CLAUDE.md',
-      path: workspacePath(root, 'vault', 'CLAUDE.md'),
       claudeSystemAppend: true,
     },
     {
@@ -94,13 +72,13 @@ function baseContextEntries(root: string): ContextEntry[] {
       claudeSystemAppend: true,
     },
     {
-      label: 'VAULT: AI_AGENT_GUIDELINES.md',
-      path: workspacePath(root, 'vault', 'AI_AGENT_GUIDELINES.md'),
+      label: 'VAULT: CLAUDE.md',
+      path: workspacePath(root, 'vault', 'CLAUDE.md'),
       claudeSystemAppend: true,
     },
     {
-      label: 'VAULT: docs/AGENT_DEUS_101.md',
-      path: workspacePath(root, 'vault', 'docs', 'AGENT_DEUS_101.md'),
+      label: 'VAULT: AI_AGENT_GUIDELINES.md',
+      path: workspacePath(root, 'vault', 'AI_AGENT_GUIDELINES.md'),
       claudeSystemAppend: true,
     },
     {
@@ -127,22 +105,17 @@ function extraContextEntries(root: string): ContextEntry[] {
       const dir = workspacePath(extraRoot, entry.name);
       return [
         {
-          label: `EXTRA RULES: ${entry.name}/CLAUDE.md`,
-          path: path.join(dir, 'CLAUDE.md'),
-        },
-        {
           label: `EXTRA RULES: ${entry.name}/AGENTS.md`,
           path: path.join(dir, 'AGENTS.md'),
           claudeSystemAppend: true,
         },
         {
-          label: `EXTRA RULES: ${entry.name}/AI_AGENT_GUIDELINES.md`,
-          path: path.join(dir, 'AI_AGENT_GUIDELINES.md'),
-          claudeSystemAppend: true,
+          label: `EXTRA RULES: ${entry.name}/CLAUDE.md`,
+          path: path.join(dir, 'CLAUDE.md'),
         },
         {
-          label: `EXTRA RULES: ${entry.name}/docs/AGENT_DEUS_101.md`,
-          path: path.join(dir, 'docs', 'AGENT_DEUS_101.md'),
+          label: `EXTRA RULES: ${entry.name}/AI_AGENT_GUIDELINES.md`,
+          path: path.join(dir, 'AI_AGENT_GUIDELINES.md'),
           claudeSystemAppend: true,
         },
       ];
