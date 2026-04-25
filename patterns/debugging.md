@@ -2,7 +2,7 @@
 governs:
   - src/container-runner.ts
   - src/message-orchestrator.ts
-last_verified: "2026-04-25"
+last_verified: "2026-04-26" # proxy-shared-secret-auth
 test_tasks:
   - "Messages from a Telegram group arrive but the agent never responds"
   - "A container exits with code 137 instead of returning a result"

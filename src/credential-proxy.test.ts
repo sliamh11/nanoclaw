@@ -2,6 +2,11 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import http from 'http';
 import type { AddressInfo } from 'net';
 
+vi.mock('./config.js', () => ({
+  DEUS_PROXY_TOKEN: 'test-proxy-token-abc123',
+  DEUS_PROXY_AUTH_ENABLED: true,
+}));
+
 const mockEnv: Record<string, string> = {};
 vi.mock('./env.js', () => ({
   readEnvFile: vi.fn(() => ({ ...mockEnv })),
@@ -28,6 +33,9 @@ import {
   _resetCredentialsCacheForTest,
 } from './credential-proxy.js';
 import { AuthProviderRegistry } from './auth-providers/types.js';
+import * as configModule from './config.js';
+
+const TEST_PROXY_TOKEN = 'test-proxy-token-abc123';
 
 const mockReadFileSync = readFileSync as ReturnType<typeof vi.fn>;
 const mockExecFileSync = vi.mocked(execFileSync);
@@ -110,7 +118,21 @@ describe('credential-proxy', () => {
     mockExecFileSync.mockReset();
     _resetCredentialsCacheForTest();
     AuthProviderRegistry.reset();
+    Object.defineProperty(configModule, 'DEUS_PROXY_AUTH_ENABLED', {
+      value: true,
+      writable: true,
+    });
   });
+
+  function withProxyToken(options: http.RequestOptions): http.RequestOptions {
+    return {
+      ...options,
+      headers: {
+        ...options.headers,
+        'x-deus-proxy-token': TEST_PROXY_TOKEN,
+      },
+    };
+  }
 
   async function startProxy(env: Record<string, string>): Promise<number> {
     Object.assign(mockEnv, {
@@ -126,14 +148,14 @@ describe('credential-proxy', () => {
 
     await makeRequest(
       proxyPort,
-      {
+      withProxyToken({
         method: 'POST',
         path: '/v1/messages',
         headers: {
           'content-type': 'application/json',
           'x-api-key': 'placeholder',
         },
-      },
+      }),
       '{}',
     );
 
@@ -148,7 +170,7 @@ describe('credential-proxy', () => {
 
     await makeRequest(
       proxyPort,
-      {
+      withProxyToken({
         method: 'POST',
         path: '/openai/v1/responses',
         headers: {
@@ -156,7 +178,7 @@ describe('credential-proxy', () => {
           authorization: 'Bearer placeholder',
           'x-api-key': 'temp-key',
         },
-      },
+      }),
       '{}',
     );
 
@@ -173,14 +195,14 @@ describe('credential-proxy', () => {
 
     await makeRequest(
       proxyPort,
-      {
+      withProxyToken({
         method: 'POST',
         path: '/api/oauth/claude_cli/create_api_key',
         headers: {
           'content-type': 'application/json',
           authorization: 'Bearer placeholder',
         },
-      },
+      }),
       '{}',
     );
 
@@ -197,14 +219,14 @@ describe('credential-proxy', () => {
     // Post-exchange: container uses x-api-key only, no Authorization header
     await makeRequest(
       proxyPort,
-      {
+      withProxyToken({
         method: 'POST',
         path: '/v1/messages',
         headers: {
           'content-type': 'application/json',
           'x-api-key': 'temp-key-from-exchange',
         },
-      },
+      }),
       '{}',
     );
 
@@ -217,7 +239,7 @@ describe('credential-proxy', () => {
 
     await makeRequest(
       proxyPort,
-      {
+      withProxyToken({
         method: 'POST',
         path: '/v1/messages',
         headers: {
@@ -226,7 +248,7 @@ describe('credential-proxy', () => {
           'keep-alive': 'timeout=5',
           'transfer-encoding': 'chunked',
         },
-      },
+      }),
       '{}',
     );
 
@@ -247,11 +269,11 @@ describe('credential-proxy', () => {
 
     const res = await makeRequest(
       proxyPort,
-      {
+      withProxyToken({
         method: 'POST',
         path: '/v1/messages',
         headers: { 'content-type': 'application/json' },
-      },
+      }),
       '{}',
     );
 
@@ -273,14 +295,14 @@ describe('credential-proxy', () => {
 
     await makeRequest(
       proxyPort,
-      {
+      withProxyToken({
         method: 'POST',
         path: '/api/oauth/claude_cli/create_api_key',
         headers: {
           'content-type': 'application/json',
           authorization: 'Bearer placeholder',
         },
-      },
+      }),
       '{}',
     );
 
@@ -303,14 +325,14 @@ describe('credential-proxy', () => {
 
     await makeRequest(
       proxyPort,
-      {
+      withProxyToken({
         method: 'POST',
         path: '/api/oauth/claude_cli/create_api_key',
         headers: {
           'content-type': 'application/json',
           authorization: 'Bearer placeholder',
         },
-      },
+      }),
       '{}',
     );
 
@@ -341,14 +363,14 @@ describe('credential-proxy', () => {
 
     await makeRequest(
       proxyPort,
-      {
+      withProxyToken({
         method: 'POST',
         path: '/api/oauth/claude_cli/create_api_key',
         headers: {
           'content-type': 'application/json',
           authorization: 'Bearer placeholder',
         },
-      },
+      }),
       '{}',
     );
     expect(lastUpstreamHeaders['authorization']).toBe('Bearer expiring-token');
@@ -356,14 +378,14 @@ describe('credential-proxy', () => {
     // Cache is stale (token about to expire) — re-read on next request
     await makeRequest(
       proxyPort,
-      {
+      withProxyToken({
         method: 'POST',
         path: '/api/oauth/claude_cli/create_api_key',
         headers: {
           'content-type': 'application/json',
           authorization: 'Bearer placeholder',
         },
-      },
+      }),
       '{}',
     );
     expect(lastUpstreamHeaders['authorization']).toBe('Bearer refreshed-token');
@@ -376,7 +398,7 @@ describe('credential-proxy', () => {
 
     await makeRequest(
       proxyPort,
-      {
+      withProxyToken({
         method: 'POST',
         path: '/v1/sessions',
         headers: {
@@ -384,7 +406,7 @@ describe('credential-proxy', () => {
           authorization: 'Bearer placeholder',
           'anthropic-beta': 'ccr-byoc-2025-07-29',
         },
-      },
+      }),
       '{}',
     );
 
@@ -400,18 +422,91 @@ describe('credential-proxy', () => {
 
     const res = await makeRequest(
       proxyPort,
-      {
+      withProxyToken({
         method: 'POST',
         path: '/api/oauth/claude_cli/create_api_key',
         headers: {
           'content-type': 'application/json',
           authorization: 'Bearer placeholder',
         },
-      },
+      }),
       '{}',
     );
 
     expect(res.statusCode).toBe(200);
     expect(lastUpstreamHeaders['authorization']).toBeUndefined();
+  });
+
+  it('rejects request without proxy token', async () => {
+    proxyPort = await startProxy({ ANTHROPIC_API_KEY: 'sk-ant-real-key' });
+
+    const res = await makeRequest(
+      proxyPort,
+      {
+        method: 'POST',
+        path: '/v1/messages',
+        headers: { 'content-type': 'application/json' },
+      },
+      '{}',
+    );
+
+    expect(res.statusCode).toBe(401);
+    expect(res.body).toBe('Unauthorized');
+  });
+
+  it('rejects request with wrong proxy token', async () => {
+    proxyPort = await startProxy({ ANTHROPIC_API_KEY: 'sk-ant-real-key' });
+
+    const res = await makeRequest(
+      proxyPort,
+      {
+        method: 'POST',
+        path: '/v1/messages',
+        headers: {
+          'content-type': 'application/json',
+          'x-deus-proxy-token': 'wrong-token',
+        },
+      },
+      '{}',
+    );
+
+    expect(res.statusCode).toBe(401);
+    expect(res.body).toBe('Unauthorized');
+  });
+
+  it('does not forward x-deus-proxy-token to upstream', async () => {
+    proxyPort = await startProxy({ ANTHROPIC_API_KEY: 'sk-ant-real-key' });
+
+    await makeRequest(
+      proxyPort,
+      withProxyToken({
+        method: 'POST',
+        path: '/v1/messages',
+        headers: { 'content-type': 'application/json' },
+      }),
+      '{}',
+    );
+
+    expect(lastUpstreamHeaders['x-deus-proxy-token']).toBeUndefined();
+  });
+
+  it('allows requests when auth is disabled via kill-switch', async () => {
+    Object.defineProperty(configModule, 'DEUS_PROXY_AUTH_ENABLED', {
+      value: false,
+      writable: true,
+    });
+    proxyPort = await startProxy({ ANTHROPIC_API_KEY: 'sk-ant-real-key' });
+
+    const res = await makeRequest(
+      proxyPort,
+      {
+        method: 'POST',
+        path: '/v1/messages',
+        headers: { 'content-type': 'application/json' },
+      },
+      '{}',
+    );
+
+    expect(res.statusCode).toBe(200);
   });
 });

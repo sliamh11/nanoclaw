@@ -327,6 +327,9 @@ async function createResponse(
     headers: {
       'content-type': 'application/json',
       authorization: `Bearer ${process.env.OPENAI_API_KEY || 'placeholder'}`,
+      ...(process.env.DEUS_PROXY_TOKEN
+        ? { 'x-deus-proxy-token': process.env.DEUS_PROXY_TOKEN }
+        : {}),
     },
     body: JSON.stringify(body),
   });
