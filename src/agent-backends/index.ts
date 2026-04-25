@@ -16,8 +16,4 @@ export {
 } from './container-backend.js';
 export { createClaudeBackend } from './claude-backend.js';
 export { createOpenAIBackend } from './openai-backend.js';
-export {
-  BackendRegistry,
-  getBackendRegistry,
-  initBackendRegistry,
-} from './registry.js';
+export { BackendRegistry, initBackendRegistry } from './registry.js';
