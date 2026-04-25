@@ -1,6 +1,8 @@
 # Backend-Neutral Agent Runtime
 
 **Status:** Accepted
+**Date:** 2026-04-23
+**Scope:** `src/agent-backends/`, `container/agent-runner/`, `deus-cmd.sh`, `deus-cmd.ps1`, `AGENTS.md`, `AI_AGENT_GUIDELINES.md`
 
 ## Context
 
