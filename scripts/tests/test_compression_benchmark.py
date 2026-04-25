@@ -392,11 +392,11 @@ def test_behavioral_tests_has_required_keys():
 
 
 def test_behavioral_tests_claude_vault_count():
-    assert len(cb.BEHAVIORAL_TESTS["claude_vault"]) == 25
+    assert len(cb.BEHAVIORAL_TESTS["claude_vault"]) == 21
 
 
 def test_behavioral_tests_memory_index_count():
-    assert len(cb.BEHAVIORAL_TESTS["memory_index"]) == 25
+    assert len(cb.BEHAVIORAL_TESTS["memory_index"]) == 24
 
 
 def test_behavioral_tests_tuple_structure():

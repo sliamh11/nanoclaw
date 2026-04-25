@@ -5,7 +5,7 @@ governs:
   - src/startup-gate.ts
   - src/checks.ts
   - setup/
-last_verified: "2026-04-20"  # re-reviewed for bootstrap mirror enforcement (#218) — pattern rules unchanged; src/bootstrap.ts gains MIRROR-IGNORE markers wrapping logger divergence; new `# MIRROR-IGNORE-START / MIRROR-IGNORE-END` convention documented in ADR for any future intentionally-divergent mirrored files
+last_verified: "2026-04-21"  # re-verified for PII scrub (PR #233) — pattern rules unchanged
 test_tasks:
   - "Refactor src/router.ts into smaller modules"
   - "Add a new utility function for parsing timestamps"

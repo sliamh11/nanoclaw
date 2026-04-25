@@ -89,3 +89,27 @@
 **Check:** Does the plan articulate how the change will be verified end-to-end? Can be existing tests, new tests, manual verification steps, or a benchmark — but *something* concrete.
 **Rule:** Every non-trivial plan answers "how will we know this works?" Unverifiable plans are incomplete plans.
 **Cite:** Phase 4 pattern from ExitPlanMode workflow; `feedback_predict_before_testing`
+
+## premise-verification
+**Severity:** blocking
+**Applies when:** Plan cites repo state as the problem — e.g. "X is tracked in git," "dep Y is unused," "dir Z is orphaned," "files are drifting," "A and B have diverged."
+**Check:** For each premise, is there a concrete verification command and its expected output? If absent, run the verification yourself before issuing SHIP.
+**Rule:** Repo-state premises must be verified, not assumed. Minimum checks by premise type:
+- "tracked" / "stop committing X" → `git ls-files <path>` (must return non-empty) and `git check-ignore -v <path>` (must return nothing).
+- "unused dep" → `grep -r '<pkg>' src/ scripts/ container/ packages/` returns no imports.
+- "orphan file" → `grep -r '<filename>' .` returns no callers across `.ts`, `.sh`, `.json`, `.py`, launchd plists, `package.json` scripts.
+- "drift between two paths" → grep for code that writes to the derived path (`cpSync`, `shutil.copytree`, `fs.mkdirSync` + write). If a writer exists, the divergence is a cache, not a bug — plan must address why the cache is wrong, not treat it as rot.
+**Cite:** Slice A postmortem (2026-04-20 — the agent-runner-src cache was wrongly flagged as tracked drift); system-prompt "Trust but verify."
+
+## means-end-consistency
+**Severity:** blocking
+**Applies when:** Plan's stated purpose is to remove, block, protect, redact, or prevent X — where X is personal data, secrets, deprecated APIs, vulnerable patterns, unsafe inputs, or any other value/pattern the plan aims to eliminate from the committed repo.
+**Check:** Does the implementation itself contain, expose, enable, or reproduce X in another form?
+Common traps:
+- "Scrub personal values from repo" — but the CI pattern matching those values is committed inline in a workflow file.
+- "Redact secrets from logs" — but the redactor logs them before masking.
+- "Block deprecated API" — but the blocking rule's usage example calls the API.
+- "Allowlist safe inputs" — but the allowlist itself contains an unsafe value.
+- "Delete file X" — but a new file references X's old path.
+**Rule:** The fix must not reproduce the problem it solves. For patterns/regexes over sensitive values, source them from a GitHub Actions secret, an external gitignored file, a hash-based match, or other indirection — never commit the values inline. Run the fix through the same check it creates: if the implementation would trigger its own gate, revise.
+**Cite:** Slice C round 3 postmortem (2026-04-20 — CI gate was going to hardcode the very personal IDs it was designed to block).
