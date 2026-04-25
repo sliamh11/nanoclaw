@@ -1,5 +1,6 @@
 import path from 'path';
 
+import type { AgentBackendName } from './agent-backends/types.js';
 import { readEnvFile } from './env.js';
 import { homeDir } from './platform.js';
 
@@ -91,8 +92,12 @@ const rawAgentBackend = (
   envConfig.DEUS_AGENT_BACKEND ||
   'claude'
 ).toLowerCase();
-export const DEFAULT_AGENT_BACKEND =
-  rawAgentBackend === 'openai' ? 'openai' : 'claude';
+export const DEFAULT_AGENT_BACKEND: AgentBackendName =
+  rawAgentBackend === 'openai'
+    ? 'openai'
+    : rawAgentBackend === 'ollama'
+      ? 'ollama'
+      : 'claude';
 
 export const DEUS_OPENAI_MODEL =
   process.env.DEUS_OPENAI_MODEL || envConfig.DEUS_OPENAI_MODEL || '';

@@ -1,6 +1,6 @@
 import type { ToolBroker } from '../tool-broker/types.js';
 
-export type AgentBackendName = 'claude' | 'openai';
+export type AgentBackendName = 'claude' | 'openai' | 'ollama';
 
 export interface BackendCapabilities {
   shell: boolean;
@@ -28,7 +28,7 @@ export interface RunContext {
   isScheduledTask?: boolean;
   backendConfig?: Record<string, unknown>;
   imageInputs?: Array<{ relativePath: string; mediaType: string }>;
-  toolBroker: ToolBroker;
+  toolBroker?: ToolBroker;
 }
 
 export type RuntimeEvent =
