@@ -12,8 +12,8 @@ import { BackendRegistry } from './agent-backends/registry.js';
 
 function makeStubRegistry(): BackendRegistry {
   const registry = new BackendRegistry();
-  registry.register({
-    name: () => 'claude' as const,
+  const stub = (name: 'claude' | 'openai') => ({
+    name: () => name,
     capabilities: () => ({
       shell: true,
       filesystem: true,
@@ -21,12 +21,14 @@ function makeStubRegistry(): BackendRegistry {
       multimodal: true,
       handoffs: false,
       persistent_sessions: true,
-      tool_streaming: true,
+      tool_streaming: name === 'claude',
     }),
-    startOrResume: async () => ({ backend: 'claude' as const, session_id: '' }),
+    startOrResume: async () => ({ backend: name, session_id: '' }),
     runTurn: async () => ({ status: 'success' as const, result: null }),
     close: async () => {},
   });
+  registry.register(stub('claude'));
+  registry.register(stub('openai'));
   return registry;
 }
 
