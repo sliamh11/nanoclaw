@@ -119,7 +119,7 @@ See [AGENTS.md](AGENTS.md#commands-and-skills) for all available skills.
 
 |  | **Deus** | **[OpenClaw](https://github.com/openclaw/openclaw)** | **[NemoClaw](https://github.com/NVIDIA/NemoClaw)** | **[Hermes Agent](https://github.com/NousResearch/hermes-agent)** | **Plain Claude** |
 |---|---|---|---|---|---|
-| **Memory** | Semantic search + tiered recall | Markdown files | Via OpenClaw | SQLite/FTS5 + preference profiling | Conversation only |
+| **Memory** | 3-tier recall (semantic + tree + recency) | Markdown files | Via OpenClaw | SQLite/FTS5 + preference profiling | Conversation only |
 | **Learning** | Judge + reflexion + DSPy optimization | No | No | Auto-creates & refines skills | No |
 | **Channels** | 5 (WhatsApp, Telegram, Slack, Discord, Gmail) | 10+ | Via OpenClaw | 15+ (WhatsApp, Telegram, Signal, Matrix...) | None |
 | **Isolation** | Container per conversation | Opt-in Docker | Landlock + seccomp | Per-session | None |

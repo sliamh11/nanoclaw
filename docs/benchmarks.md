@@ -16,7 +16,7 @@ Choose the right tool for what you care about.
 |---|---|---|---|---|---|
 | **Messaging channels** | 5 (WhatsApp, Telegram, Slack, Discord, Gmail) | 10+ (WhatsApp, Telegram, Slack, Discord, Signal, iMessage, Teams, IRC...) | Via OpenClaw | 15+ (WhatsApp, Telegram, Signal, Matrix...) | None |
 | **Agent isolation** | Linux container per conversation (default) | Opt-in Docker sandbox | Landlock + seccomp + namespaces | Per-session | None |
-| **Memory** | Semantic vector DB (sqlite-vec) + tiered retrieval (warm + cold) | Markdown files on disk | Via OpenClaw | SQLite/FTS5 + preference profiling | Conversation window only |
+| **Memory** | sqlite-vec + 3-tier retrieval (warm, cold, tree) + atomic facts | Markdown files on disk | Via OpenClaw | SQLite/FTS5 + preference profiling | Conversation window only |
 | **Self-improvement** | Judge → reflexion → DSPy prompt optimization | No | No | Auto-creates & refines skills | No |
 | **Eval / CI layer** | DeepEval test suite (QA, tool use, safety) | No | No | No | No |
 | **Credential isolation** | Proxy injects keys at runtime; containers never see real credentials | Keys in environment | Policy-controlled | Keys in environment | N/A (cloud) |
@@ -46,17 +46,20 @@ OpenClaw runs agents in the host process by default and offers Docker as an opt-
 
 | System | Storage | Search | Cross-session recall |
 |--------|---------|--------|---------------------|
-| **Deus** | SQLite + sqlite-vec (768-dim vectors) | Semantic search with recency boost (7d: -0.3, 30d: -0.15 L2 adjustment) | Yes — tiered: recent sessions free, older sessions via embedding search |
+| **Deus** | SQLite + sqlite-vec (768-dim vectors) + atomic facts | Semantic search with recency boost + hierarchical tree walk with see_also hops | Yes — 3-tier: warm (recent by date), cold (semantic search), tree (hierarchical retrieval) |
 | **OpenClaw** | Markdown files on disk | Keyword / filename | Session-based persistence, no semantic search |
 | **NemoClaw** | Via OpenClaw | Via OpenClaw | Via OpenClaw |
 | **Hermes Agent** | SQLite + FTS5 | Full-text search + preference profiling | Yes — 3-layer: session context, FTS5, automated user profiling |
 | **Plain Claude** | Context window | None | No (each conversation is isolated) |
 
-Deus uses a two-tier retrieval strategy:
+Deus uses a three-tier retrieval strategy:
 - **Warm tier**: Last N sessions by date. No API call, no embedding cost. Free.
 - **Cold tier**: Semantic search over all indexed sessions. One Gemini embedding call. Results are re-ranked by recency so recent context surfaces higher.
+- **Tree tier**: Hierarchical walk from a `MEMORY_TREE.md` root through topic branches, with `see_also` hops across branches. Uses local Ollama embeddings. Handles cold-start recall (finding the right note on the first turn) and cross-branch discovery (surfacing facts the flat embedding wouldn't rank highly). Returns `abstained:true` instead of guessing when confidence is low.
 
-This means asking "what did we discuss about the auth migration?" will find the relevant session even if it was weeks ago and used different terminology.
+On top of retrieval, `memory_indexer.py --extract` breaks session logs into atomic facts with entity-relationship graphs and contradiction detection. This means the system knows that "the auth migration was decided on Monday" and "we rejected approach X because of Y" as discrete, searchable facts — not just chunks of conversation.
+
+Asking "what did we discuss about the auth migration?" will find the relevant session even if it was weeks ago and used different terminology.
 
 ### Self-Improvement Loop
 

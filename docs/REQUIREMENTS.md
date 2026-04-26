@@ -92,6 +92,11 @@ A personal Claude assistant accessible via WhatsApp, with minimal custom code.
 - **Global memory**: Root `CLAUDE.md` is read by all groups, but only writable from "main" (self-chat)
 - **Files**: Groups can create/read files in their folder and reference them
 - Agent runs in the group's folder, automatically inherits both CLAUDE.md files
+- **Vault**: Session logs stored in a structured vault directory, indexed by date and topic
+- **Semantic search**: sqlite-vec with 768-dim Gemini embeddings, recency-boosted re-ranking
+- **Memory tree**: Hierarchical retrieval from `MEMORY_TREE.md` root with `see_also` cross-links; handles cold-start recall and cross-branch discovery
+- **Atomic facts**: Session logs decomposed into discrete facts with entity-relationship graphs and contradiction detection
+- **3-tier retrieval**: Warm (recent sessions by date, free), Cold (semantic search, one embedding call), Tree (hierarchical walk, local Ollama embeddings)
 
 ### Session Management
 - Each group maintains a conversation session (via Claude Agent SDK)
