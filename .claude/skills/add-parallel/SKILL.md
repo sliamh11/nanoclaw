@@ -1,3 +1,8 @@
+---
+name: add-parallel
+description: Add Parallel AI MCP integration to Deus for advanced web research capabilities.
+---
+
 # Add Parallel AI Integration
 
 Adds Parallel AI MCP integration to Deus for advanced web research capabilities.
