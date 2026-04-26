@@ -14,6 +14,7 @@ vi.mock('sharp', () => {
 vi.mock('fs');
 
 import { processImage, parseImageReferences, isImageMessage } from './image.js';
+import type { NewMessage } from './types.js';
 
 describe('image processing', () => {
   beforeEach(() => {
@@ -98,6 +99,46 @@ describe('image processing', () => {
     it('returns empty array when no images', () => {
       const messages = [{ content: 'just text' }];
       expect(parseImageReferences(messages as any)).toEqual([]);
+    });
+  });
+
+  describe('host-side image flow', () => {
+    it('processImage rewrites content with image reference from base64', async () => {
+      const imageBase64 = Buffer.from('fake-jpeg-data').toString('base64');
+      const msg: NewMessage = {
+        id: 'msg-1',
+        chat_jid: '123@g.us',
+        sender: 'user@s.whatsapp.net',
+        sender_name: 'User',
+        content: 'Check this',
+        timestamp: new Date().toISOString(),
+        imageData: imageBase64,
+      };
+
+      const result = await processImage(
+        Buffer.from(msg.imageData!, 'base64'),
+        '/tmp/groups/test',
+        msg.content,
+      );
+
+      expect(result).not.toBeNull();
+      expect(result!.content).toMatch(
+        /^\[Image: attachments\/img-.*\.jpg\] Check this$/,
+      );
+      expect(fs.writeFileSync).toHaveBeenCalled();
+    });
+
+    it('processImage handles image-only messages (no caption)', async () => {
+      const imageBase64 = Buffer.from('fake-jpeg-data').toString('base64');
+
+      const result = await processImage(
+        Buffer.from(imageBase64, 'base64'),
+        '/tmp/groups/test',
+        '',
+      );
+
+      expect(result).not.toBeNull();
+      expect(result!.content).toMatch(/^\[Image: attachments\/img-.*\.jpg\]$/);
     });
   });
 });

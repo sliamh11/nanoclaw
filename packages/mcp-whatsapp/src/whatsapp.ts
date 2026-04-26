@@ -11,11 +11,13 @@ import {
   makeWASocket,
   Browsers,
   DisconnectReason,
+  downloadContentFromMessage,
   fetchLatestWaWebVersion,
   makeCacheableSignalKeyStore,
   normalizeMessageContent,
   useMultiFileAuthState,
 } from '@whiskeysockets/baileys';
+import type { DownloadableMessage } from '@whiskeysockets/baileys';
 import type {
   GroupMetadata,
   WAMessageKey,
@@ -35,8 +37,9 @@ import type {
   IncomingMessage,
   IncomingReaction,
 } from '@deus-ai/channel-core';
+import { resizeAndEncode } from '@deus-ai/channel-core';
 
-// ── Config from env vars ────────────────────────────────────────────────
+// ── Config from env vars ──────────────────────────────────────────────────────
 
 const AUTH_DIR =
   process.env.WHATSAPP_AUTH_DIR || path.resolve(process.cwd(), 'store', 'auth');
@@ -341,7 +344,24 @@ export class WhatsAppProvider implements ChannelProvider {
             );
           }
 
-          if (!content) continue;
+          // Download + resize image if present
+          let imageData: string | undefined;
+          if (normalized.imageMessage) {
+            try {
+              const stream = await downloadContentFromMessage(
+                normalized.imageMessage as DownloadableMessage,
+                'image',
+              );
+              const chunks: Buffer[] = [];
+              for await (const chunk of stream) chunks.push(chunk);
+              const raw = Buffer.concat(chunks);
+              imageData = (await resizeAndEncode(raw)) ?? undefined;
+            } catch (err) {
+              logger.warn({ err, msgId: msg.key.id }, 'Image download failed');
+            }
+          }
+
+          if (!content && !imageData) continue;
 
           const sender = msg.key.participant || msg.key.remoteJid || '';
           const senderName = msg.pushName || sender.split('@')[0];
@@ -350,7 +370,11 @@ export class WhatsAppProvider implements ChannelProvider {
             ? fromMe
             : content.startsWith(`${ASSISTANT_NAME}:`);
 
-          // Forward ALL messages — the host decides which to act on
+          const metadata: Record<string, unknown> = {
+            is_bot_message: isBotMessage,
+          };
+          if (imageData) metadata.imageData = imageData;
+
           this.onMessage({
             id: msg.key.id || '',
             chat_id: chatJid,
@@ -360,7 +384,7 @@ export class WhatsAppProvider implements ChannelProvider {
             timestamp,
             is_from_me: fromMe,
             is_group: isGroup,
-            metadata: { is_bot_message: isBotMessage },
+            metadata,
           });
         } catch (err) {
           logger.error(

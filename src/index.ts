@@ -44,6 +44,8 @@ import { getAllTasks } from './db.js';
 import { writeGroupsSnapshot, writeTasksSnapshot } from './container-runner.js';
 import { Channel, NewMessage, NewReaction } from './types.js';
 import { logReactionSignal } from './evolution-client.js';
+import { resolveGroupFolderPath } from './group-folder.js';
+import { processImage } from './image.js';
 import { logger } from './logger.js';
 import { initBackendRegistry } from './agent-backends/registry.js';
 import { createClaudeBackend } from './agent-backends/claude-backend.js';
@@ -171,7 +173,7 @@ async function main(): Promise<void> {
 
   // Channel callbacks (shared by all channels)
   const channelOpts = {
-    onMessage: (chatJid: string, msg: NewMessage) => {
+    onMessage: async (chatJid: string, msg: NewMessage) => {
       // Remote control commands — intercept before storage
       const trimmed = msg.content.trim();
       if (trimmed === '/remote-control' || trimmed === '/remote-control-end') {
@@ -215,6 +217,31 @@ async function main(): Promise<void> {
         msg.content =
           msg.content.slice(0, MAX_MESSAGE_LENGTH) +
           '\n\n[Message truncated — exceeded maximum length]';
+      }
+
+      if (msg.imageData) {
+        const group = state.registeredGroups[chatJid];
+        if (group) {
+          const groupDir = resolveGroupFolderPath(group.folder);
+          try {
+            const result = await processImage(
+              Buffer.from(msg.imageData, 'base64'),
+              groupDir,
+              msg.content,
+            );
+            if (result) {
+              msg.content = result.content;
+              logger.info(
+                { chatJid, path: result.relativePath },
+                'Processed image attachment',
+              );
+            }
+          } catch (err) {
+            logger.warn({ err, chatJid }, 'Image processing failed');
+          }
+        }
+        delete msg.imageData;
+        if (!msg.content) return;
       }
 
       storeMessage(msg);

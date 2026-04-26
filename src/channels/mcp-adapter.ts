@@ -90,6 +90,7 @@ export class McpChannelAdapter implements Channel {
         if (params.logger !== 'incoming_message') return;
 
         const chatJid = data.chat_id as string;
+        const meta = data.metadata as Record<string, unknown> | undefined;
         const msg: NewMessage = {
           id: data.id as string,
           chat_jid: chatJid,
@@ -98,8 +99,8 @@ export class McpChannelAdapter implements Channel {
           content: data.content as string,
           timestamp: data.timestamp as string,
           is_from_me: data.is_from_me as boolean | undefined,
-          is_bot_message: (data.metadata as Record<string, unknown>)
-            ?.is_bot_message as boolean | undefined,
+          is_bot_message: meta?.is_bot_message as boolean | undefined,
+          imageData: meta?.imageData as string | undefined,
         };
 
         opts.onMessage(chatJid, msg);
