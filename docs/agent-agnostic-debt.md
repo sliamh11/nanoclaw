@@ -13,9 +13,7 @@ Rules:
 
 ## Active Debt
 
-| ID | Surface | Current gap | User-visible risk | Exit criteria |
-|---|---|---|---|---|
-| `AAG-001` | Live backend parity | OpenAI/Codex parity is still mostly verified by unit and targeted integration tests, not rebuilt live containers with real credentials. Codex OAuth support landed — auth path no longer requires `OPENAI_API_KEY` (can use `~/.codex/auth.json` from `codex login`). | Backend swaps can still fail in real container startup, provider auth, or mounted-project flows despite passing local tests. | Rebuild the agent container, run both Claude and OpenAI backends end-to-end with real credentials (API key or Codex OAuth), and document the verified parity checklist in the runtime ADR or a linked test record. |
+No active debt items.
 
 ## Recently Closed
 
@@ -30,3 +28,4 @@ Rules:
 | `AAG-C006` | `feat/close-agnostic-debt` | Skill parity audit complete. All skills except `x-integration` (broken on both backends — wrong export, unfinished wiring) and `add-ollama-tool` (OpenAI backend hardcodes MCP server list) are instruction-only and work on both backends. Known gaps documented. Resolves AAG-005. |
 | `AAG-C007` | Qodo removal (2026-04-25) | Qodo was removed from the project entirely. Discovery parity is no longer applicable. Resolves AAG-006. |
 | `AAG-C008` | `feat/close-agnostic-debt` | Orchestrator and scheduler now call `backend.runTurn()` instead of `runContainerAgent()` directly. `turn_complete` event added to `RuntimeEvent`. `onProcess` removed from `SchedulerDependencies`. Resolves AAG-009. |
+| `AAG-C009` | PR #258 + live E2E (2026-04-26) | Codex OAuth landed and verified E2E on host: startup gate passes, auth provider reads `~/.codex/auth.json` JWT, `injectAuth()` injects real token, auth-refresh daemon detects fresh token. Resolves AAG-001. |
