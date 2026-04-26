@@ -44,7 +44,7 @@ A personal AI that lives in your messaging apps, remembers your conversations, a
 ### What you need
 
 - macOS (Apple Silicon recommended), Linux, or Windows
-- [Claude Code](https://claude.ai/download) installed and authenticated
+- [Claude Code](https://claude.ai/download) or [Codex CLI](https://github.com/openai/codex) installed and authenticated
 - [Docker Desktop](https://www.docker.com/products/docker-desktop/) (handles WSL 2 on Windows automatically)
 - Node.js 20+, Python 3.11+
 - A [Gemini API key](https://aistudio.google.com/apikey) (free tier is enough)
@@ -55,10 +55,10 @@ A personal AI that lives in your messaging apps, remembers your conversations, a
 ```bash
 git clone https://github.com/sliamh11/Deus.git
 cd Deus
-claude
+claude            # or: codex
 ```
 
-Then inside Claude Code:
+Then inside the CLI:
 
 ```
 /setup
