@@ -8,32 +8,32 @@
   <img src="https://img.shields.io/badge/Platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey.svg" alt="Platform">
 </p>
 
-A personal AI that lives in your messaging apps, remembers your conversations, and learns from every interaction. Ask it something you talked about weeks ago -- it remembers. Give it feedback -- it actually changes. Everything runs on your computer. Your data stays yours.
+A personal AI that lives in your messaging apps, remembers your conversations, and learns from every interaction. Ask it something you talked about weeks ago - it remembers. Give it feedback - it actually changes. Everything runs on your computer. Your data stays yours.
 
 ---
 
 ## What it does
 
-1. **Remembers everything** -- Ask about something from three weeks ago. It recalls the details, even if you don't remember what you called it. (95% recall on the [LongMemEval](https://arxiv.org/abs/2410.10813) benchmark.)
+1. **Remembers everything** - Ask about something from three weeks ago. It recalls the details, even if you don't remember what you called it. (95% recall on the [LongMemEval](https://arxiv.org/abs/2410.10813) benchmark.)
 
-2. **Learns from every interaction** -- Scores its own responses, figures out what worked and what didn't, and gets better over time. The longer you use it, the sharper it gets.
+2. **Learns from every interaction** - Scores its own responses, figures out what worked and what didn't, and gets better over time. The longer you use it, the sharper it gets.
 
-3. **Picks up where you left off** -- Context carries over between sessions. Start a project Monday, come back Thursday, and it knows where you left off.
+3. **Picks up where you left off** - Context carries over between sessions. Start a project Monday, come back Thursday, and it knows where you left off.
 
-4. **Lives where you already are** -- WhatsApp, Telegram, Slack, Discord, Gmail. Add only the ones you need. Your memory follows you across all of them.
+4. **Lives where you already are** - WhatsApp, Telegram, Slack, Discord, Gmail. Add only the ones you need. Your memory follows you across all of them.
 
-5. **Private by default** -- Runs on your machine in isolated containers. No cloud sync, no tracking, no data leaving your computer.
+5. **Private by default** - Runs on your machine in isolated containers. No cloud sync, no tracking, no data leaving your computer.
 
-6. **Works on your code too** -- Run `deus` in any project directory for a coding assistant that already knows your preferences and past work.
+6. **Works on your code too** - Run `deus` in any project directory for a coding assistant that already knows your preferences and past work.
 
 <details>
 <summary>And more</summary>
 
-- **Voice** -- Send a voice message and it transcribes and responds. Runs locally on Apple Silicon.
-- **Vision** -- Send a photo or screenshot and it sees and responds to it.
-- **Calendar** -- Reads and manages your Google Calendar. Ask what's coming up, or tell it to book something.
-- **Scheduled tasks** -- Daily summaries, weekly recaps, reminders -- set it and forget it.
-- **Web & video** -- Summarize YouTube videos, fetch web pages, or research a topic, all from a chat message.
+- **Voice** - Send a voice message and it transcribes and responds. Runs locally on Apple Silicon.
+- **Vision** - Send a photo or screenshot and it sees and responds to it.
+- **Calendar** - Reads and manages your Google Calendar. Ask what's coming up, or tell it to book something.
+- **Scheduled tasks** - Daily summaries, weekly recaps, reminders - set it and forget it.
+- **Web & video** - Summarize YouTube videos, fetch web pages, or research a topic, all from a chat message.
 
 </details>
 
@@ -48,7 +48,7 @@ A personal AI that lives in your messaging apps, remembers your conversations, a
 - [Docker Desktop](https://www.docker.com/products/docker-desktop/) (handles WSL 2 on Windows automatically)
 - Node.js 20+, Python 3.11+
 - A [Gemini API key](https://aistudio.google.com/apikey) (free tier is enough)
-- [Ollama](https://ollama.ai/download) for local embeddings and scoring -- `/setup` pulls the right models automatically based on your hardware
+- [Ollama](https://ollama.ai/download) for local embeddings and scoring - `/setup` pulls the right models automatically based on your hardware
 
 ### Install
 
@@ -64,7 +64,7 @@ Then inside Claude Code:
 /setup
 ```
 
-Setup installs dependencies, builds the container, and walks you through configuration. At the end it offers a **Personality Kickstarter** -- choose a behavioral bundle (developer, student, universal) or pick individual behaviors, and optionally seed the learning loop so it isn't starting cold.
+Setup installs dependencies, builds the container, and walks you through configuration. At the end it offers a **Personality Kickstarter** - choose a behavioral bundle (developer, student, universal) or pick individual behaviors, and optionally seed the learning loop so it isn't starting cold.
 
 ### Connect a channel
 
@@ -91,11 +91,11 @@ See [AGENTS.md](AGENTS.md#commands-and-skills) for all available skills.
 > I'm switching to a new AI assistant called Deus. Generate a structured summary
 > about me that I can give it so it knows me from day one. Include:
 >
-> 1. About me -- name, role, location, languages
-> 2. What I use AI for -- main topics and tasks
-> 3. Communication style -- how I like responses
-> 4. Preferences -- things I've corrected you on
-> 5. Key context -- ongoing projects, goals, background
+> 1. About me - name, role, location, languages
+> 2. What I use AI for - main topics and tasks
+> 3. Communication style - how I like responses
+> 4. Preferences - things I've corrected you on
+> 5. Key context - ongoing projects, goals, background
 >
 > Be specific and factual. Skip anything generic. Format as plain text.
 > ```
@@ -135,8 +135,8 @@ Deus goes deep on memory, learning, and security. See [docs/benchmarks.md](docs/
 | Topic | |
 |-------|-|
 | How it works | [Architecture](docs/ARCHITECTURE.md) |
-| Memory system | [Architecture -- Memory](docs/ARCHITECTURE.md#memory-system) |
-| Self-improvement loop | [Architecture -- Evolution](docs/ARCHITECTURE.md#evolution-loop) |
+| Memory system | [Architecture - Memory](docs/ARCHITECTURE.md#memory-system) |
+| Self-improvement loop | [Architecture - Evolution](docs/ARCHITECTURE.md#evolution-loop) |
 | Security model | [Security](docs/SECURITY.md) |
 | Benchmarks & token costs | [Benchmarks](docs/benchmarks.md) |
 | Environment variables | [Environment](docs/ENVIRONMENT.md) |
@@ -150,13 +150,13 @@ Deus goes deep on memory, learning, and security. See [docs/benchmarks.md](docs/
 
 ## Contributing
 
-PRs welcome. Every change goes through a pull request -- no direct pushes to main. See [CONTRIBUTING.md](CONTRIBUTING.md) for the full guide.
+PRs welcome. Every change goes through a pull request - no direct pushes to main. See [CONTRIBUTING.md](CONTRIBUTING.md) for the full guide.
 
 ---
 
 ## Support
 
-Built and maintained solo -- no company, no funding. If Deus is useful to you, sponsoring helps keep it going.
+Built and maintained solo - no company, no funding. If Deus is useful to you, sponsoring helps keep it going.
 
 [![GitHub Sponsors](https://img.shields.io/badge/Sponsor-%E2%9D%A4-ea4aaa?logo=github)](https://github.com/sponsors/sliamh11)
 [![Ko-fi](https://img.shields.io/badge/Ko--fi-Support-ff5e5b?logo=ko-fi)](https://ko-fi.com/liamsteiner)
@@ -166,7 +166,7 @@ Built and maintained solo -- no company, no funding. If Deus is useful to you, s
 
 ## Acknowledgments
 
-Built on [NanoClaw](https://github.com/qwibitai/nanoclaw) -- thanks to the NanoClaw team for the foundation.
+Built on [NanoClaw](https://github.com/qwibitai/nanoclaw) - thanks to the NanoClaw team for the foundation.
 
 ## License
 
