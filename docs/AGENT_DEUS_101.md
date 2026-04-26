@@ -113,8 +113,10 @@ Chat/channel commands must not depend on backend:
 - `/settings requires_trigger=true|false`
 - `/compact`
 
-Host/session skills include `/setup`, `/add-llama-cpp`, `/customize`,
-`/debug`, `/qodo-pr-resolver`, and `/get-qodo-rules`.
+Host/session skills are native slash skills for direct Claude/Codex sessions,
+not commands to suggest inside messaging channels. The canonical inventory is
+the table in [AGENTS.md](../AGENTS.md#commands-and-skills); every new
+`.claude/skills/` entry must be added there in the same change.
 
 ## Warden Gates
 

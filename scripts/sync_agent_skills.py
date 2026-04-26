@@ -89,12 +89,78 @@ def _read_tree(root: Path) -> dict[str, bytes]:
     return files
 
 
+def _skill_inventory(source_root: Path) -> tuple[list[str], list[Path]]:
+    names: list[str] = []
+    invalid: list[Path] = []
+    if not source_root.exists():
+        return names, invalid
+
+    for path in sorted(source_root.rglob("*")):
+        if not path.is_file() or path.name.lower() != "skill.md":
+            continue
+
+        text = path.read_text(encoding="utf-8")
+        if not text.startswith("---\n"):
+            invalid.append(path)
+            continue
+
+        end = text.find("\n---", 4)
+        if end == -1:
+            invalid.append(path)
+            continue
+
+        found_name = False
+        for line in text[4:end].splitlines():
+            if line.startswith("name: "):
+                names.append(line.removeprefix("name: ").strip())
+                found_name = True
+                break
+
+        if not found_name:
+            invalid.append(path)
+
+    return sorted(set(names)), invalid
+
+
+def check_skill_inventory(project_root: Path) -> int:
+    """Verify every repo-owned skill is documented in AGENTS.md."""
+    agents_path = project_root / "AGENTS.md"
+    agents_text = agents_path.read_text(encoding="utf-8")
+    names, invalid = _skill_inventory(SOURCE_ROOT)
+    missing = [
+        name
+        for name in names
+        if f"| `/{name}` |" not in agents_text
+    ]
+
+    if not invalid and not missing:
+        print("Skill inventory documented.")
+        return 0
+
+    if invalid:
+        print("INVALID SKILL FILES — missing YAML frontmatter or name:")
+        for path in invalid:
+            print(f"  {path.relative_to(project_root)}")
+
+    if missing:
+        print("SKILL INVENTORY DRIFT — AGENTS.md is missing skill command(s):")
+        for name in missing:
+            print(f"  /{name}")
+
+    print(
+        "\nFIX: add valid YAML frontmatter, then list each skill in "
+        "AGENTS.md#commands-and-skills."
+    )
+    return 1
+
+
 def check_agents_tree(project_root: Path, dest_root: Path | None = None) -> int:
     """Verify that the local `.agents/` tree matches generated output."""
+    inventory_status = check_skill_inventory(project_root)
     dest_root = dest_root or (project_root / ".agents")
     if not dest_root.exists():
         print("SKIP: .agents/ not present (local generated Codex compatibility tree).")
-        return 0
+        return inventory_status
 
     expected = render_agents_tree(project_root)
     actual = _read_tree(dest_root)
@@ -107,7 +173,7 @@ def check_agents_tree(project_root: Path, dest_root: Path | None = None) -> int:
 
     if not missing and not extra and not changed:
         print(f"Agent tree synced ({len(expected)} files).")
-        return 0
+        return inventory_status
 
     print("AGENT TREE DRIFT — `.agents/` no longer matches generated output.")
     if missing:

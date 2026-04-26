@@ -113,12 +113,44 @@ Commands that must remain stable across backends:
 Host skills are not chat commands. Never suggest them inside WhatsApp,
 Telegram, Slack, Discord, or Gmail.
 
+Repo-owned host skills live under `.claude/skills/`. Some runtimes consume the
+generated `.agents/skills/` compatibility tree. When adding, removing, or
+renaming a repo-owned skill, update this table in the same change.
+
 | Skill | When to Use |
 |---|---|
-| `/setup` | First-time installation, authentication, service configuration |
-| `/add-llama-cpp` | Install and verify a local `llama.cpp` server for optional Deus local-generation experiments |
-| `/customize` | Adding channels, integrations, changing behavior |
-| `/debug` | Container issues, logs, troubleshooting |
+| `/add-codex` | Add OpenAI/Codex as a backend |
+| `/add-compact` | Add the backend-neutral `/compact` session command |
+| `/add-discord` | Add Discord as a channel |
+| `/add-gmail` | Add Gmail as a tool or channel |
+| `/add-image-vision` | Add image attachment vision to Deus agents |
+| `/add-listen-hotkey` | Add a global hotkey for `deus listen` |
+| `/add-llama-cpp` | Install and verify optional local `llama.cpp` generation |
+| `/add-ollama-tool` | Add Ollama as an MCP tool for local model calls |
+| `/add-parallel` | Add Parallel AI MCP research tools |
+| `/add-pdf-reader` | Add PDF text extraction |
+| `/add-reactions` | Add WhatsApp emoji reaction support |
+| `/add-slack` | Add Slack as a channel |
+| `/add-telegram` | Add Telegram as a channel |
+| `/add-telegram-swarm` | Add Agent Swarm support to Telegram |
+| `/add-voice-transcription` | Add OpenAI Whisper voice transcription |
+| `/add-whatsapp` | Add WhatsApp as a channel |
+| `/add-youtube-transcript` | Add YouTube transcript extraction |
+| `/checkpoint` | Save a mid-session continuity checkpoint |
+| `/code-review` | Run multi-agent code review |
+| `/compress` | Save the session to the vault and update memory indexes |
+| `/convert-to-apple-container` | Switch from Docker to Apple Container |
+| `/customize` | Add channels, integrations, or behavior changes |
+| `/debug` | Debug containers, logs, auth, and runtime issues |
+| `/preferences` | View or modify Deus user preferences |
+| `/preserve` | Save durable memories from the current conversation |
+| `/project-settings` | View or modify external project memory settings |
+| `/resume` | Load recent work and memory context |
+| `/review-logs` | Review Deus system health logs |
+| `/setup` | Run first-time installation and configuration |
+| `/update-skills` | Update installed skill branches from upstream |
+| `/use-local-whisper` | Switch voice transcription to local whisper.cpp |
+| `/x-integration` | Set up or use X/Twitter integration |
 | `/qodo-pr-resolver` | Fetch and fix Qodo PR review issues interactively or in batch |
 | `/get-qodo-rules` | Load org- and repo-level coding rules from Qodo before code tasks |
 

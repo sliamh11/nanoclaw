@@ -76,6 +76,11 @@ Optional host-side runtime skills:
 /add-llama-cpp          # Install llama.cpp and verify a local llama-server endpoint
 ```
 
+The full native host-skill inventory lives in
+[AGENTS.md](AGENTS.md#commands-and-skills). Host skills are for direct
+Claude/Codex sessions, not messaging channels; every new `.claude/skills/`
+entry must be added to that list in the same change.
+
 > **Switching from another AI?** Give Deus a head start. Paste this prompt into your current AI (ChatGPT, Gemini, etc.) and send the output to Deus in your first conversation:
 >
 > ```
