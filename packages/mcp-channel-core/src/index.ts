@@ -1,3 +1,4 @@
+export { resizeAndEncode } from './image-util.js';
 export { MessageBuffer } from './message-buffer.js';
 export { registerCommonTools } from './server-base.js';
 export type {

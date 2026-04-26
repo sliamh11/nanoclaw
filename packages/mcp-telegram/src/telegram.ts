@@ -16,6 +16,7 @@ import type {
   IncomingMessage,
   IncomingReaction,
 } from '@deus-ai/channel-core';
+import { resizeAndEncode } from '@deus-ai/channel-core';
 
 const ASSISTANT_NAME = process.env.ASSISTANT_NAME || 'Deus';
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
@@ -30,6 +31,19 @@ const MAX_MESSAGE_LENGTH = 4096;
 const MAX_CONSECUTIVE_ERRORS = 5;
 const MAX_RECONNECT_RETRIES = 3;
 const BASE_BACKOFF_MS = 1000;
+
+function fetchBytes(url: string): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    https
+      .get(url, (res) => {
+        const chunks: Buffer[] = [];
+        res.on('data', (c: Buffer) => chunks.push(c));
+        res.on('end', () => resolve(Buffer.concat(chunks)));
+        res.on('error', reject);
+      })
+      .on('error', reject);
+  });
+}
 
 /**
  * Send a message with Telegram Markdown parse mode, falling back to plain text.
@@ -212,7 +226,56 @@ export class TelegramProvider implements ChannelProvider {
       });
     };
 
-    this.bot.on('message:photo', (ctx) => storeMedia(ctx, '[Photo]'));
+    this.bot.on('message:photo', async (ctx) => {
+      try {
+        const photos = ctx.message.photo;
+        if (photos && photos.length > 0) {
+          const largest = photos[photos.length - 1];
+          const file = await ctx.api.getFile(largest.file_id);
+          if (file.file_path) {
+            const url = `https://api.telegram.org/file/bot${BOT_TOKEN}/${file.file_path}`;
+            const raw = await fetchBytes(url);
+            const imageData = await resizeAndEncode(raw);
+            if (imageData) {
+              const chatJid = `tg:${ctx.chat.id}`;
+              const timestamp = new Date(ctx.message.date * 1000).toISOString();
+              const senderName =
+                ctx.from?.first_name ||
+                ctx.from?.username ||
+                ctx.from?.id?.toString() ||
+                'Unknown';
+              const caption = ctx.message.caption || '';
+              const isGroup =
+                ctx.chat.type === 'group' || ctx.chat.type === 'supergroup';
+
+              this.knownChats.set(chatJid, {
+                name:
+                  ctx.chat.type === 'private'
+                    ? senderName
+                    : (ctx.chat as any).title || chatJid,
+                isGroup,
+              });
+
+              this.onMessage({
+                id: ctx.message.message_id.toString(),
+                chat_id: chatJid,
+                sender: ctx.from?.id?.toString() || '',
+                sender_name: senderName,
+                content: caption,
+                timestamp,
+                is_from_me: false,
+                is_group: isGroup,
+                metadata: { imageData },
+              });
+              return;
+            }
+          }
+        }
+      } catch (err) {
+        logger.warn({ err }, 'Telegram photo download failed');
+      }
+      storeMedia(ctx, '[Photo]');
+    });
     this.bot.on('message:video', (ctx) => storeMedia(ctx, '[Video]'));
     this.bot.on('message:voice', (ctx) => storeMedia(ctx, '[Voice message]'));
     this.bot.on('message:audio', (ctx) => storeMedia(ctx, '[Audio]'));

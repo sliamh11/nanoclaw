@@ -21,6 +21,7 @@ import type {
   ChatInfo,
   IncomingMessage,
 } from '@deus-ai/channel-core';
+import { resizeAndEncode } from '@deus-ai/channel-core';
 
 const CREDENTIALS_DIR =
   process.env.GMAIL_CREDENTIALS_DIR || path.join(os.homedir(), '.gmail-mcp');
@@ -420,7 +421,29 @@ export class GmailProvider implements ChannelProvider {
     // Extract body text
     const body = this.extractTextBody(msg.data.payload);
 
-    if (!body) {
+    // Extract first image attachment
+    let imageData: string | undefined;
+    const imagePart = this.findImagePart(msg.data.payload);
+    if (imagePart?.body?.attachmentId && this.gmail) {
+      try {
+        const att = await this.gmail.users.messages.attachments.get({
+          userId: 'me',
+          messageId,
+          id: imagePart.body.attachmentId,
+        });
+        if (att.data.data) {
+          const raw = Buffer.from(att.data.data, 'base64url');
+          imageData = (await resizeAndEncode(raw)) ?? undefined;
+        }
+      } catch (err) {
+        logger.warn(
+          { messageId, err },
+          'Gmail image attachment download failed',
+        );
+      }
+    }
+
+    if (!body && !imageData) {
       logger.debug({ messageId, subject }, 'Skipping email with no text body');
       return;
     }
@@ -438,7 +461,9 @@ export class GmailProvider implements ChannelProvider {
     // Track chat
     this.knownChats.set(chatJid, { name: subject, isGroup: false });
 
-    const content = `[Email from ${senderName} <${senderEmail}>]\nSubject: ${subject}\n\n${body}`;
+    const content = body
+      ? `[Email from ${senderName} <${senderEmail}>]\nSubject: ${subject}\n\n${body}`
+      : `[Email from ${senderName} <${senderEmail}>]\nSubject: ${subject}`;
 
     this.onMessage({
       id: messageId,
@@ -451,6 +476,7 @@ export class GmailProvider implements ChannelProvider {
       is_group: false,
       chat_name: subject,
       metadata: {
+        ...(imageData && { imageData }),
         thread_id: threadId,
         subject,
       },
@@ -499,5 +525,21 @@ export class GmailProvider implements ChannelProvider {
     }
 
     return '';
+  }
+
+  private findImagePart(
+    payload: gmail_v1.Schema$MessagePart | undefined,
+  ): gmail_v1.Schema$MessagePart | null {
+    if (!payload) return null;
+    if (payload.mimeType?.startsWith('image/') && payload.body?.attachmentId) {
+      return payload;
+    }
+    if (payload.parts) {
+      for (const part of payload.parts) {
+        const found = this.findImagePart(part);
+        if (found) return found;
+      }
+    }
+    return null;
   }
 }

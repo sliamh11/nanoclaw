@@ -77,6 +77,8 @@ export interface NewMessage {
   timestamp: string;
   is_from_me?: boolean;
   is_bot_message?: boolean;
+  /** Resized JPEG as base64. Ephemeral — not stored in DB. */
+  imageData?: string;
 }
 
 export interface NewReaction {

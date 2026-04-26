@@ -10,12 +10,15 @@ import { App, LogLevel } from '@slack/bolt';
 
 import pino from 'pino';
 
+import https from 'https';
+
 import type {
   ChannelProvider,
   ChannelStatus,
   ChatInfo,
   IncomingMessage,
 } from '@deus-ai/channel-core';
+import { resizeAndEncode } from '@deus-ai/channel-core';
 
 // Read env vars lazily so tests can set them before connect()
 function getAssistantName(): string {
@@ -33,6 +36,25 @@ const logger = pino(
   { level: process.env.LOG_LEVEL || 'info' },
   pino.destination(2),
 );
+
+function fetchBytesWithAuth(url: string, token: string): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const parsed = new URL(url);
+    const opts = {
+      hostname: parsed.hostname,
+      path: parsed.pathname + parsed.search,
+      headers: { Authorization: `Bearer ${token}` },
+    };
+    https
+      .get(opts, (res) => {
+        const chunks: Buffer[] = [];
+        res.on('data', (c: Buffer) => chunks.push(c));
+        res.on('end', () => resolve(Buffer.concat(chunks)));
+        res.on('error', reject);
+      })
+      .on('error', reject);
+  });
+}
 
 // Slack's chat.postMessage API limits text to ~4000 characters per call.
 const MAX_MESSAGE_LENGTH = 4000;
@@ -102,9 +124,36 @@ export class SlackProvider implements ChannelProvider {
         ts: string;
         thread_ts?: string;
         bot_id?: string;
+        files?: Array<{
+          mimetype?: string;
+          url_private_download?: string;
+          name?: string;
+        }>;
       };
 
-      if (!msg.text) return;
+      // Download first image attachment if present
+      let imageData: string | undefined;
+      if (msg.files) {
+        const imageFile = msg.files.find((f) =>
+          f.mimetype?.startsWith('image/'),
+        );
+        if (imageFile?.url_private_download) {
+          try {
+            const raw = await fetchBytesWithAuth(
+              imageFile.url_private_download,
+              getBotToken(),
+            );
+            imageData = (await resizeAndEncode(raw)) ?? undefined;
+          } catch (err) {
+            logger.warn(
+              { err, name: imageFile.name },
+              'Slack image download failed',
+            );
+          }
+        }
+      }
+
+      if (!msg.text && !imageData) return;
 
       const chatId = `slack:${msg.channel}`;
       const timestamp = new Date(parseFloat(msg.ts) * 1000).toISOString();
@@ -126,7 +175,7 @@ export class SlackProvider implements ChannelProvider {
       this.knownChats.set(chatId, { name: senderName, isGroup });
 
       // Translate Slack <@UBOTID> mentions into @AssistantName format
-      let content = msg.text;
+      let content = msg.text || '';
       if (this.botUserId && !isBotMessage) {
         const mentionPattern = `<@${this.botUserId}>`;
         if (content.includes(mentionPattern)) {
@@ -144,6 +193,7 @@ export class SlackProvider implements ChannelProvider {
         is_from_me: isBotMessage,
         is_group: isGroup,
         metadata: {
+          ...(imageData && { imageData }),
           thread_ts: msg.thread_ts,
           is_bot_message: isBotMessage,
         },

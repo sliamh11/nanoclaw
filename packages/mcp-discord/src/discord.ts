@@ -13,12 +13,15 @@ import {
 } from 'discord.js';
 import pino from 'pino';
 
+import https from 'https';
+
 import type {
   ChannelProvider,
   ChannelStatus,
   ChatInfo,
   IncomingMessage,
 } from '@deus-ai/channel-core';
+import { resizeAndEncode } from '@deus-ai/channel-core';
 
 const ASSISTANT_NAME = process.env.ASSISTANT_NAME || 'Deus';
 const BOT_TOKEN = process.env.DISCORD_BOT_TOKEN || '';
@@ -30,6 +33,28 @@ const logger = pino(
 );
 
 const MAX_MESSAGE_LENGTH = 2000;
+
+function fetchBytes(url: string): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    https
+      .get(url, (res) => {
+        if (
+          res.statusCode &&
+          res.statusCode >= 300 &&
+          res.statusCode < 400 &&
+          res.headers.location
+        ) {
+          fetchBytes(res.headers.location).then(resolve, reject);
+          return;
+        }
+        const chunks: Buffer[] = [];
+        res.on('data', (c: Buffer) => chunks.push(c));
+        res.on('end', () => resolve(Buffer.concat(chunks)));
+        res.on('error', reject);
+      })
+      .on('error', reject);
+  });
+}
 
 export class DiscordProvider implements ChannelProvider {
   readonly name = 'discord';
@@ -104,26 +129,38 @@ export class DiscordProvider implements ChannelProvider {
         }
       }
 
-      // Handle attachments — store placeholders
+      // Handle attachments — download first image, placeholders for rest
+      let imageData: string | undefined;
       if (message.attachments.size > 0) {
-        const attachmentDescriptions = [...message.attachments.values()].map(
-          (att) => {
-            const contentType = att.contentType || '';
-            if (contentType.startsWith('image/')) {
-              return `[Image: ${att.name || 'image'}]`;
-            } else if (contentType.startsWith('video/')) {
-              return `[Video: ${att.name || 'video'}]`;
-            } else if (contentType.startsWith('audio/')) {
-              return `[Audio: ${att.name || 'audio'}]`;
-            } else {
-              return `[File: ${att.name || 'file'}]`;
+        const descriptions: string[] = [];
+        for (const att of message.attachments.values()) {
+          const contentType = att.contentType || '';
+          if (contentType.startsWith('image/') && !imageData) {
+            try {
+              const raw = await fetchBytes(att.url);
+              imageData = (await resizeAndEncode(raw)) ?? undefined;
+            } catch (err) {
+              logger.warn(
+                { err, name: att.name },
+                'Discord image download failed',
+              );
             }
-          },
-        );
-        if (content) {
-          content = `${content}\n${attachmentDescriptions.join('\n')}`;
-        } else {
-          content = attachmentDescriptions.join('\n');
+            if (!imageData)
+              descriptions.push(`[Image: ${att.name || 'image'}]`);
+          } else if (contentType.startsWith('video/')) {
+            descriptions.push(`[Video: ${att.name || 'video'}]`);
+          } else if (contentType.startsWith('audio/')) {
+            descriptions.push(`[Audio: ${att.name || 'audio'}]`);
+          } else if (!contentType.startsWith('image/')) {
+            descriptions.push(`[File: ${att.name || 'file'}]`);
+          } else {
+            descriptions.push(`[Image: ${att.name || 'image'}]`);
+          }
+        }
+        if (descriptions.length > 0) {
+          content = content
+            ? `${content}\n${descriptions.join('\n')}`
+            : descriptions.join('\n');
         }
       }
 
@@ -160,6 +197,7 @@ export class DiscordProvider implements ChannelProvider {
         is_group: isGroup,
         chat_name: chatName,
         metadata: {
+          ...(imageData && { imageData }),
           reply_to_message_id: replyToMessageId,
           reply_to_content: replyToContent,
           reply_to_sender_name: replyToSenderName,
