@@ -48,7 +48,7 @@ A personal AI that lives in your messaging apps, remembers your conversations, a
 - [Docker Desktop](https://www.docker.com/products/docker-desktop/) (handles WSL 2 on Windows automatically)
 - Node.js 20+, Python 3.11+
 - A [Gemini API key](https://aistudio.google.com/apikey) (free tier is enough)
-- [Ollama](https://ollama.ai/download) for local embeddings and scoring - `/setup` pulls the right models automatically based on your hardware
+- [Ollama](https://ollama.ai/download) for local AI models (memory and scoring) - `/setup` pulls the right models automatically based on your hardware
 
 ### Install
 
@@ -64,7 +64,7 @@ Then inside the CLI:
 /setup
 ```
 
-Setup installs dependencies, builds the container, and walks you through configuration. At the end it offers a **Personality Kickstarter** - choose a behavioral bundle (developer, student, universal) or pick individual behaviors, and optionally seed the learning loop so it isn't starting cold.
+Setup installs dependencies, builds the container, and walks you through configuration. At the end it offers a **Personality Kickstarter** - choose a behavioral bundle (developer, student, universal) or pick individual behaviors, and optionally give it example conversations so it's useful from day one.
 
 ### Connect a channel
 
@@ -119,8 +119,8 @@ See [AGENTS.md](AGENTS.md#commands-and-skills) for all available skills.
 
 |  | **Deus** | **[OpenClaw](https://github.com/openclaw/openclaw)** | **[NemoClaw](https://github.com/NVIDIA/NemoClaw)** | **[Hermes Agent](https://github.com/NousResearch/hermes-agent)** | **Plain Claude** |
 |---|---|---|---|---|---|
-| **Memory** | 3-tier recall (semantic + tree + recency) | Markdown files | Via OpenClaw | SQLite/FTS5 + preference profiling | Conversation only |
-| **Learning** | Judge + reflexion + DSPy optimization | No | No | Auto-creates & refines skills | No |
+| **Memory** | Remembers past conversations and learns preferences | Markdown files | Via OpenClaw | Full-text search + preference profiling | Conversation only |
+| **Learning** | Scores itself, fixes mistakes, improves over time | No | No | Auto-creates & refines skills | No |
 | **Channels** | 5 (WhatsApp, Telegram, Slack, Discord, Gmail) | 10+ | Via OpenClaw | 15+ (WhatsApp, Telegram, Signal, Matrix...) | None |
 | **Isolation** | Container per conversation | Opt-in Docker | Landlock + seccomp | Per-session | None |
 | **LLM support** | Claude default, OpenAI opt-in | Any provider | Any (via OpenClaw) | Any (10+ providers) | Claude only |

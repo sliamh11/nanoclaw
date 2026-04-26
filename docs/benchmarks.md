@@ -4,7 +4,7 @@ How Deus compares to other open-source AI assistant frameworks. Last updated: Ap
 
 ## Philosophy
 
-Different tools solve different problems. **OpenClaw** optimizes for breadth: 10+ channels, 5,700+ community skills, any LLM provider. **Hermes Agent** optimizes for autonomy: self-creating skills, 15+ channels, and the widest LLM provider list. **Deus** optimizes for depth: semantic memory that actually recalls last week's conversation, a judge-based self-improvement loop that tunes its own prompts, and per-conversation container isolation that's on by default — not opt-in.
+Different tools solve different problems. **OpenClaw** optimizes for breadth: 10+ channels, 5,700+ community skills, any LLM provider. **Hermes Agent** optimizes for autonomy: self-creating skills, 15+ channels, and the widest LLM provider list. **Deus** optimizes for depth: memory that actually recalls last week's conversation, a learning loop that scores itself and gets better over time, and per-conversation isolation that's on by default.
 
 Choose the right tool for what you care about.
 
@@ -15,12 +15,12 @@ Choose the right tool for what you care about.
 |  | **Deus** | **[OpenClaw](https://github.com/openclaw/openclaw)** | **[NemoClaw](https://github.com/NVIDIA/NemoClaw)** | **[Hermes Agent](https://github.com/NousResearch/hermes-agent)** | **Plain Claude** |
 |---|---|---|---|---|---|
 | **Messaging channels** | 5 (WhatsApp, Telegram, Slack, Discord, Gmail) | 10+ (WhatsApp, Telegram, Slack, Discord, Signal, iMessage, Teams, IRC...) | Via OpenClaw | 15+ (WhatsApp, Telegram, Signal, Matrix...) | None |
-| **Agent isolation** | Linux container per conversation (default) | Opt-in Docker sandbox | Landlock + seccomp + namespaces | Per-session | None |
-| **Memory** | sqlite-vec + 3-tier retrieval (warm, cold, tree) + atomic facts | Markdown files on disk | Via OpenClaw | SQLite/FTS5 + preference profiling | Conversation window only |
-| **Self-improvement** | Judge → reflexion → DSPy prompt optimization | No | No | Auto-creates & refines skills | No |
-| **Eval / CI layer** | DeepEval test suite (QA, tool use, safety) | No | No | No | No |
-| **Credential isolation** | Proxy injects keys at runtime; containers never see real credentials | Keys in environment | Policy-controlled | Keys in environment | N/A (cloud) |
-| **LLM support** | Claude default; OpenAI/Codex opt-in | Any (OpenAI, Anthropic, Ollama, local) | Any (via OpenClaw) | Any (10+ providers) | Claude only |
+| **Agent isolation** | Each conversation runs in its own container | Opt-in Docker sandbox | Kernel-level sandboxing | Per-session | None |
+| **Memory** | Remembers past conversations and learns preferences over time | Markdown files on disk | Via OpenClaw | Full-text search + preference profiling | Current conversation only |
+| **Learning** | Scores itself, fixes mistakes, improves over time | No | No | Auto-creates & refines skills | No |
+| **Testing** | Automated test suite for accuracy, tool use, and safety | No | No | No | No |
+| **Credential security** | API keys never enter the container - injected at runtime by a proxy | Keys in environment | Policy-controlled | Keys in environment | N/A (cloud) |
+| **LLM support** | Claude default; [OpenAI/Codex opt-in](decisions/backend-neutral-agent-runtime.md) | Any (OpenAI, Anthropic, Ollama, local) | Any (via OpenClaw) | Any (10+ providers) | Claude only |
 | **Codebase size** | ~37K lines (TypeScript + Python) | ~430,000 lines | Wrapper over OpenClaw | ~147 MB repo | N/A |
 | **Community** | New project | 250K+ GitHub stars, 5,700+ skills | NVIDIA-backed, alpha | ~110K GitHub stars | N/A |
 | **License** | MIT | MIT | Open source | MIT | Proprietary |
@@ -32,139 +32,108 @@ Choose the right tool for what you care about.
 
 ### Agent Isolation
 
-Most frameworks treat sandboxing as optional. Deus makes it the default architecture — every conversation group gets its own Linux container with:
+Most frameworks treat sandboxing as optional. Deus makes it the default - every conversation group gets its own Linux container with:
 
-- **Non-root execution** (uid 1000, no privilege escalation)
-- **Read-only source mounts** (agent can't modify the host codebase)
-- **Credential proxy** (real API keys never enter the container — a host-side proxy injects them at the HTTP level)
-- **Mount allowlist** (stored outside the project directory, tamper-proof from inside the container)
-- **Per-group session isolation** (groups can't see each other's conversation history)
+- **Non-root execution** - the agent can't escalate privileges
+- **Read-only code** - the agent can't modify the host codebase
+- **Key injection** - real API keys never enter the container; a proxy on the host adds them to requests on the fly
+- **Mount allowlist** - the agent can only see directories you explicitly allow
+- **Group isolation** - conversations can't see each other's history
 
-OpenClaw runs agents in the host process by default and offers Docker as an opt-in. NemoClaw adds kernel-level sandboxing (Landlock, seccomp) which is stronger at the syscall level, but doesn't isolate per-conversation — it's one sandbox for the whole agent.
+OpenClaw runs agents directly on your machine by default and offers Docker as an option. NemoClaw adds kernel-level sandboxing (stronger at the system-call level, but one sandbox for the whole agent - not per-conversation).
 
-### Memory Architecture
+For the full security model, see [Security](SECURITY.md).
 
-| System | Storage | Search | Cross-session recall |
-|--------|---------|--------|---------------------|
-| **Deus** | SQLite + sqlite-vec (768-dim vectors) + atomic facts | Semantic search with recency boost + hierarchical tree walk with see_also hops | Yes — 3-tier: warm (recent by date), cold (semantic search), tree (hierarchical retrieval) |
-| **OpenClaw** | Markdown files on disk | Keyword / filename | Session-based persistence, no semantic search |
+### Memory
+
+Ask about something from weeks ago - Deus finds it, even if you used different words at the time.
+
+**How it works:** Three ways to find past conversations, used together:
+
+1. **Recent history** - The last few sessions are loaded by date. No search needed, no cost.
+2. **Search across everything** - When recent history isn't enough, Deus searches all past sessions by meaning (not just keywords). One API call.
+3. **Topic navigation** - A tree of topics (`MEMORY_TREE.md`) lets Deus walk from broad categories to specific facts, and jump between related topics. This is what handles "what did we decide about X?" on a fresh session with no prior context.
+
+On top of that, Deus breaks conversations into individual facts - "we chose library X because of Y", "the deadline is March 5th" - so it can find specific decisions, not just conversation chunks. It also detects when new facts contradict old ones.
+
+| System | How it stores | How it searches | Remembers across sessions? |
+|--------|--------------|----------------|---------------------------|
+| **Deus** | Database with meaning-based indexing + individual facts | Meaning-based search + topic tree + recency boost | Yes - recent history (free), full search, and topic navigation |
+| **OpenClaw** | Markdown files on disk | Keyword / filename | Basic - no meaning-based search |
 | **NemoClaw** | Via OpenClaw | Via OpenClaw | Via OpenClaw |
-| **Hermes Agent** | SQLite + FTS5 | Full-text search + preference profiling | Yes — 3-layer: session context, FTS5, automated user profiling |
-| **Plain Claude** | Context window | None | No (each conversation is isolated) |
+| **Hermes Agent** | Database with full-text search | Full-text search + preference profiling | Yes - session context, full-text search, user profiling |
+| **Plain Claude** | Conversation window | None | No |
 
-Deus uses a three-tier retrieval strategy:
-- **Warm tier**: Last N sessions by date. No API call, no embedding cost. Free.
-- **Cold tier**: Semantic search over all indexed sessions. One Gemini embedding call. Results are re-ranked by recency so recent context surfaces higher.
-- **Tree tier**: Hierarchical walk from a `MEMORY_TREE.md` root through topic branches, with `see_also` hops across branches. Uses local Ollama embeddings. Handles cold-start recall (finding the right note on the first turn) and cross-branch discovery (surfacing facts the flat embedding wouldn't rank highly). Returns `abstained:true` instead of guessing when confidence is low.
-
-On top of retrieval, `memory_indexer.py --extract` breaks session logs into atomic facts with entity-relationship graphs and contradiction detection. This means the system knows that "the auth migration was decided on Monday" and "we rejected approach X because of Y" as discrete, searchable facts — not just chunks of conversation.
-
-Asking "what did we discuss about the auth migration?" will find the relevant session even if it was weeks ago and used different terminology.
+Deus never deletes memory data - old facts are soft-deleted, never dropped ([why](decisions/no-db-deletion.md)). For the full technical architecture (vector dimensions, recency decay formulas, embedding models), see [Architecture - Memory](ARCHITECTURE.md#memory-system) and the [memory tree ADR](decisions/memory-tree.md).
 
 ### Self-Improvement Loop
 
-Hermes Agent auto-creates skills from experience, but its self-assessment "almost always thinks it did well" — there's no external judge. Deus uses an external judge to score responses honestly, then feeds low scores into a structured improvement pipeline:
+Every response Deus gives gets scored by a separate AI model acting as a judge:
 
 ```
-Production interaction
-        │
-        ▼
-   Judge scores it (0.0 – 1.0)
-   ├── Ollama (local, free) for eval
-   └── Gemini for production scoring
-        │
-        ▼
-   Score < 0.6?
-   ├── Yes → Reflexion: generate self-critique + corrected response
-   │         Store for future pattern matching
-   └── No  → Log and move on
-        │
-        ▼
-   20+ scored samples accumulated?
-   ├── Yes → DSPy optimizes the system prompt
-   │         using scored interactions as training data
-   └── No  → Wait for more data
+You ask something
+        |
+        v
+  Deus responds
+        |
+        v
+  A separate AI scores the response (0.0 - 1.0)
+        |
+        v
+  Score below 0.6?
+  |-- Yes --> Deus writes a self-critique: what went wrong, how
+  |           to do better. Stored for future reference.
+  |-- No  --> Logged and moves on
+        |
+        v
+  After 20+ scored responses:
+  |-- The system prompt is automatically rewritten
+  |   using the best-scoring responses as examples.
+  |-- This happens in the background. You don't notice.
 ```
 
-The agent literally gets better at its job over time. Low-scoring responses generate reflections that improve future answers. Once enough data accumulates, DSPy tunes the system prompt itself.
+The result: the longer you use Deus, the better it gets at your specific use cases. Low-scoring responses generate lessons that improve future answers. Once enough data accumulates, the system prompt rewrites itself.
 
-### Eval Layer
+Hermes Agent takes a different approach - it auto-creates reusable skills from tasks it completes. Deus scores responses externally and improves its core instructions rather than building skills.
 
-Deus includes a [DeepEval](https://github.com/confident-ai/deepeval) test suite that validates agent behavior before merges:
+For implementation details, see [Architecture - Evolution](ARCHITECTURE.md#evolution-loop).
 
-- **Core Q&A tests** — factual accuracy, reasoning
-- **Tool use tests** — correct tool selection, parameter generation
-- **Safety tests** — refusal of harmful requests, prompt injection resistance
-- **Parallel pre-warm** — containers cached across test runs
-- **Dynamic concurrency** — scales to available resources
+### Testing
 
-Judge options: OllamaJudge (local, free, gemma4:e4b) or GeminiJudge (cloud).
+Deus includes an automated test suite that validates the agent's behavior before changes are merged:
 
-No other framework in this comparison ships with a built-in eval suite for the agent's conversational behavior.
+- **Accuracy tests** - does it answer factual questions correctly?
+- **Tool use tests** - does it pick the right tool and pass the right parameters?
+- **Safety tests** - does it refuse harmful requests and resist prompt injection?
+
+The judge model can run locally (free, via Ollama) or in the cloud (via Gemini).
+
+No other framework in this comparison ships with built-in behavioral testing for the agent itself.
 
 ---
 
 ## Token Efficiency
 
-> Deus adds ~920 tokens at session start compared to vanilla Claude Code. That buys persistent identity, semantic memory, and a self-improvement loop. The self-improvement loop itself adds zero tokens — it runs asynchronously.
+Deus adds ~920 tokens at session start compared to vanilla Claude Code. Most features - isolation, self-improvement, testing - run in the background at zero token cost. The only per-turn cost is memory recall: 0-500 tokens when past conversations match the current query (most turns hit zero).
 
-### How Deus compares to vanilla Claude Code
+| Feature | What it does | Token cost |
+|---------|-------------|-----------|
+| Identity | Knows your name, tone, formatting preferences per channel | +960 at session start |
+| Memory recall | Retrieves relevant past conversations | 0-500 per turn, on match only |
+| Self-improvement | Scores responses, generates lessons, rewrites prompts | **0** - runs in the background |
+| Container isolation | Separate environment per conversation | **0** - runs on the host |
+| Testing | Accuracy, tool use, and safety validation | **0** - runs in CI only |
+| Skills | `/compress`, `/resume`, and other commands | **0** - loaded on demand |
 
-On the default Claude path, Deus uses the same Claude Agent SDK and `claude_code` system prompt preset as vanilla Claude Code. The backend-neutral runtime keeps the surrounding Deus behavior stable while other adapters catch up to that baseline.
-
-#### Tool filtering (Deus *saves* tokens here)
-
-Vanilla Claude Code exposes all tools by default (~30+ tools). Deus explicitly enumerates `allowedTools`, restricting to only what each session needs:
-
-| Scenario | Tool count | Est. tool tokens |
-|----------|-----------|-----------------|
-| Vanilla Claude Code (no filter) | 30+ | ~3,000+ |
-| Deus — personal assistant query | 24 | ~2,400 |
-| Deus — coding / orchestration query | 27 | ~2,700 |
-
-The **SWARM_SIGNALS optimization** excludes `TeamCreate`, `TeamDelete`, and `SendMessage` from non-orchestration queries (no external project mounted, no swarm keywords in prompt). That's ~300 tokens saved on the majority of personal-assistant turns.
-
-#### Context injection (what Deus adds)
-
-| Source | Est. tokens | Frequency |
-|--------|-------------|-----------|
-| Group `CLAUDE.md` (persona, rules, memory paths) | ~960 | Once per session (KV-cached) |
-| Global `CLAUDE.md` (shared capabilities) | ~560 | Once per session, non-main groups only |
-| Reflections block (past learnings) | 0–500 | Per-turn, only when semantic match found |
-
-Skills (`/compress`, `/resume`, `/preserve`, etc.) are loaded on demand — zero per-turn cost unless a skill command is invoked.
-
-#### Net overhead vs vanilla
-
-```
-Tool savings:     -600 T  (filtered 30+ → 24 tools)
-Group CLAUDE.md:  +960 T
-Global CLAUDE.md: +560 T  (non-main groups)
-──────────────────────────────────────────────────
-Net per session:  +920 T  (one-time at session start, then KV-cached)
-Per-turn (avg):   ~+40 T  (reflections, amortized — most turns hit zero)
-```
-
-#### What +920 tokens buys you
-
-| Feature | What it is | Token cost |
-|---------|-----------|-----------|
-| Persistent identity | Per-group persona, name, tone, formatting rules (WhatsApp vs Telegram) | +960T session start |
-| Semantic memory | Recalls past conversations via 768-dim vector search with recency boost | 0–500T per-turn, on hit only |
-| Self-improvement loop | Judge → reflexion → DSPy prompt optimization | **0** — runs async, never in prompt |
-| Container isolation | Per-group Linux container, credential proxy, mount allowlist | **0** — host-side infrastructure |
-| Eval suite | DeepEval QA / tool-use / safety tests | **0** — CI only |
-| Skills system | 6 built-in skills (`/compress`, `/resume`, etc.) | **0** — loaded on demand |
-
-The self-improvement loop, eval suite, container isolation, and credential proxy add **zero tokens** to the agent context — they run asynchronously on the host or as a separate CI step.
+For detailed token accounting (tool filtering, context injection breakdowns), see [Architecture - Token Budget](ARCHITECTURE.md).
 
 ---
 
 ## Scope
 
-- Deus focuses on depth: memory, self-improvement, and security — not channel breadth or ecosystem size.
+- Deus focuses on depth: memory, self-improvement, and security - not channel breadth or ecosystem size.
 - Deus supports Claude (default) and OpenAI/Codex (opt-in). Arbitrary provider support is not a goal.
-- Quantitative latency/throughput comparisons are not included because they depend on hardware, network, and API tier — not the framework.
+- Quantitative latency/throughput comparisons are not included because they depend on hardware, network, and API tier - not the framework.
 
 ---
 
