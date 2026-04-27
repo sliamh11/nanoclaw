@@ -1340,7 +1340,11 @@ $STARTUP_INSTRUCTION"
         cd "$HOME/deus" && launch_agent
       fi
     else
-      STARTUP_INSTRUCTION="STARTUP INSTRUCTION: Context from the memory vault has been pre-loaded above, BUT it is a snapshot taken at deus launch and does not refresh across /clear or same-session work. Before drafting the catch-up, verify freshness:
+      STARTUP_INSTRUCTION="STARTUP INSTRUCTION: Context from the memory vault has been pre-loaded above, BUT it is a snapshot taken at deus launch and does not refresh across /clear or same-session work.
+
+PRIORITY RULE: If the user's first message contains an explicit directive — an 'execute' command, a file path to act on, a task to perform, or any instruction beyond 'Catch me up' — skip the catch-up routine entirely and execute that directive immediately. The catch-up below is a DEFAULT for when no directive is given, not a mandatory preamble.
+
+If no directive is present, verify freshness before catching up:
 
   1. ls -t \"$VAULT/Checkpoints\" | head -3
   2. ls -t \"$VAULT/Session-Logs/$(date +%Y-%m-%d)\" 2>/dev/null
