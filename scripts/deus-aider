@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# deus-aider — Aider wrapper with Deus memory context injection.
+# Platform: Unix-only (Aider has no Windows support).
+# Parity gap: retrieves context once at launch, not per-prompt like host hooks.
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+MEMORY_QUERY="$SCRIPT_DIR/memory_query.py"
+CONTEXT_FILE="$(mktemp /tmp/deus-memory-context-XXXXXX)"
+
+cleanup() { rm -f "$CONTEXT_FILE"; }
+trap cleanup EXIT
+
+# Retrieve memory context (silent on failure)
+if python3 "$MEMORY_QUERY" "aider session start" --context-only --source aider > "$CONTEXT_FILE" 2>/dev/null; then
+    if [ -s "$CONTEXT_FILE" ]; then
+        exec aider --read "$CONTEXT_FILE" "$@"
+    fi
+fi
+
+# Fallback: launch aider without memory context
+exec aider "$@"
