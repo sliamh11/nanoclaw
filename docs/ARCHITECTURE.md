@@ -319,16 +319,17 @@ Inspired by [Karpathy's LLM Knowledge Bases](https://x.com/karpathy/status/20398
 
 ### Retrieval benchmarks
 
-Evaluated on [LongMemEval-S](https://arxiv.org/abs/2410.10813) (ICLR 2025):
+Evaluated on [LongMemEval-S](https://arxiv.org/abs/2410.10813) (ICLR 2025), 50 examples, local Ollama embeddings:
 
 | Metric | Score |
 |---|---|
-| Recall@1 | 90% |
-| Recall@3 | 95% |
+| Recall@1 | 94% |
+| Recall@3 | 98% |
+| Recall@5 | 98% |
 | Recall@10 | 100% |
-| MRR | 0.93 |
+| MRR | 0.96 |
 
-Internal recall@3 on real vault sessions: **95%** (sampled 20 sessions, queried by topic).
+Internal memory tree benchmark (90 queries, 7 categories): **0.878 score**, 0% wrong-confident rate. Spot-checks on behavioral queries: 10/10 pass with production hook threshold.
 
 ---
 
