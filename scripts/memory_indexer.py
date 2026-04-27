@@ -110,6 +110,14 @@ CONFIDENCE_PRIOR: dict[str, float] = {
     "belief": 0.40,
 }
 
+CATEGORY_SECTIONS: dict[str, tuple[str, str]] = {
+    "constraint": ("Active Constraints", "Enforce these — they are verified rules or limits."),
+    "decision":   ("Prior Decisions", "Decisions already made — follow unless explicitly revisited."),
+    "fact":       ("Known Facts", "Established facts with strong corroboration."),
+    "preference": ("Preferences", "User preferences — respect unless overridden."),
+    "belief":     ("Working Beliefs", "Consider but don't assert — these may evolve."),
+}
+
 _client: genai.Client | None = None
 
 
@@ -143,6 +151,33 @@ def deserialize(buf: bytes) -> list[float]:
 
 
 # ── DB ────────────────────────────────────────────────────────────────────────
+
+def _backfill_category(db: sqlite3.Connection) -> None:
+    """Populate NULL category columns from atom file frontmatter.
+
+    Per-row filesystem errors are caught and default to 'fact'.
+    SQLite errors propagate — a broken DB should fail loudly.
+    """
+    try:
+        rows = db.execute(
+            "SELECT id, path FROM entries WHERE category IS NULL AND type = 'atom' AND orphaned_at IS NULL"
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return
+    if not rows:
+        return
+    for entry_id, path_str in rows:
+        cat = "fact"
+        try:
+            text = Path(path_str).read_text()
+            m = re.search(r"^category:\s*(\S+)", text, re.MULTILINE)
+            if m:
+                cat = m.group(1)
+        except (OSError, UnicodeDecodeError) as exc:
+            print(f"  WARN: backfill category fallback for {path_str}: {exc}", file=sys.stderr)
+        db.execute("UPDATE entries SET category = ? WHERE id = ?", [cat, entry_id])
+    db.commit()
+
 
 def _backfill_fts(db: sqlite3.Connection) -> None:
     """Insert any entries rows not yet in the standalone FTS5 index.
@@ -200,6 +235,7 @@ def open_db() -> sqlite3.Connection:
         ("expired_at", "TEXT DEFAULT NULL"),
         ("expired_reason", "TEXT DEFAULT NULL"),
         ("domain", "TEXT DEFAULT 'general'"),
+        ("category", "TEXT DEFAULT NULL"),
     ]:
         try:
             # safe: col + definition come from the literal tuple-list above.
@@ -337,6 +373,7 @@ def open_db() -> sqlite3.Connection:
         except sqlite3.OperationalError:
             pass
     db.commit()
+    _backfill_category(db)
     _backfill_fts(db)
     return db
 
@@ -1047,7 +1084,8 @@ def cmd_query(query: str, top: int = 3, recency_boost: bool = False,
     rows = db.execute(
         f"""
         SELECT e.path, e.date, e.tldr, e.topics, e.decisions, e.type,
-               e.confidence, e.corroborations, v.distance, e.source_chunk
+               e.confidence, e.corroborations, v.distance, e.source_chunk,
+               e.category
         FROM embeddings v
         JOIN entries e ON e.id = v.rowid
         WHERE {' AND '.join(where_clauses)}
@@ -1064,7 +1102,7 @@ def cmd_query(query: str, top: int = 3, recency_boost: bool = False,
     # Resolve effective privacy allowlist once (not per-atom)
     effective_allowlist = _resolve_privacy_allowlist(allowed_privacy)
 
-    for path, date, tldr, topics, decisions, chunk_type, confidence, corroborations, dist, source_chunk in rows:
+    for path, date, tldr, topics, decisions, chunk_type, confidence, corroborations, dist, source_chunk, category in rows:
         if chunk_type == "atom":
             # Apply domain filter if specified
             if domain:
@@ -1102,6 +1140,7 @@ def cmd_query(query: str, top: int = 3, recency_boost: bool = False,
                     "corroborations": corroborations or 1,
                     "source_chunk": source_chunk or "",
                     "dist": dist, "temperature": atom_temp,
+                    "category": category or "fact",
                 })
         else:
             if path not in seen or (chunk_type == "frontmatter" and seen[path]["type"] != "frontmatter"):
@@ -1168,23 +1207,41 @@ def cmd_query(query: str, top: int = 3, recency_boost: bool = False,
         a["score"] = a.get("dist", 999.0) - 0.25 * a["confidence"] - 0.15 * a.get("temperature", 1.0)
     atom_results.sort(key=lambda a: a["score"])
 
-    # Known Facts — only atoms with ≥ 2 corroborations (well-established)
+    # Category-aware atom sections — only atoms with ≥ 2 corroborations
     high_conf = [a for a in atom_results if a["corroborations"] >= 2]
     if high_conf:
-        lines.append("## Known Facts")
+        by_cat: dict[str, list[dict]] = {}
         for a in high_conf:
-            cat = "fact"
-            atom_p = Path(a["path"])
-            if atom_p.exists():
-                m = re.search(r"^category:\s*(\S+)", atom_p.read_text(), re.MULTILINE)
-                if m:
-                    cat = m.group(1)
-            text = a["chunk"] or ""
-            lines.append(f"- [{cat} | {a['confidence']:.2f}] {text} ({a['corroborations']}x)")
-        if show_source and a.get("source_chunk"):
-            excerpt = a["source_chunk"][:400].replace("\n", "\n    ")
-            lines.append(f"  Source context:\n    {excerpt}")
-        lines.append("")
+            by_cat.setdefault(a["category"], []).append(a)
+        # Within each category: atoms in the same 0.1 distance band
+        # sort by corroborations desc (tiebreaker); otherwise by score.
+        for cat_atoms in by_cat.values():
+            cat_atoms.sort(key=lambda a: (round(a["score"] / 0.1), -a["corroborations"]))
+        for cat_key, (header, framing) in CATEGORY_SECTIONS.items():
+            bucket = by_cat.get(cat_key)
+            if not bucket:
+                continue
+            lines.append(f"## {header}")
+            lines.append(f"> {framing}")
+            for a in bucket:
+                text = a["chunk"] or ""
+                lines.append(f"- [{cat_key} | {a['confidence']:.2f}] {text} ({a['corroborations']}x)")
+                if show_source and a.get("source_chunk"):
+                    excerpt = a["source_chunk"][:400].replace("\n", "\n    ")
+                    lines.append(f"  Source context:\n    {excerpt}")
+            lines.append("")
+        # Atoms with unrecognized categories (not in CATEGORY_SECTIONS)
+        for cat_key, bucket in by_cat.items():
+            if cat_key in CATEGORY_SECTIONS:
+                continue
+            lines.append(f"## {cat_key.title()}")
+            for a in bucket:
+                text = a["chunk"] or ""
+                lines.append(f"- [{cat_key} | {a['confidence']:.2f}] {text} ({a['corroborations']}x)")
+                if show_source and a.get("source_chunk"):
+                    excerpt = a["source_chunk"][:400].replace("\n", "\n    ")
+                    lines.append(f"  Source context:\n    {excerpt}")
+            lines.append("")
 
     if seen:
         if resolved_intent == "temporal" and as_of:
@@ -1528,18 +1585,22 @@ def find_duplicate_atom(db: sqlite3.Connection, vec: list[float]) -> int | None:
 
 def bump_corroboration(db: sqlite3.Connection, entry_id: int):
     """Increment corroborations, recompute confidence, and update the atom .md file."""
-    row = db.execute("SELECT path, corroborations FROM entries WHERE id = ?", [entry_id]).fetchone()
+    row = db.execute("SELECT path, corroborations, category FROM entries WHERE id = ?", [entry_id]).fetchone()
     if not row:
         return
     new_corr = row[1] + 1
-    # Read category from atom file for category-aware confidence prior
-    cat = "fact"
+    cat = row[2] or "fact"
+    if not row[2]:
+        # DB category is NULL (pre-backfill atom) — fall back to filesystem
+        atom_path_tmp = Path(row[0])
+        try:
+            text = atom_path_tmp.read_text()
+            m = re.search(r"^category:\s*(\S+)", text, re.MULTILINE)
+            if m:
+                cat = m.group(1)
+        except (OSError, UnicodeDecodeError) as exc:
+            print(f"  WARN: bump_corroboration category fallback for {row[0]}: {exc}", file=sys.stderr)
     atom_path = Path(row[0])
-    if atom_path.exists():
-        text = atom_path.read_text()
-        m = re.search(r"^category:\s*(\S+)", text, re.MULTILINE)
-        if m:
-            cat = m.group(1)
     prior = CONFIDENCE_PRIOR.get(cat, 0.50)
     new_conf = min(prior + new_corr * 0.1, 0.95)
     today = local_now().strftime("%Y-%m-%d")
@@ -2653,9 +2714,9 @@ def cmd_extract(session_path: str, no_contradict: bool = False):
             conf = CONFIDENCE_PRIOR.get(cat, 0.50)
             atom_path = write_atom_file(atom, str(path), today, source_excerpt, domain=domain, privacy=privacy)
             cur = db.execute(
-                "INSERT INTO entries (path, date, chunk, type, tldr, topics, confidence, corroborations, source_chunk, domain, privacy) "
-                "VALUES (?, ?, ?, 'atom', ?, '', ?, 1, ?, ?, ?)",
-                [str(atom_path), today, atom["text"], atom["text"], conf, source_excerpt, domain, privacy],
+                "INSERT INTO entries (path, date, chunk, type, tldr, topics, confidence, corroborations, source_chunk, domain, privacy, category) "
+                "VALUES (?, ?, ?, 'atom', ?, '', ?, 1, ?, ?, ?, ?)",
+                [str(atom_path), today, atom["text"], atom["text"], conf, source_excerpt, domain, privacy, atom.get("category", "fact")],
             )
             db.execute("INSERT INTO embeddings(rowid, embedding) VALUES (?, ?)",
                        [cur.lastrowid, serialize(vec)])
@@ -2807,6 +2868,7 @@ def cmd_rebuild():
                 # Read domain and expired_at from atom frontmatter
                 raw = fm.get("raw", "")
                 atom_domain = "general"
+                atom_category = "fact"
                 atom_expired_at = None
                 atom_expired_reason = None
                 atom_privacy = "internal"
@@ -2814,6 +2876,10 @@ def cmd_rebuild():
                 for line in raw.splitlines():
                     if line.startswith("domain:"):
                         atom_domain = line.split(":", 1)[1].strip()
+                    elif line.startswith("category:"):
+                        val = line.split(":", 1)[1].strip()
+                        if val:
+                            atom_category = val
                     elif line.startswith("expired_at:"):
                         val = line.split(":", 1)[1].strip()
                         if val and val != "null":
@@ -2840,9 +2906,9 @@ def cmd_rebuild():
                 if excerpt_m:
                     stored_excerpt = re.sub(r"^ {2}", "", excerpt_m.group(1), flags=re.MULTILINE).strip()
                 cur = db.execute(
-                    "INSERT INTO entries (path, date, chunk, type, tldr, topics, confidence, corroborations, source_chunk, domain, expired_at, expired_reason, privacy, temperature) "
-                    "VALUES (?, ?, ?, 'atom', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    [str(af), date_str, body, body, fm.get("tags", ""), conf, corr, stored_excerpt, atom_domain, atom_expired_at, atom_expired_reason, atom_privacy, atom_temperature],
+                    "INSERT INTO entries (path, date, chunk, type, tldr, topics, confidence, corroborations, source_chunk, domain, expired_at, expired_reason, privacy, temperature, category) "
+                    "VALUES (?, ?, ?, 'atom', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    [str(af), date_str, body, body, fm.get("tags", ""), conf, corr, stored_excerpt, atom_domain, atom_expired_at, atom_expired_reason, atom_privacy, atom_temperature, atom_category],
                 )
                 db.execute("INSERT INTO embeddings(rowid, embedding) VALUES (?, ?)",
                            [cur.lastrowid, serialize(vec)])

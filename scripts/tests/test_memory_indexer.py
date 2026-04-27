@@ -3904,3 +3904,156 @@ def test_redact_session_creates_backup(tmp_path):
         log.write_text(redacted)
         assert backup.exists(), "Pre-redact backup should be created"
         assert backup.read_text() == original_content
+
+
+# ── Category-aware injection ─────────────────────────────────────────────
+
+
+def _insert_atom_with_category(db, mi, path: str, text: str, category: str,
+                               corroborations: int = 2, confidence: float = 0.70,
+                               dist_vec: list[float] | None = None,
+                               orphaned: bool = False):
+    """Insert an atom row + embedding for category-aware tests."""
+    vec = dist_vec or [0.1] * mi.EMBED_DIM
+    cur = db.execute(
+        "INSERT INTO entries (path, date, chunk, type, tldr, topics, confidence, "
+        "corroborations, source_chunk, domain, privacy, category) "
+        "VALUES (?, '2026-04-27', ?, 'atom', ?, '', ?, ?, '', 'general', 'internal', ?)",
+        [path, text, text, confidence, corroborations, category],
+    )
+    db.execute("INSERT INTO embeddings(rowid, embedding) VALUES (?, ?)",
+               [cur.lastrowid, mi.serialize(vec)])
+    if orphaned:
+        db.execute("UPDATE entries SET orphaned_at = '2026-04-27' WHERE id = ?", [cur.lastrowid])
+    db.commit()
+    return cur.lastrowid
+
+
+def test_backfill_category_idempotent(mi):
+    """Running _backfill_category twice produces no error and same result."""
+    db = mi.open_db()
+    db.execute(
+        "INSERT INTO entries (path, date, chunk, type, tldr, topics, confidence, corroborations, category) "
+        "VALUES ('/fake/atom.md', '2026-01-01', 'test', 'atom', 'test', '', 0.5, 1, NULL)"
+    )
+    db.commit()
+    mi._backfill_category(db)
+    row1 = db.execute("SELECT category FROM entries WHERE path = '/fake/atom.md'").fetchone()
+    assert row1[0] == "fact"
+    mi._backfill_category(db)
+    row2 = db.execute("SELECT category FROM entries WHERE path = '/fake/atom.md'").fetchone()
+    assert row2[0] == "fact"
+
+
+def test_null_category_renders_as_fact(mi, fresh_vault, monkeypatch, capsys):
+    """Atom with NULL category in DB renders under 'Known Facts' (fact default)."""
+    monkeypatch.setattr(mi, "embed", lambda text: [0.1] * mi.EMBED_DIM)
+    db = mi.open_db()
+    cur = db.execute(
+        "INSERT INTO entries (path, date, chunk, type, tldr, topics, confidence, "
+        "corroborations, source_chunk, domain, privacy, category) "
+        "VALUES ('/fake/atom.md', '2026-04-27', 'null cat atom', 'atom', 'null cat atom', "
+        "'', 0.80, 3, '', 'general', 'internal', NULL)"
+    )
+    db.execute("INSERT INTO embeddings(rowid, embedding) VALUES (?, ?)",
+               [cur.lastrowid, mi.serialize([0.1] * mi.EMBED_DIM)])
+    db.commit()
+    mi.cmd_query("test query", top=5)
+    output = capsys.readouterr().out
+    assert "Known Facts" in output
+    assert "null cat atom" in output
+
+
+def test_corroboration_threshold_preserved(mi, fresh_vault, monkeypatch, capsys):
+    """Atom with 1 corroboration does not appear in category sections."""
+    monkeypatch.setattr(mi, "embed", lambda text: [0.1] * mi.EMBED_DIM)
+    db = mi.open_db()
+    _insert_atom_with_category(db, mi, "/fake/single.md", "single corr atom",
+                               "constraint", corroborations=1, confidence=0.65)
+    mi.cmd_query("test query", top=5)
+    output = capsys.readouterr().out
+    assert "single corr atom" not in output
+
+
+def test_orphaned_atom_excluded(mi, fresh_vault, monkeypatch, capsys):
+    """Orphaned atom with category doesn't appear in output."""
+    monkeypatch.setattr(mi, "embed", lambda text: [0.1] * mi.EMBED_DIM)
+    db = mi.open_db()
+    _insert_atom_with_category(db, mi, "/fake/orphan.md", "orphaned constraint",
+                               "constraint", corroborations=3, orphaned=True)
+    try:
+        mi.cmd_query("test query", top=5)
+    except SystemExit:
+        pass
+    output = capsys.readouterr().out
+    assert "orphaned constraint" not in output
+
+
+def test_corroboration_tiebreaker_within_band(mi, fresh_vault, monkeypatch, capsys):
+    """Within the same distance band, higher corroborations sorts first."""
+    monkeypatch.setattr(mi, "embed", lambda text: [0.1] * mi.EMBED_DIM)
+    db = mi.open_db()
+    # Both atoms at same distance (same vector), but different corroborations
+    _insert_atom_with_category(db, mi, "/fake/low.md", "low corr fact",
+                               "fact", corroborations=2, confidence=0.70)
+    _insert_atom_with_category(db, mi, "/fake/high.md", "high corr fact",
+                               "fact", corroborations=5, confidence=0.90)
+    mi.cmd_query("test query", top=5)
+    output = capsys.readouterr().out
+    high_pos = output.find("high corr fact")
+    low_pos = output.find("low corr fact")
+    assert high_pos != -1 and low_pos != -1
+    assert high_pos < low_pos
+
+
+def test_category_section_headers(mi, fresh_vault, monkeypatch, capsys):
+    """Constraint atom gets 'Active Constraints' header."""
+    monkeypatch.setattr(mi, "embed", lambda text: [0.1] * mi.EMBED_DIM)
+    db = mi.open_db()
+    _insert_atom_with_category(db, mi, "/fake/c.md", "must use em-dash",
+                               "constraint", corroborations=2)
+    mi.cmd_query("test query", top=5)
+    output = capsys.readouterr().out
+    assert "## Active Constraints" in output
+    assert "must use em-dash" in output
+
+
+def test_constraint_framing_text(mi, fresh_vault, monkeypatch, capsys):
+    """Constraint section includes framing blockquote."""
+    monkeypatch.setattr(mi, "embed", lambda text: [0.1] * mi.EMBED_DIM)
+    db = mi.open_db()
+    _insert_atom_with_category(db, mi, "/fake/c.md", "some constraint",
+                               "constraint", corroborations=2)
+    mi.cmd_query("test query", top=5)
+    output = capsys.readouterr().out
+    assert "> Enforce these" in output
+
+
+def test_multiple_categories_in_output(mi, fresh_vault, monkeypatch, capsys):
+    """Constraint + fact atoms produce 2 separate sections in correct order."""
+    monkeypatch.setattr(mi, "embed", lambda text: [0.1] * mi.EMBED_DIM)
+    db = mi.open_db()
+    _insert_atom_with_category(db, mi, "/fake/c.md", "a constraint atom",
+                               "constraint", corroborations=2)
+    _insert_atom_with_category(db, mi, "/fake/f.md", "a fact atom",
+                               "fact", corroborations=2)
+    mi.cmd_query("test query", top=5)
+    output = capsys.readouterr().out
+    assert "## Active Constraints" in output
+    assert "## Known Facts" in output
+    # Constraints appear before facts
+    assert output.index("Active Constraints") < output.index("Known Facts")
+
+
+def test_empty_category_section_omitted(mi, fresh_vault, monkeypatch, capsys):
+    """No 'Preferences' header when no preference atoms exist."""
+    monkeypatch.setattr(mi, "embed", lambda text: [0.1] * mi.EMBED_DIM)
+    db = mi.open_db()
+    _insert_atom_with_category(db, mi, "/fake/f.md", "only a fact",
+                               "fact", corroborations=2)
+    mi.cmd_query("test query", top=5)
+    output = capsys.readouterr().out
+    assert "Preferences" not in output
+    assert "Active Constraints" not in output
+    assert "Working Beliefs" not in output
+    assert "## Known Facts" in output
