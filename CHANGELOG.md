@@ -4,6 +4,20 @@ All notable changes to Deus will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.11.0](https://github.com/sliamh11/Deus/compare/v1.10.0...v1.11.0) (2026-04-28)
+
+
+### Features
+
+* **memory:** add memory_query.py shared retrieval module ([#274](https://github.com/sliamh11/Deus/issues/274)) ([b2b087c](https://github.com/sliamh11/Deus/commit/b2b087c9e3f452aa0d86471ad2f3197d16a37207))
+* **memory:** cross-interface memory parity (Phases 2-5) ([#280](https://github.com/sliamh11/Deus/issues/280)) ([78b317e](https://github.com/sliamh11/Deus/commit/78b317e9711c7a98f34cc3090a7aaa55cc40693c))
+* **memory:** group cmd_learnings by category ([#265](https://github.com/sliamh11/Deus/issues/265)) ([891fdc3](https://github.com/sliamh11/Deus/commit/891fdc3076384032f4cab4901df169117ba54890))
+
+
+### Bug Fixes
+
+* **security:** harden exec calls, proxy bind validation, and token redaction ([090261c](https://github.com/sliamh11/Deus/commit/090261cd81cd95267bdb22cb8d19b7cdd3d83afb))
+
 ## [1.10.0](https://github.com/sliamh11/Deus/compare/v1.9.0...v1.10.0) (2026-04-27)
 
 
