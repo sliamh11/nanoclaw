@@ -14,7 +14,7 @@ import shlex
 import subprocess
 import sys
 import tempfile
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Any
 
 
@@ -271,13 +271,19 @@ def _gh_command_index_after_global_flags(tokens: list[str], gh_index: int) -> in
     return index
 
 
+def _is_gh_executable(token: str) -> bool:
+    token = token.strip("\"'")
+    names = {Path(token).name.lower(), PureWindowsPath(token).name.lower()}
+    return bool(names & {"gh", "gh.exe"})
+
+
 def _is_admin_merge_command(command: str) -> bool:
     tokens = _shell_tokens(command)
-    if "--admin" not in tokens:
+    if not any(token == "--admin" or token.startswith("--admin=") for token in tokens):
         return False
 
     for index, token in enumerate(tokens):
-        if token != "gh":
+        if not _is_gh_executable(token):
             continue
         command_index = _gh_command_index_after_global_flags(tokens, index)
         if tokens[command_index : command_index + 2] == ["pr", "merge"]:

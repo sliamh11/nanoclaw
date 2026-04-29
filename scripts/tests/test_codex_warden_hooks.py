@@ -153,6 +153,60 @@ def test_admin_merge_gate_blocks_with_gh_short_repo_flag(tmp_path, capsys):
     assert output["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
+def test_admin_merge_gate_blocks_equals_form_admin_flag(tmp_path, capsys):
+    hooks = load_hooks()
+    repo = git_repo(tmp_path)
+
+    rc = hooks.run_admin_merge_gate(
+        bash_event(repo, "gh pr merge 294 --squash --admin=true"),
+        repo,
+    )
+
+    assert rc == 0
+    output = json.loads(capsys.readouterr().out)
+    assert output["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+def test_admin_merge_gate_blocks_absolute_gh_path(tmp_path, capsys):
+    hooks = load_hooks()
+    repo = git_repo(tmp_path)
+
+    rc = hooks.run_admin_merge_gate(
+        bash_event(repo, "/opt/homebrew/bin/gh pr merge 294 --squash --admin=true"),
+        repo,
+    )
+
+    assert rc == 0
+    output = json.loads(capsys.readouterr().out)
+    assert output["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+def test_admin_merge_gate_blocks_windows_gh_exe_path(tmp_path, capsys):
+    hooks = load_hooks()
+    repo = git_repo(tmp_path)
+
+    rc = hooks.run_admin_merge_gate(
+        bash_event(
+            repo,
+            r'"C:\Program Files\GitHub CLI\gh.exe" pr merge 294 --admin',
+        ),
+        repo,
+    )
+
+    assert rc == 0
+    output = json.loads(capsys.readouterr().out)
+    assert output["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+def test_admin_merge_detection_handles_windows_shell_tokenization(monkeypatch):
+    hooks = load_hooks()
+    monkeypatch.setattr(hooks.os, "name", "nt")
+
+    assert hooks._is_admin_merge_command(
+        r'"C:\Program Files\GitHub CLI\gh.exe" pr merge 294 --admin'
+    )
+
+
 def test_admin_merge_gate_allows_exact_approved_command_and_consumes_marker(
     tmp_path, capsys
 ):
