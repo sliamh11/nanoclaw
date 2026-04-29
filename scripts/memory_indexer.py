@@ -1813,8 +1813,9 @@ def detect_contradictions(db: sqlite3.Connection, new_atom_id: int,
         return []
 
     llm_calls = 0
+    consecutive_failures = 0
     for existing_id, existing_text, distance in rows:
-        if distance > 1.2 or llm_calls >= 5:
+        if distance > 1.2 or llm_calls >= 5 or consecutive_failures >= 3:
             break
         try:
             prompt = _contradiction_prompt(existing_text, new_atom_text)
@@ -1827,6 +1828,7 @@ def detect_contradictions(db: sqlite3.Connection, new_atom_id: int,
                 # All models quota-exhausted — stop checking further pairs.
                 break
             llm_calls += 1
+            consecutive_failures = 0
             verdict = response.text.strip().upper().split()[0] if response.text else ""
             if verdict == "CONTRADICT":
                 conflicts.append({"older_id": existing_id, "newer_id": new_atom_id,
@@ -1845,7 +1847,8 @@ def detect_contradictions(db: sqlite3.Connection, new_atom_id: int,
                 print(f"  CONFLICT DETECTED (pending review): atom {existing_id} "
                       f"may be superseded by {new_atom_id} ({existing_text[:60]})")
         except Exception as e:
-            print(f"  WARN: contradiction check failed: {e}", file=sys.stderr)
+            consecutive_failures += 1
+            print(f"  WARN: contradiction check failed ({consecutive_failures}/3): {e}", file=sys.stderr)
             continue
 
     return conflicts
