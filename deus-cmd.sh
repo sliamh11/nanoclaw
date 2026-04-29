@@ -1189,12 +1189,10 @@ Additional instructions from the user: $PREFS_PERSONA"
 	      printf "  Reading vault...\r"
 	      CLAUDE_MD=$(cat "$VAULT/CLAUDE.md" 2>/dev/null)
 	      AGENTS_MD=$(cat "$VAULT/AGENTS.md" 2>/dev/null)
-	      STATE_MD=$(cat "$VAULT/STATE.md" 2>/dev/null)
 	      STUDY_MD=$(cat "$VAULT/STUDY.md" 2>/dev/null)
 	      INFRA_MD=$(cat "$VAULT/INFRA.md" 2>/dev/null)
 	      [ -n "$CLAUDE_MD" ] && CONTEXT="=== VAULT: CLAUDE.md ===\n$CLAUDE_MD"
 	      [ -n "$AGENTS_MD" ] && CONTEXT="$CONTEXT\n\n=== VAULT: AGENTS.md ===\n$AGENTS_MD"
-	      [ -n "$STATE_MD" ] && CONTEXT="$CONTEXT\n\n=== VAULT: STATE.md ===\n$STATE_MD"
 	      [ -n "$STUDY_MD" ]  && CONTEXT="$CONTEXT\n\n=== VAULT: STUDY.md ===\n$STUDY_MD"
 	      [ -n "$INFRA_MD" ]  && CONTEXT="$CONTEXT\n\n=== VAULT: INFRA.md ===\n$INFRA_MD"
 

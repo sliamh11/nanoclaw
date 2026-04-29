@@ -84,7 +84,8 @@ function baseContextEntries(root: string): ContextEntry[] {
     {
       label: 'VAULT: STATE.md',
       path: workspacePath(root, 'vault', 'STATE.md'),
-      claudeSystemAppend: true,
+      // On-demand only: system-prompt snapshot goes stale across /clear
+      claudeSystemAppend: false,
     },
     {
       label: 'VAULT: MEMORY_TREE.md',

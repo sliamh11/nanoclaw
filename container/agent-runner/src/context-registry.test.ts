@@ -198,7 +198,6 @@ describe('context registry', () => {
       '=== PROJECT RULES: AI_AGENT_GUIDELINES.md ===\nproject guidelines',
       '=== VAULT: AGENTS.md ===\nvault agents',
       '=== VAULT: CLAUDE.md ===\nvault claude',
-      '=== VAULT: STATE.md ===\nvault state',
       '=== VAULT: MEMORY_TREE.md ===\nvault tree',
       '=== EXTRA RULES: reference/AGENTS.md ===\nextra agents',
       '=== EXTRA RULES: reference/AI_AGENT_GUIDELINES.md ===\nextra guidelines',
