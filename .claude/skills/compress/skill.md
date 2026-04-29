@@ -115,8 +115,11 @@ After saving the session log:
         - If `previous:` doesn't exist yet, add it before `pending:`.
       - **Merge** pending tasks (never replace):
         1. Read the current `pending:` block from CLAUDE.md. If missing, treat as empty list.
-        2. Remove any items that match `[x]` completed tasks from the session log (fuzzy match on description).
-        3. Add any new `[ ]` items from the session log that don't already exist in the current pending list (avoid duplicates).
+        2. Remove completed items: for each `[x]` from the session log, find its match in the pending list:
+           - **Match on core identifiers** (file names, feature names, PR numbers, tool names), ignoring parenthetical annotations like `(closed: ...)`, `(done)`, `(PR #N)` and minor wording differences.
+           - **Compound items** (`A + B`): if a pending item has sub-tasks joined by ` + `, match each part independently. All parts matched → remove whole item. Some parts matched → rewrite to keep only unmatched parts. Example: pending `Refactor auth + update docs` with `[x] Refactor auth (done)` → rewrite to `update docs`.
+           - **Dedup pass**: after removals, check each remaining `[ ]` item — if it is semantically covered by any `[x]` (same feature/identifier, different wording), remove it.
+        3. Add any new `[ ]` items from the session log that don't already exist in the pending list and aren't already covered by a `[x]` from this session (avoid duplicates).
         4. Cap at 10 items. If over 10, archive the oldest items to `$VAULT/CLAUDE-Archive.md`.
         5. Write the merged list back to `pending:`.
 
