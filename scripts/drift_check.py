@@ -13,6 +13,7 @@ Exit codes:
 
 Usage:
   python3 scripts/drift_check.py                   # drift check (mtime-based)
+  python3 scripts/drift_check.py --bump            # touch drifted patterns to reset mtime
   python3 scripts/drift_check.py --coverage        # report uncovered docs/
   python3 scripts/drift_check.py --paths           # verify all pattern path refs exist
   python3 scripts/drift_check.py --adr             # flag patterns stale vs ADRs
@@ -229,7 +230,7 @@ def _file_in_changed_set(rel_path: str, changed: set[str], project_root: Path) -
     return False
 
 
-def main(base_ref: str | None = None) -> int:
+def main(base_ref: str | None = None, bump: bool = False) -> int:
     patterns = discover_patterns()
     if not patterns:
         print("No patterns found in patterns/INDEX.md.")
@@ -329,7 +330,28 @@ def main(base_ref: str | None = None) -> int:
     if exit_code == 0:
         print("\nAll patterns up-to-date.")
     elif exit_code == 1:
+        if bump:
+            import datetime
+            today = datetime.date.today().isoformat()
+            drifted_patterns = [r for r in rows if r["status"] == "DRIFTED"]
+            for r in drifted_patterns:
+                p = PROJECT_ROOT / "patterns" / r["pattern"]
+                text = p.read_text()
+                updated = re.sub(
+                    r'(last_verified:\s*)"?\d{4}-\d{2}-\d{2}"?.*',
+                    rf'\g<1>"{today}" # auto-bump',
+                    text,
+                )
+                if updated != text:
+                    p.write_text(updated)
+                    print(f"  bumped {r['pattern']} → {today}")
+                else:
+                    p.touch()
+                    print(f"  touched {r['pattern']} (no last_verified field)")
+            print(f"\nBumped {len(drifted_patterns)} pattern(s). Stage them with your commit.")
+            return 0
         print("\nDRIFTED: update the flagged pattern files to match source changes.")
+        print("Run with --bump to touch drifted patterns (resets their mtime).")
     else:
         print("\nMISSING: pattern file or governed path not found.")
 
@@ -1670,6 +1692,12 @@ if __name__ == "__main__":
         help="Only check governed files changed since REF (e.g. origin/main). "
              "Prevents cascading drift failures across sequential PRs.",
     )
+    parser.add_argument(
+        "--bump",
+        action="store_true",
+        help="Touch drifted pattern files to reset their mtime. "
+             "Stage the touched files alongside your source changes.",
+    )
     args = parser.parse_args()
 
     if args.bench_labels:
@@ -1696,5 +1724,7 @@ if __name__ == "__main__":
         sys.exit(check_paths(PROJECT_ROOT))
     elif args.adr:
         sys.exit(check_adr(PROJECT_ROOT))
+    elif args.bump:
+        sys.exit(main(bump=True))
     else:
         sys.exit(main(base_ref=args.base))
