@@ -41,26 +41,27 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
     let mut left: Vec<Span> = Vec::new();
     let mut right: Vec<Span> = Vec::new();
 
-    let state_indicator = match app.chat_state {
+    let session = app.active();
+    let state_indicator = match session.chat_state {
         crate::app::ChatState::Idle => Span::styled("●", theme::good()),
         crate::app::ChatState::Streaming => Span::styled("●", theme::warn()),
     };
     left.push(Span::raw(" "));
     left.push(state_indicator);
     left.push(Span::styled(
-        format!(" {} ", crate::app::model_display(&app.model)),
+        format!(" {} ", crate::app::model_display(&session.model)),
         theme::accent(),
     ));
 
-    if app.permissions.mode != "default" {
+    if session.permissions.mode != "default" {
         left.push(Span::styled("│ ", theme::muted()));
-        let perm_style = if app.permissions.is_bypass() {
+        let perm_style = if session.permissions.is_bypass() {
             theme::warn()
         } else {
             theme::dim()
         };
         left.push(Span::styled(
-            format!(" {}", app.permissions.mode),
+            format!(" {}", session.permissions.mode),
             perm_style,
         ));
         left.push(Span::raw(" "));
@@ -82,13 +83,17 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
     }
 
     // Right side: cost + turn duration + remaining
+    let session = app.active();
     if let Some(dur) = app.turn_duration_display() {
         right.push(Span::styled(format!("{} ", dur), theme::dim()));
         right.push(Span::styled("│ ", theme::muted()));
     }
 
-    if app.cost_usd > 0.0 {
-        right.push(Span::styled(format!("${:.2} ", app.cost_usd), theme::dim()));
+    if session.cost_usd > 0.0 {
+        right.push(Span::styled(
+            format!("${:.2} ", session.cost_usd),
+            theme::dim(),
+        ));
         right.push(Span::styled("│ ", theme::muted()));
     }
 
@@ -133,7 +138,7 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 fn chat_activity_hint(app: &App) -> Option<String> {
-    if matches!(app.chat_state, crate::app::ChatState::Streaming) {
+    if matches!(app.active().chat_state, crate::app::ChatState::Streaming) {
         Some(if app.show_tools {
             "thinking... Ctrl+O hide".to_string()
         } else {
@@ -170,7 +175,7 @@ mod tests {
     #[test]
     fn chat_activity_hint_shows_while_streaming() {
         let mut app = App::new();
-        app.chat_state = ChatState::Streaming;
+        app.active_mut().chat_state = ChatState::Streaming;
         app.show_tools = false;
 
         let hint = chat_activity_hint(&app).expect("streaming hint");

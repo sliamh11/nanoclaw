@@ -1,7 +1,9 @@
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::io::{BufRead, BufReader, Read as _};
 use std::path::PathBuf;
 use std::process::Command;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -9,6 +11,27 @@ use std::time::{Duration, Instant};
 use crate::config;
 use crate::config::permissions::PermissionsConfig;
 use crate::platform;
+
+#[allow(dead_code)]
+static NEXT_SESSION_ID: AtomicU64 = AtomicU64::new(1);
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub struct SessionId(pub u64);
+
+impl SessionId {
+    pub const MAIN: Self = Self(0);
+
+    #[allow(dead_code)]
+    pub fn next() -> Self {
+        Self(NEXT_SESSION_ID.fetch_add(1, Ordering::Relaxed))
+    }
+}
+
+impl std::fmt::Display for SessionId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Tab {
@@ -76,9 +99,65 @@ impl ChatMessage {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub enum ChatState {
     Idle,
     Streaming,
+}
+
+pub struct Session {
+    #[allow(dead_code)]
+    pub id: SessionId,
+    pub chat_messages: Vec<ChatMessage>,
+    pub chat_state: ChatState,
+    pub stream_rx: Option<mpsc::Receiver<backend::StreamChunk>>,
+    pub turn_count: u32,
+    pub model: String,
+    pub effort: String,
+    pub token_count: u32,
+    pub cost_usd: f64,
+    pub turn_start: Option<Instant>,
+    pub last_turn_duration: Option<Duration>,
+    pub last_thinking_summary: Option<String>,
+    pub permissions: PermissionsConfig,
+    pub active_subagent_ids: HashSet<String>,
+    pub scroll_offset: u16,
+    pub scroll_pinned: bool,
+    pub chat_dirty: bool,
+    pub chat_version: u64,
+}
+
+impl Session {
+    fn new_main(model: String, effort: String, permissions: PermissionsConfig) -> Self {
+        Self {
+            id: SessionId::MAIN,
+            chat_messages: vec![ChatMessage::simple(
+                "system",
+                "Welcome to Deus. Type a message or / for commands.",
+            )],
+            chat_state: ChatState::Idle,
+            stream_rx: None,
+            turn_count: 0,
+            model,
+            effort,
+            token_count: 0,
+            cost_usd: 0.0,
+            turn_start: None,
+            last_turn_duration: None,
+            last_thinking_summary: None,
+            permissions,
+            active_subagent_ids: HashSet::new(),
+            scroll_offset: 0,
+            scroll_pinned: true,
+            chat_dirty: true,
+            chat_version: 0,
+        }
+    }
+
+    pub fn mark_chat_changed(&mut self) {
+        self.chat_version = self.chat_version.wrapping_add(1);
+        self.chat_dirty = true;
+    }
 }
 
 pub struct CommandDef {
@@ -184,6 +263,11 @@ pub const COMMANDS: &[CommandDef] = &[
 ];
 
 pub struct App {
+    // Session management
+    pub sessions: HashMap<SessionId, Session>,
+    pub active_session: SessionId,
+
+    // Global UI state
     pub tab: Tab,
     pub cursor: usize,
     pub input: String,
@@ -195,34 +279,19 @@ pub struct App {
     pub suggestions: Vec<usize>,
     pub arg_suggestions: Vec<String>,
     pub suggestion_cursor: usize,
-    pub chat_messages: Vec<ChatMessage>,
-    pub chat_state: ChatState,
-    pub stream_rx: Option<mpsc::Receiver<backend::StreamChunk>>,
-    pub turn_count: u32,
-    pub model: String,
-    pub effort: String,
-    pub token_count: u32,
-    pub cost_usd: f64,
-    pub session_start: Instant,
-    pub turn_start: Option<Instant>,
-    pub last_turn_duration: Option<Duration>,
-    pub last_thinking_summary: Option<String>,
     pub show_tools: bool,
-    pub scroll_offset: u16,
-    pub scroll_pinned: bool,
     pub esc_pending: Option<Instant>,
     pub queued_messages: Vec<String>,
+    pub session_start: Instant,
+
+    // Dashboard data
     pub git_branch: String,
     pub wardens: Vec<config::wardens::WardenEntry>,
     pub services: Vec<config::healthcheck::ServiceEntry>,
     pub channels: Vec<config::channels::ChannelEntry>,
     pub deus_config: Vec<(String, String)>,
     pub system_context_file: Option<PathBuf>,
-    pub permissions: PermissionsConfig,
     pub mode: String,
-    pub active_subagent_ids: HashSet<String>,
-    pub chat_dirty: bool,
-    pub chat_version: u64,
 }
 
 // StreamChunk and parsing delegated to backend trait — see backend/mod.rs
@@ -245,13 +314,21 @@ fn detect_git_branch() -> String {
 pub const SPINNER_FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
 impl App {
+    pub fn active(&self) -> &Session {
+        self.sessions.get(&self.active_session).unwrap()
+    }
+
+    pub fn active_mut(&mut self) -> &mut Session {
+        self.sessions.get_mut(&self.active_session).unwrap()
+    }
+
     pub fn mark_chat_changed(&mut self) {
-        self.chat_version = self.chat_version.wrapping_add(1);
-        self.chat_dirty = true;
+        self.active_mut().mark_chat_changed();
     }
 
     pub fn spinner_frame(&self) -> &'static str {
         let elapsed = self
+            .active()
             .turn_start
             .map(|t| t.elapsed().as_millis())
             .unwrap_or(0);
@@ -275,7 +352,15 @@ impl App {
             permissions.mode = "bypassPermissions".to_string();
         }
 
+        let main_id = SessionId::MAIN;
+        let main_session = Session::new_main(default_model, "high".to_string(), permissions);
+        let mut sessions = HashMap::new();
+        sessions.insert(main_id, main_session);
+
         let mut app = Self {
+            sessions,
+            active_session: main_id,
+
             tab: Tab::Chat,
             cursor: 0,
             input: String::new(),
@@ -287,37 +372,18 @@ impl App {
             suggestions: Vec::new(),
             arg_suggestions: Vec::new(),
             suggestion_cursor: 0,
-            chat_messages: vec![ChatMessage::simple(
-                "system",
-                "Welcome to Deus. Type a message or / for commands.",
-            )],
-            chat_state: ChatState::Idle,
-            stream_rx: None,
-            turn_count: 0,
-            model: default_model,
-            effort: "high".to_string(),
-            token_count: 0,
-            cost_usd: 0.0,
-            session_start: Instant::now(),
-            turn_start: None,
-            last_turn_duration: None,
-            last_thinking_summary: None,
             show_tools: false,
-            scroll_offset: 0,
-            scroll_pinned: true,
             esc_pending: None,
             queued_messages: Vec::new(),
+            session_start: Instant::now(),
+
             git_branch: detect_git_branch(),
             wardens: Vec::new(),
             services: Vec::new(),
             channels: Vec::new(),
             deus_config: Vec::new(),
             system_context_file: ctx_file,
-            permissions,
             mode,
-            active_subagent_ids: HashSet::new(),
-            chat_dirty: true,
-            chat_version: 0,
         };
         app.refresh();
 
@@ -366,7 +432,6 @@ impl App {
         self.input_history.push(msg.clone());
         self.history_index = None;
 
-        // Handle commands
         let handled = self.handle_command(&msg);
         if handled {
             self.input.clear();
@@ -377,9 +442,10 @@ impl App {
             return;
         }
 
-        if matches!(self.chat_state, ChatState::Streaming) {
+        if matches!(self.active().chat_state, ChatState::Streaming) {
             self.queued_messages.push(msg);
-            self.chat_messages
+            self.active_mut()
+                .chat_messages
                 .push(ChatMessage::simple("system", "(queued)"));
             self.input.clear();
             self.input_cursor = 0;
@@ -396,28 +462,33 @@ impl App {
     }
 
     fn dispatch_message(&mut self, msg: String) {
-        self.chat_messages.push(ChatMessage::simple("user", &msg));
-        self.chat_state = ChatState::Streaming;
-        self.turn_start = Some(Instant::now());
-        self.last_thinking_summary = None;
-        self.mark_chat_changed();
-        self.scroll_to_bottom();
+        let ctx_file = self.system_context_file.clone();
+        let session = self.active_mut();
+        session
+            .chat_messages
+            .push(ChatMessage::simple("user", &msg));
+        session.chat_state = ChatState::Streaming;
+        session.turn_start = Some(Instant::now());
+        session.last_thinking_summary = None;
+        session.mark_chat_changed();
+        session.scroll_offset = 0;
+        session.scroll_pinned = true;
 
         let (tx, rx) = mpsc::channel();
-        self.stream_rx = Some(rx);
+        session.stream_rx = Some(rx);
         let config = RunConfig {
-            model: self.model.clone(),
+            model: session.model.clone(),
             message: msg,
-            effort: self.effort.clone(),
-            is_continuation: self.turn_count > 0,
-            system_context_file: if self.turn_count == 0 {
-                self.system_context_file.clone()
+            effort: session.effort.clone(),
+            is_continuation: session.turn_count > 0,
+            system_context_file: if session.turn_count == 0 {
+                ctx_file
             } else {
                 None
             },
-            permissions: self.permissions.clone(),
+            permissions: session.permissions.clone(),
         };
-        self.turn_count += 1;
+        session.turn_count += 1;
         let be = backend::backend_for(&config.model);
 
         thread::spawn(move || {
@@ -475,7 +546,7 @@ impl App {
             }
         });
 
-        self.chat_messages.push(ChatMessage {
+        self.active_mut().chat_messages.push(ChatMessage {
             role: "assistant".to_string(),
             content: String::new(),
             blocks: Vec::new(),
@@ -493,10 +564,7 @@ impl App {
                 self.cursor = 0;
                 true
             }
-            "/wardens" => {
-                // /wardens enable|disable|reset <name> → pass to python CLI
-                false
-            }
+            "/wardens" => false,
             "/services" => {
                 self.tab = Tab::Services;
                 self.cursor = 0;
@@ -518,13 +586,14 @@ impl App {
                 true
             }
             "/clear" => {
-                self.chat_messages.clear();
-                self.turn_count = 0;
-                self.cost_usd = 0.0;
-                self.token_count = 0;
-                self.last_turn_duration = None;
-                self.last_thinking_summary = None;
-                self.active_subagent_ids.clear();
+                let session = self.active_mut();
+                session.chat_messages.clear();
+                session.turn_count = 0;
+                session.cost_usd = 0.0;
+                session.token_count = 0;
+                session.last_turn_duration = None;
+                session.last_thinking_summary = None;
+                session.active_subagent_ids.clear();
                 self.scroll_to_bottom();
                 true
             }
@@ -533,18 +602,27 @@ impl App {
             }
             "/model" => {
                 let ids = model_ids();
+                let (current_model, current_effort, current_perm_mode) = {
+                    let s = self.active();
+                    (
+                        s.model.clone(),
+                        s.effort.clone(),
+                        s.permissions.mode.clone(),
+                    )
+                };
+
                 if arg.is_empty() {
                     let claude_models = models_for_backend("claude");
                     let codex_models = models_for_backend("codex");
-                    self.chat_messages.push(ChatMessage::simple("system", &format!(
+                    self.active_mut().chat_messages.push(ChatMessage::simple("system", &format!(
                         "Current: {} [{}] | Effort: {}\n\n  Claude (Anthropic)\n{}\n\n  Codex (OpenAI)\n{}\n\nUsage: /model <id>  or  /model claude  /model codex",
-                        model_display(&self.model), model_backend(&self.model), self.effort,
+                        model_display(&current_model), model_backend(&current_model), current_effort,
                         claude_models.iter().map(|m| format!("    {}", m)).collect::<Vec<_>>().join("\n"),
                         codex_models.iter().map(|m| format!("    {}", m)).collect::<Vec<_>>().join("\n"),
                     )));
                 } else if arg == "claude" {
                     let models = models_for_backend("claude");
-                    self.chat_messages.push(ChatMessage::simple(
+                    self.active_mut().chat_messages.push(ChatMessage::simple(
                         "system",
                         &format!(
                             "Claude models:\n{}",
@@ -557,7 +635,7 @@ impl App {
                     ));
                 } else if arg == "codex" {
                     let models = models_for_backend("codex");
-                    self.chat_messages.push(ChatMessage::simple(
+                    self.active_mut().chat_messages.push(ChatMessage::simple(
                         "system",
                         &format!(
                             "Codex models:\n{}",
@@ -569,34 +647,35 @@ impl App {
                         ),
                     ));
                 } else if ids.contains(&arg) {
-                    let prev_backend = model_backend(&self.model);
+                    let prev_backend = model_backend(&current_model);
                     let new_backend = model_backend(arg);
-                    self.model = arg.to_string();
+                    let session = self.active_mut();
+                    session.model = arg.to_string();
                     if prev_backend != new_backend {
-                        self.turn_count = 0;
-                        self.chat_messages.push(ChatMessage::simple("system", &format!(
+                        session.turn_count = 0;
+                        session.chat_messages.push(ChatMessage::simple("system", &format!(
                             "⚠ Switched to {} [{}]. Backend changed from {} → {} — conversation history reset.",
-                            model_display(&self.model), new_backend, prev_backend, new_backend
+                            model_display(&session.model), new_backend, prev_backend, new_backend
                         )));
-                        if !PermissionsConfig::supports_mode(new_backend, &self.permissions.mode) {
+                        if !PermissionsConfig::supports_mode(new_backend, &current_perm_mode) {
                             let available = PermissionsConfig::available_modes(new_backend);
-                            self.chat_messages.push(ChatMessage::simple("system", &format!(
+                            session.chat_messages.push(ChatMessage::simple("system", &format!(
                                 "⚠ Permission mode '{}' is not supported by {}. Available: {}. Use /permissions mode <mode> to change.",
-                                self.permissions.mode, new_backend, available.join(", ")
+                                current_perm_mode, new_backend, available.join(", ")
                             )));
                         }
                     } else {
-                        self.chat_messages.push(ChatMessage::simple(
+                        session.chat_messages.push(ChatMessage::simple(
                             "system",
                             &format!(
                                 "Switched to {} [{}]",
-                                model_display(&self.model),
+                                model_display(&session.model),
                                 new_backend
                             ),
                         ));
                     }
                 } else {
-                    self.chat_messages.push(ChatMessage::simple(
+                    self.active_mut().chat_messages.push(ChatMessage::simple(
                         "system",
                         &format!(
                             "Unknown model: {}. Try /model to see available models.",
@@ -608,22 +687,23 @@ impl App {
             }
             "/effort" => {
                 if arg.is_empty() {
-                    self.chat_messages.push(ChatMessage::simple(
+                    let effort = self.active().effort.clone();
+                    self.active_mut().chat_messages.push(ChatMessage::simple(
                         "system",
                         &format!(
                             "Current effort: {}. Available: {}",
-                            self.effort,
+                            effort,
                             EFFORT_LEVELS.join(", ")
                         ),
                     ));
                 } else if EFFORT_LEVELS.contains(&arg) {
-                    self.effort = arg.to_string();
-                    self.chat_messages.push(ChatMessage::simple(
+                    self.active_mut().effort = arg.to_string();
+                    self.active_mut().chat_messages.push(ChatMessage::simple(
                         "system",
-                        &format!("Effort set to {}", self.effort),
+                        &format!("Effort set to {}", arg),
                     ));
                 } else {
-                    self.chat_messages.push(ChatMessage::simple(
+                    self.active_mut().chat_messages.push(ChatMessage::simple(
                         "system",
                         &format!(
                             "Unknown effort: {}. Available: {}",
@@ -640,11 +720,11 @@ impl App {
                     .map(|c| format!("  {:16} {}", c.name, c.description))
                     .collect::<Vec<_>>()
                     .join("\n");
-                self.chat_messages.push(ChatMessage::simple("system", &format!("Available commands:\n\n{}\n\nKeyboard shortcuts:\n  Ctrl+L  Clear screen\n  Ctrl+U  Clear input line\n  Ctrl+K  Kill to end of line\n  Ctrl+Y  Yank (paste killed text)\n  Ctrl+A  Start of line\n  Ctrl+E  End of line\n  Ctrl+J  New line (multi-line input)\n  Ctrl+O  Toggle tool/thinking details\n  Ctrl+D  Exit\n  Alt+B   Word left\n  Alt+F   Word right\n  ↑/↓     Input history\n  PgUp/Dn Scroll chat\n  Mouse   Scroll chat (Shift+drag to select text)", help)));
+                self.active_mut().chat_messages.push(ChatMessage::simple("system", &format!("Available commands:\n\n{}\n\nKeyboard shortcuts:\n  Ctrl+L  Clear screen\n  Ctrl+U  Clear input line\n  Ctrl+K  Kill to end of line\n  Ctrl+Y  Yank (paste killed text)\n  Ctrl+A  Start of line\n  Ctrl+E  End of line\n  Ctrl+J  New line (multi-line input)\n  Ctrl+O  Toggle tool/thinking details\n  Ctrl+D  Exit\n  Alt+B   Word left\n  Alt+F   Word right\n  ↑/↓     Input history\n  PgUp/Dn Scroll chat\n  Mouse   Scroll chat (Shift+drag to select text)", help)));
                 true
             }
             "/history" => {
-                self.chat_messages.push(ChatMessage::simple(
+                self.active_mut().chat_messages.push(ChatMessage::simple(
                     "system",
                     "Session history browsing coming in Phase 2.",
                 ));
@@ -654,9 +734,7 @@ impl App {
                 self.handle_permissions_command(arg);
                 true
             }
-            "/init" | "/compress" | "/checkpoint" | "/compact" | "/resume" => {
-                false // Pass through to claude
-            }
+            "/init" | "/compress" | "/checkpoint" | "/compact" | "/resume" => false,
             _ => false,
         }
     }
@@ -668,23 +746,28 @@ impl App {
 
         match sub {
             "" => {
-                let backend = model_backend(&self.model);
-                let available = PermissionsConfig::available_modes(backend);
-                let allowed = if self.permissions.allowed_tools.is_empty() {
-                    "(none)".to_string()
-                } else {
-                    self.permissions.allowed_tools.join(", ")
+                let (backend, available, allowed, disallowed, perm_mode) = {
+                    let s = self.active();
+                    let be = model_backend(&s.model);
+                    let avail = PermissionsConfig::available_modes(be);
+                    let al = if s.permissions.allowed_tools.is_empty() {
+                        "(none)".to_string()
+                    } else {
+                        s.permissions.allowed_tools.join(", ")
+                    };
+                    let dis = if s.permissions.disallowed_tools.is_empty() {
+                        "(none)".to_string()
+                    } else {
+                        s.permissions.disallowed_tools.join(", ")
+                    };
+                    let pm = s.permissions.mode.clone();
+                    (be, avail, al, dis, pm)
                 };
-                let disallowed = if self.permissions.disallowed_tools.is_empty() {
-                    "(none)".to_string()
-                } else {
-                    self.permissions.disallowed_tools.join(", ")
-                };
-                self.chat_messages.push(ChatMessage::simple(
+                self.active_mut().chat_messages.push(ChatMessage::simple(
                     "system",
                     &format!(
                         "Permission mode: {} [{}]\nAvailable modes: {}\n\nAllowed tools: {}\nDisallowed tools: {}\n\nUsage:\n  /permissions mode <mode>\n  /permissions allow <tool>\n  /permissions deny <tool>\n  /permissions remove <tool>\n  /permissions reset",
-                        self.permissions.mode,
+                        perm_mode,
                         backend,
                         available.join(", "),
                         allowed,
@@ -693,23 +776,28 @@ impl App {
                 ));
             }
             "mode" if value.is_empty() => {
-                let backend = model_backend(&self.model);
-                let available = PermissionsConfig::available_modes(backend);
-                self.chat_messages.push(ChatMessage::simple(
+                let (backend, available, perm_mode) = {
+                    let s = self.active();
+                    let be = model_backend(&s.model);
+                    let avail = PermissionsConfig::available_modes(be);
+                    let pm = s.permissions.mode.clone();
+                    (be, avail, pm)
+                };
+                self.active_mut().chat_messages.push(ChatMessage::simple(
                     "system",
                     &format!(
                         "Current: {}. Available for {}: {}",
-                        self.permissions.mode,
+                        perm_mode,
                         backend,
                         available.join(", ")
                     ),
                 ));
             }
             "mode" => {
-                let backend = model_backend(&self.model);
+                let backend = model_backend(&self.active().model);
                 if !PermissionsConfig::supports_mode(backend, value) {
                     let available = PermissionsConfig::available_modes(backend);
-                    self.chat_messages.push(ChatMessage::simple(
+                    self.active_mut().chat_messages.push(ChatMessage::simple(
                         "system",
                         &format!(
                             "Mode '{}' is not supported by {}. Available: {}",
@@ -718,54 +806,54 @@ impl App {
                             available.join(", ")
                         ),
                     ));
-                } else if self.permissions.set_mode(value) {
-                    self.chat_messages.push(ChatMessage::simple(
+                } else if self.active_mut().permissions.set_mode(value) {
+                    self.active_mut().chat_messages.push(ChatMessage::simple(
                         "system",
                         &format!("Permission mode set to: {}", value),
                     ));
                 } else {
-                    self.chat_messages.push(ChatMessage::simple(
+                    self.active_mut().chat_messages.push(ChatMessage::simple(
                         "system",
                         &format!("Unknown mode: {}", value),
                     ));
                 }
             }
             "allow" if !value.is_empty() => {
-                self.permissions.add_allowed(value);
-                self.chat_messages.push(ChatMessage::simple(
+                self.active_mut().permissions.add_allowed(value);
+                self.active_mut().chat_messages.push(ChatMessage::simple(
                     "system",
                     &format!("Allowed: {}", value),
                 ));
             }
             "deny" if !value.is_empty() => {
-                self.permissions.add_disallowed(value);
-                self.chat_messages.push(ChatMessage::simple(
+                self.active_mut().permissions.add_disallowed(value);
+                self.active_mut().chat_messages.push(ChatMessage::simple(
                     "system",
                     &format!("Disallowed: {}", value),
                 ));
             }
             "remove" if !value.is_empty() => {
-                if self.permissions.remove(value) {
-                    self.chat_messages.push(ChatMessage::simple(
+                if self.active_mut().permissions.remove(value) {
+                    self.active_mut().chat_messages.push(ChatMessage::simple(
                         "system",
                         &format!("Removed: {}", value),
                     ));
                 } else {
-                    self.chat_messages.push(ChatMessage::simple(
+                    self.active_mut().chat_messages.push(ChatMessage::simple(
                         "system",
                         &format!("Not found: {}", value),
                     ));
                 }
             }
             "reset" => {
-                self.permissions.reset();
-                self.chat_messages.push(ChatMessage::simple(
+                self.active_mut().permissions.reset();
+                self.active_mut().chat_messages.push(ChatMessage::simple(
                     "system",
                     "Permissions reset to defaults.",
                 ));
             }
             _ => {
-                self.chat_messages.push(ChatMessage::simple(
+                self.active_mut().chat_messages.push(ChatMessage::simple(
                     "system",
                     "Usage: /permissions [mode|allow|deny|remove|reset] [value]",
                 ));
@@ -778,13 +866,19 @@ impl App {
     }
 
     pub fn poll_response(&mut self) {
-        if let Some(rx) = &self.stream_rx {
+        let session = self.active_mut();
+        if let Some(rx) = &session.stream_rx {
             let mut had_chunks = false;
+            let mut chunks: Vec<backend::StreamChunk> = Vec::new();
             while let Ok(chunk) = rx.try_recv() {
                 had_chunks = true;
+                chunks.push(chunk);
+            }
+            for chunk in chunks {
                 match chunk.kind {
                     ChunkKind::Text(text) => {
-                        if let Some(last) = self.chat_messages.last_mut()
+                        let session = self.active_mut();
+                        if let Some(last) = session.chat_messages.last_mut()
                             && last.role == "assistant"
                         {
                             if !last.content.is_empty() {
@@ -796,19 +890,21 @@ impl App {
                     }
                     ChunkKind::Thinking(text) => {
                         let summary: String = text.chars().take(100).collect();
-                        self.last_thinking_summary = Some(if summary.len() < text.len() {
+                        let session = self.active_mut();
+                        session.last_thinking_summary = Some(if summary.len() < text.len() {
                             format!("{}...", summary)
                         } else {
                             summary
                         });
-                        if let Some(last) = self.chat_messages.last_mut()
+                        if let Some(last) = session.chat_messages.last_mut()
                             && last.role == "assistant"
                         {
                             last.blocks.push(MessageBlock::Thinking(text));
                         }
                     }
                     ChunkKind::ToolUse { id, tool, detail } => {
-                        if let Some(last) = self.chat_messages.last_mut()
+                        let session = self.active_mut();
+                        if let Some(last) = session.chat_messages.last_mut()
                             && last.role == "assistant"
                         {
                             let line = format!("[{}] {}", tool, detail);
@@ -825,8 +921,9 @@ impl App {
                         description,
                     } => {
                         let is_warden = self.is_warden_name(&subagent_type);
-                        self.active_subagent_ids.insert(id.clone());
-                        if let Some(last) = self.chat_messages.last_mut()
+                        let session = self.active_mut();
+                        session.active_subagent_ids.insert(id.clone());
+                        if let Some(last) = session.chat_messages.last_mut()
                             && last.role == "assistant"
                         {
                             last.blocks.push(MessageBlock::SubagentBlock {
@@ -843,8 +940,9 @@ impl App {
                         id,
                         content_preview,
                     } => {
-                        if self.active_subagent_ids.remove(&id)
-                            && let Some(last) = self.chat_messages.last_mut()
+                        let session = self.active_mut();
+                        if session.active_subagent_ids.remove(&id)
+                            && let Some(last) = session.chat_messages.last_mut()
                         {
                             for block in &mut last.blocks {
                                 if let MessageBlock::SubagentBlock {
@@ -867,8 +965,9 @@ impl App {
                         input_tokens,
                         output_tokens,
                     } => {
-                        self.cost_usd = cost_usd;
-                        self.token_count = (input_tokens + output_tokens) as u32;
+                        let session = self.active_mut();
+                        session.cost_usd = cost_usd;
+                        session.token_count = (input_tokens + output_tokens) as u32;
                     }
                     ChunkKind::PermissionDenials(denials) => {
                         let denied_list: Vec<String> = denials
@@ -881,21 +980,24 @@ impl App {
                                 }
                             })
                             .collect();
-                        self.chat_messages.push(ChatMessage::simple(
-                            "system",
-                            &format!(
-                                "Permission denied for: {}\nUse /permissions allow <tool> to approve.",
-                                denied_list.join(", ")
-                            ),
-                        ));
+                        self.active_mut()
+                            .chat_messages
+                            .push(ChatMessage::simple(
+                                "system",
+                                &format!(
+                                    "Permission denied for: {}\nUse /permissions allow <tool> to approve.",
+                                    denied_list.join(", ")
+                                ),
+                            ));
                     }
                     ChunkKind::Done => {
-                        self.chat_state = ChatState::Idle;
-                        self.stream_rx = None;
-                        self.last_turn_duration = self.turn_start.map(|t| t.elapsed());
-                        self.turn_start = None;
-                        self.active_subagent_ids.clear();
-                        self.mark_chat_changed();
+                        let session = self.active_mut();
+                        session.chat_state = ChatState::Idle;
+                        session.stream_rx = None;
+                        session.last_turn_duration = session.turn_start.map(|t| t.elapsed());
+                        session.turn_start = None;
+                        session.active_subagent_ids.clear();
+                        session.mark_chat_changed();
                         if !self.queued_messages.is_empty() {
                             let next = self.queued_messages.remove(0);
                             self.dispatch_message(next);
@@ -903,7 +1005,8 @@ impl App {
                         return;
                     }
                     ChunkKind::Error(e) => {
-                        if let Some(last) = self.chat_messages.last_mut()
+                        let session = self.active_mut();
+                        if let Some(last) = session.chat_messages.last_mut()
                             && last.role == "assistant"
                         {
                             last.content.push_str(&format!("\n[Error: {}]", e));
@@ -926,7 +1029,6 @@ impl App {
             return;
         }
 
-        // Check if we're completing an argument (input has a space after the command)
         if let Some(space_idx) = self.input.find(' ') {
             let cmd_part = &self.input[..space_idx];
             let arg_part = &self.input[space_idx + 1..];
@@ -971,7 +1073,6 @@ impl App {
             return;
         }
 
-        // Command completion
         let prefix = &self.input;
         self.suggestions = COMMANDS
             .iter()
@@ -996,11 +1097,12 @@ impl App {
     }
 
     pub fn cancel_response(&mut self) {
-        self.chat_state = ChatState::Idle;
-        self.stream_rx = None;
-        if let Some(last) = self.chat_messages.last_mut() {
+        let session = self.active_mut();
+        session.chat_state = ChatState::Idle;
+        session.stream_rx = None;
+        if let Some(last) = session.chat_messages.last_mut() {
             if last.role == "assistant" && last.content.is_empty() {
-                self.chat_messages.pop();
+                session.chat_messages.pop();
             } else if last.role == "assistant" {
                 last.content.push_str("\n[cancelled]");
             }
@@ -1158,7 +1260,6 @@ impl App {
             .find('\n')
             .map(|i| self.input_cursor + i)
             .unwrap_or(self.input.len());
-        // Remove the line and the preceding newline if not the first line
         let drain_start = if line_start > 0 {
             line_start - 1
         } else {
@@ -1233,20 +1334,23 @@ impl App {
     }
 
     pub fn scroll_up(&mut self, amount: u16) {
-        self.scroll_offset = self.scroll_offset.saturating_add(amount);
-        self.scroll_pinned = false;
+        let session = self.active_mut();
+        session.scroll_offset = session.scroll_offset.saturating_add(amount);
+        session.scroll_pinned = false;
     }
 
     pub fn scroll_down(&mut self, amount: u16) {
-        self.scroll_offset = self.scroll_offset.saturating_sub(amount);
-        if self.scroll_offset == 0 {
-            self.scroll_pinned = true;
+        let session = self.active_mut();
+        session.scroll_offset = session.scroll_offset.saturating_sub(amount);
+        if session.scroll_offset == 0 {
+            session.scroll_pinned = true;
         }
     }
 
     pub fn scroll_to_bottom(&mut self) {
-        self.scroll_offset = 0;
-        self.scroll_pinned = true;
+        let session = self.active_mut();
+        session.scroll_offset = 0;
+        session.scroll_pinned = true;
     }
 
     pub fn input_kill_to_end(&mut self) {
@@ -1331,10 +1435,11 @@ impl App {
     }
 
     pub fn turn_duration_display(&self) -> Option<String> {
-        let dur = if matches!(self.chat_state, ChatState::Streaming) {
-            self.turn_start.map(|t| t.elapsed())
+        let session = self.active();
+        let dur = if matches!(session.chat_state, ChatState::Streaming) {
+            session.turn_start.map(|t| t.elapsed())
         } else {
-            self.last_turn_duration
+            session.last_turn_duration
         };
         dur.map(|d| {
             let secs = d.as_secs();
@@ -1364,11 +1469,11 @@ mod tests {
     #[test]
     fn toggle_tools_invalidates_the_chat_cache() {
         let mut app = App::new();
-        let before = app.chat_version;
+        let before = app.active().chat_version;
 
         app.toggle_tools();
 
         assert!(app.show_tools);
-        assert_ne!(app.chat_version, before);
+        assert_ne!(app.active().chat_version, before);
     }
 }
