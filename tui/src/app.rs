@@ -74,13 +74,21 @@ pub struct ModelDef {
 }
 
 pub const MODEL_REGISTRY: &[ModelDef] = &[
-    ModelDef { id: "sonnet", display: "Sonnet 4.6", backend: "claude", context: "1M" },
-    ModelDef { id: "opus", display: "Opus 4.6", backend: "claude", context: "1M" },
+    // Claude (Anthropic)
+    ModelDef { id: "opus-4-7", display: "Opus 4.7", backend: "claude", context: "200K" },
+    ModelDef { id: "opus", display: "Opus 4.6 (1M)", backend: "claude", context: "1M" },
+    ModelDef { id: "opus-200k", display: "Opus 4.6", backend: "claude", context: "200K" },
+    ModelDef { id: "sonnet", display: "Sonnet 4.6", backend: "claude", context: "200K" },
     ModelDef { id: "haiku", display: "Haiku 4.5", backend: "claude", context: "200K" },
+    // OpenAI (Codex)
+    ModelDef { id: "gpt-5.5", display: "GPT-5.5", backend: "codex", context: "1M" },
+    ModelDef { id: "gpt-5.4", display: "GPT-5.4", backend: "codex", context: "1M" },
+    ModelDef { id: "gpt-5.4-mini", display: "GPT-5.4 Mini", backend: "codex", context: "1M" },
     ModelDef { id: "o3", display: "o3", backend: "codex", context: "200K" },
     ModelDef { id: "o4-mini", display: "o4-mini", backend: "codex", context: "200K" },
-    ModelDef { id: "codex-mini", display: "Codex Mini", backend: "codex", context: "200K" },
 ];
+
+pub const EFFORT_LEVELS: &[&str] = &["low", "medium", "high", "xhigh", "max"];
 
 pub fn model_display(id: &str) -> String {
     MODEL_REGISTRY.iter()
@@ -100,10 +108,18 @@ pub fn model_ids() -> Vec<&'static str> {
     MODEL_REGISTRY.iter().map(|m| m.id).collect()
 }
 
-pub fn model_arg_labels() -> Vec<String> {
+pub fn models_for_backend(backend: &str) -> Vec<String> {
     MODEL_REGISTRY.iter()
-        .map(|m| format!("{} ({}, {})", m.id, m.display, m.context))
+        .filter(|m| m.backend == backend)
+        .map(|m| format!("{} — {} ({})", m.id, m.display, m.context))
         .collect()
+}
+
+pub fn backend_labels() -> Vec<String> {
+    vec![
+        "claude — Anthropic (Claude)".to_string(),
+        "codex — OpenAI (GPT/o-series)".to_string(),
+    ]
 }
 
 pub const COMMANDS: &[CommandDef] = &[
@@ -112,7 +128,8 @@ pub const COMMANDS: &[CommandDef] = &[
     CommandDef { name: "/channels", description: "Channel status", args: &[] },
     CommandDef { name: "/config", description: "Configuration", args: &["backend", "vault"] },
     CommandDef { name: "/status", description: "System dashboard", args: &["refresh"] },
-    CommandDef { name: "/model", description: "Switch model", args: &[] },
+    CommandDef { name: "/model", description: "Switch model", args: &["claude", "codex"] },
+    CommandDef { name: "/effort", description: "Reasoning effort", args: &["low", "medium", "high", "xhigh", "max"] },
     CommandDef { name: "/compress", description: "Save to vault", args: &[] },
     CommandDef { name: "/checkpoint", description: "Mid-session save", args: &[] },
     CommandDef { name: "/compact", description: "Compact context", args: &[] },
@@ -141,6 +158,7 @@ pub struct App {
     pub stream_rx: Option<mpsc::Receiver<StreamChunk>>,
     pub turn_count: u32,
     pub model: String,
+    pub effort: String,
     pub token_count: u32,
     pub cost_usd: f64,
     pub session_start: Instant,
@@ -283,6 +301,7 @@ impl App {
             stream_rx: None,
             turn_count: 0,
             model: "sonnet".to_string(),
+            effort: "high".to_string(),
             token_count: 0,
             cost_usd: 0.0,
             session_start: Instant::now(),
@@ -377,6 +396,7 @@ impl App {
         let (tx, rx) = mpsc::channel();
         self.stream_rx = Some(rx);
         let model = self.model.clone();
+        let effort = self.effort.clone();
         let backend = model_backend(&self.model).to_string();
         let is_continuation = self.turn_count > 0;
         self.turn_count += 1;
@@ -384,8 +404,10 @@ impl App {
         thread::spawn(move || {
             let child = match backend.as_str() {
                 "codex" => {
+                    let effort_cfg = format!("model_reasoning_effort=\"{}\"", effort);
                     let mut args = vec!["exec".to_string(), "--json".to_string(),
-                        "-m".to_string(), model.clone()];
+                        "-m".to_string(), model.clone(),
+                        "-c".to_string(), effort_cfg];
                     args.push(msg.clone());
                     Command::new("codex")
                         .args(&args)
@@ -396,7 +418,7 @@ impl App {
                 }
                 _ => {
                     let mut args = vec!["-p", "--output-format", "stream-json", "--verbose",
-                        "--model", &model];
+                        "--model", &model, "--effort", &effort];
                     if is_continuation {
                         args.push("--continue");
                     }
@@ -473,29 +495,61 @@ impl App {
             "/model" => {
                 let ids = model_ids();
                 if arg.is_empty() {
-                    let list: Vec<String> = MODEL_REGISTRY.iter()
-                        .map(|m| format!("{} ({})", m.display, m.context))
-                        .collect();
+                    let claude_models = models_for_backend("claude");
+                    let codex_models = models_for_backend("codex");
                     self.chat_messages.push(ChatMessage::simple("system", &format!(
-                        "Current: {} [{}]\nAvailable: {}",
-                        model_display(&self.model), model_backend(&self.model), list.join(", ")
+                        "Current: {} [{}] | Effort: {}\n\n  Claude (Anthropic)\n{}\n\n  Codex (OpenAI)\n{}\n\nUsage: /model <id>  or  /model claude  /model codex",
+                        model_display(&self.model), model_backend(&self.model), self.effort,
+                        claude_models.iter().map(|m| format!("    {}", m)).collect::<Vec<_>>().join("\n"),
+                        codex_models.iter().map(|m| format!("    {}", m)).collect::<Vec<_>>().join("\n"),
+                    )));
+                } else if arg == "claude" {
+                    let models = models_for_backend("claude");
+                    self.chat_messages.push(ChatMessage::simple("system", &format!(
+                        "Claude models:\n{}",
+                        models.iter().map(|m| format!("  {}", m)).collect::<Vec<_>>().join("\n"),
+                    )));
+                } else if arg == "codex" {
+                    let models = models_for_backend("codex");
+                    self.chat_messages.push(ChatMessage::simple("system", &format!(
+                        "Codex models:\n{}",
+                        models.iter().map(|m| format!("  {}", m)).collect::<Vec<_>>().join("\n"),
                     )));
                 } else if ids.contains(&arg) {
                     let prev_backend = model_backend(&self.model);
+                    let new_backend = model_backend(arg);
                     self.model = arg.to_string();
-                    let new_backend = model_backend(&self.model);
                     if prev_backend != new_backend {
                         self.turn_count = 0;
+                        self.chat_messages.push(ChatMessage::simple("system", &format!(
+                            "⚠ Switched to {} [{}]. Backend changed from {} → {} — conversation history reset.",
+                            model_display(&self.model), new_backend, prev_backend, new_backend
+                        )));
+                    } else {
+                        self.chat_messages.push(ChatMessage::simple("system", &format!(
+                            "Switched to {} [{}]", model_display(&self.model), new_backend
+                        )));
                     }
+                } else {
                     self.chat_messages.push(ChatMessage::simple("system", &format!(
-                        "Switched to {} [{}]", model_display(&self.model), new_backend
+                        "Unknown model: {}. Try /model to see available models.", arg
+                    )));
+                }
+                true
+            }
+            "/effort" => {
+                if arg.is_empty() {
+                    self.chat_messages.push(ChatMessage::simple("system", &format!(
+                        "Current effort: {}. Available: {}", self.effort, EFFORT_LEVELS.join(", ")
+                    )));
+                } else if EFFORT_LEVELS.contains(&arg) {
+                    self.effort = arg.to_string();
+                    self.chat_messages.push(ChatMessage::simple("system", &format!(
+                        "Effort set to {}", self.effort
                     )));
                 } else {
-                    let list: Vec<String> = MODEL_REGISTRY.iter()
-                        .map(|m| format!("{} ({})", m.id, m.display))
-                        .collect();
                     self.chat_messages.push(ChatMessage::simple("system", &format!(
-                        "Unknown model: {}. Available: {}", arg, list.join(", ")
+                        "Unknown effort: {}. Available: {}", arg, EFFORT_LEVELS.join(", ")
                     )));
                 }
                 true
@@ -601,10 +655,19 @@ impl App {
 
             if let Some(cmd) = COMMANDS.iter().find(|c| c.name == cmd_part) {
                 if cmd.name == "/model" {
-                    self.arg_suggestions = model_arg_labels()
-                        .into_iter()
-                        .filter(|a| a.starts_with(arg_part))
-                        .collect();
+                    if arg_part.is_empty() {
+                        self.arg_suggestions = backend_labels();
+                    } else if arg_part == "claude" || arg_part.starts_with("claude ") {
+                        self.arg_suggestions = models_for_backend("claude");
+                    } else if arg_part == "codex" || arg_part.starts_with("codex ") {
+                        self.arg_suggestions = models_for_backend("codex");
+                    } else {
+                        let all: Vec<String> = MODEL_REGISTRY.iter()
+                            .map(|m| format!("{} — {} ({})", m.id, m.display, m.context))
+                            .filter(|s| s.starts_with(arg_part))
+                            .collect();
+                        self.arg_suggestions = all;
+                    }
                 } else if !cmd.args.is_empty() {
                     self.arg_suggestions = cmd.args
                         .iter()
