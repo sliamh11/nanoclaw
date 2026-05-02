@@ -1,5 +1,5 @@
 use std::io::{BufRead, BufReader, Read as _};
-use std::process::{Command, Stdio};
+use std::process::Command;
 use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -66,61 +66,11 @@ pub struct CommandDef {
     pub args: &'static [&'static str],
 }
 
-pub struct ModelDef {
-    pub id: &'static str,
-    pub display: &'static str,
-    pub backend: &'static str,
-    pub context: &'static str,
-}
-
-pub const MODEL_REGISTRY: &[ModelDef] = &[
-    // Claude (Anthropic)
-    ModelDef { id: "opus-4-7", display: "Opus 4.7", backend: "claude", context: "200K" },
-    ModelDef { id: "opus", display: "Opus 4.6 (1M)", backend: "claude", context: "1M" },
-    ModelDef { id: "opus-200k", display: "Opus 4.6", backend: "claude", context: "200K" },
-    ModelDef { id: "sonnet", display: "Sonnet 4.6", backend: "claude", context: "200K" },
-    ModelDef { id: "haiku", display: "Haiku 4.5", backend: "claude", context: "200K" },
-    // OpenAI (Codex)
-    ModelDef { id: "gpt-5.5", display: "GPT-5.5", backend: "codex", context: "1M" },
-    ModelDef { id: "gpt-5.4", display: "GPT-5.4", backend: "codex", context: "1M" },
-    ModelDef { id: "gpt-5.4-mini", display: "GPT-5.4 Mini", backend: "codex", context: "1M" },
-    ModelDef { id: "o3", display: "o3", backend: "codex", context: "200K" },
-    ModelDef { id: "o4-mini", display: "o4-mini", backend: "codex", context: "200K" },
-];
+use crate::backend::{self, ChunkKind, RunConfig};
+pub use crate::backend::{model_display, model_backend_name as model_backend, model_ids,
+    models_for_backend, backend_labels};
 
 pub const EFFORT_LEVELS: &[&str] = &["low", "medium", "high", "xhigh", "max"];
-
-pub fn model_display(id: &str) -> String {
-    MODEL_REGISTRY.iter()
-        .find(|m| m.id == id)
-        .map(|m| m.display.to_string())
-        .unwrap_or_else(|| id.to_string())
-}
-
-pub fn model_backend(id: &str) -> &'static str {
-    MODEL_REGISTRY.iter()
-        .find(|m| m.id == id)
-        .map(|m| m.backend)
-        .unwrap_or("claude")
-}
-
-pub fn model_ids() -> Vec<&'static str> {
-    MODEL_REGISTRY.iter().map(|m| m.id).collect()
-}
-
-pub fn models_for_backend(backend: &str) -> Vec<String> {
-    MODEL_REGISTRY.iter()
-        .filter(|m| m.backend == backend)
-        .map(|m| format!("{} — {} ({})", m.id, m.display, m.context))
-        .collect()
-}
-
-pub fn backend_labels() -> Vec<String> {
-    vec![
-        "claude — Anthropic (Claude)".to_string(),
-        "codex — OpenAI (GPT/o-series)".to_string(),
-    ]
-}
 
 pub const COMMANDS: &[CommandDef] = &[
     CommandDef { name: "/wardens", description: "Quality gates", args: &["enable", "disable", "reset"] },
@@ -155,7 +105,7 @@ pub struct App {
     pub suggestion_cursor: usize,
     pub chat_messages: Vec<ChatMessage>,
     pub chat_state: ChatState,
-    pub stream_rx: Option<mpsc::Receiver<StreamChunk>>,
+    pub stream_rx: Option<mpsc::Receiver<backend::StreamChunk>>,
     pub turn_count: u32,
     pub model: String,
     pub effort: String,
@@ -177,87 +127,7 @@ pub struct App {
     pub deus_config: Vec<(String, String)>,
 }
 
-pub enum StreamChunk {
-    Text(String),
-    Thinking(String),
-    ToolUse { tool: String, status: String },
-    ToolResult { tool: String },
-    CostUpdate { cost_usd: f64, input_tokens: u64, output_tokens: u64 },
-    Done,
-    Error(String),
-}
-
-fn parse_stream_line(line: &str) -> Option<StreamChunk> {
-    let v: serde_json::Value = serde_json::from_str(line).ok()?;
-    let event_type = v.get("type")?.as_str()?;
-
-    match event_type {
-        "assistant" => {
-            let content = v.get("message")?.get("content")?.as_array()?;
-            for block in content {
-                let block_type = block.get("type")?.as_str()?;
-                match block_type {
-                    "text" => {
-                        let text = block.get("text")?.as_str()?;
-                        return Some(StreamChunk::Text(text.to_string()));
-                    }
-                    "thinking" => {
-                        let text = block.get("thinking")?.as_str()?;
-                        return Some(StreamChunk::Thinking(text.to_string()));
-                    }
-                    "tool_use" => {
-                        let name = block.get("name").and_then(|n| n.as_str()).unwrap_or("unknown");
-                        let input = block.get("input").map(|i| {
-                            if let Some(cmd) = i.get("command").and_then(|c| c.as_str()) {
-                                cmd.chars().take(60).collect::<String>()
-                            } else if let Some(path) = i.get("file_path").and_then(|p| p.as_str()) {
-                                path.to_string()
-                            } else {
-                                String::new()
-                            }
-                        }).unwrap_or_default();
-                        return Some(StreamChunk::ToolUse { tool: name.to_string(), status: input });
-                    }
-                    _ => {}
-                }
-            }
-            None
-        }
-        "user" => {
-            let content = v.get("message")?.get("content")?.as_array()?;
-            for block in content {
-                if block.get("type")?.as_str()? == "tool_result" {
-                    let tool_use_id = block.get("tool_use_id").and_then(|t| t.as_str()).unwrap_or("");
-                    return Some(StreamChunk::ToolResult { tool: tool_use_id.to_string() });
-                }
-            }
-            None
-        }
-        "result" => {
-            let cost = v.get("total_cost_usd").and_then(|c| c.as_f64()).unwrap_or(0.0);
-            let usage = v.get("usage");
-            let input = usage.and_then(|u| u.get("input_tokens")).and_then(|t| t.as_u64()).unwrap_or(0);
-            let output = usage.and_then(|u| u.get("output_tokens")).and_then(|t| t.as_u64()).unwrap_or(0);
-            Some(StreamChunk::CostUpdate { cost_usd: cost, input_tokens: input, output_tokens: output })
-        }
-        // Codex JSONL events
-        "item.completed" => {
-            let text = v.get("item")?.get("text")?.as_str()?;
-            Some(StreamChunk::Text(text.to_string()))
-        }
-        "turn.completed" => {
-            let usage = v.get("usage");
-            let input = usage.and_then(|u| u.get("input_tokens")).and_then(|t| t.as_u64()).unwrap_or(0);
-            let output = usage.and_then(|u| u.get("output_tokens")).and_then(|t| t.as_u64()).unwrap_or(0);
-            Some(StreamChunk::CostUpdate { cost_usd: 0.0, input_tokens: input, output_tokens: output })
-        }
-        "turn.failed" => {
-            let msg = v.get("error").and_then(|e| e.get("message")).and_then(|m| m.as_str()).unwrap_or("unknown error");
-            Some(StreamChunk::Error(msg.to_string()))
-        }
-        _ => None,
-    }
-}
+// StreamChunk and parsing delegated to backend trait — see backend/mod.rs
 
 fn detect_git_branch() -> String {
     Command::new("git")
@@ -395,41 +265,17 @@ impl App {
 
         let (tx, rx) = mpsc::channel();
         self.stream_rx = Some(rx);
-        let model = self.model.clone();
-        let effort = self.effort.clone();
-        let backend = model_backend(&self.model).to_string();
-        let is_continuation = self.turn_count > 0;
+        let config = RunConfig {
+            model: self.model.clone(),
+            message: msg,
+            effort: self.effort.clone(),
+            is_continuation: self.turn_count > 0,
+        };
         self.turn_count += 1;
+        let be = backend::backend_for(&config.model);
 
         thread::spawn(move || {
-            let child = match backend.as_str() {
-                "codex" => {
-                    let effort_cfg = format!("model_reasoning_effort=\"{}\"", effort);
-                    let mut args = vec!["exec".to_string(), "--json".to_string(),
-                        "-m".to_string(), model.clone(),
-                        "-c".to_string(), effort_cfg];
-                    args.push(msg.clone());
-                    Command::new("codex")
-                        .args(&args)
-                        .stdin(Stdio::null())
-                        .stdout(Stdio::piped())
-                        .stderr(Stdio::piped())
-                        .spawn()
-                }
-                _ => {
-                    let mut args = vec!["-p", "--output-format", "stream-json", "--verbose",
-                        "--model", &model, "--effort", &effort];
-                    if is_continuation {
-                        args.push("--continue");
-                    }
-                    args.push(&msg);
-                    Command::new("claude")
-                        .args(&args)
-                        .stdout(Stdio::piped())
-                        .stderr(Stdio::piped())
-                        .spawn()
-                }
-            };
+            let child = be.build_command(&config).spawn();
 
             match child {
                 Ok(mut process) => {
@@ -440,7 +286,7 @@ impl App {
                             let mut reader = BufReader::new(stderr);
                             let _ = reader.read_to_string(&mut buf);
                             if !buf.trim().is_empty() {
-                                let _ = tx2.send(StreamChunk::Error(buf.trim().to_string()));
+                                let _ = tx2.send(backend::StreamChunk { kind: ChunkKind::Error(buf.trim().to_string()) });
                             }
                         })
                     });
@@ -449,21 +295,24 @@ impl App {
                         for line in reader.lines() {
                             match line {
                                 Ok(text) => {
-                                    if let Some(chunk) = parse_stream_line(&text) {
+                                    if let Some(chunk) = be.parse_line(&text) {
                                         let _ = tx.send(chunk);
                                     }
                                 }
-                                Err(e) => { let _ = tx.send(StreamChunk::Error(e.to_string())); break; }
+                                Err(e) => {
+                                    let _ = tx.send(backend::StreamChunk { kind: ChunkKind::Error(e.to_string()) });
+                                    break;
+                                }
                             }
                         }
                     }
                     let _ = process.wait();
                     if let Some(h) = stderr_handle { let _ = h.join(); }
-                    let _ = tx.send(StreamChunk::Done);
+                    let _ = tx.send(backend::StreamChunk { kind: ChunkKind::Done });
                 }
                 Err(e) => {
-                    let _ = tx.send(StreamChunk::Error(format!("Failed to run claude: {}", e)));
-                    let _ = tx.send(StreamChunk::Done);
+                    let _ = tx.send(backend::StreamChunk { kind: ChunkKind::Error(format!("Failed to launch: {}", e)) });
+                    let _ = tx.send(backend::StreamChunk { kind: ChunkKind::Done });
                 }
             }
         });
@@ -576,8 +425,8 @@ impl App {
     pub fn poll_response(&mut self) {
         if let Some(rx) = &self.stream_rx {
             while let Ok(chunk) = rx.try_recv() {
-                match chunk {
-                    StreamChunk::Text(text) => {
+                match chunk.kind {
+                    ChunkKind::Text(text) => {
                         if let Some(last) = self.chat_messages.last_mut() {
                             if last.role == "assistant" {
                                 if !last.content.is_empty() {
@@ -588,7 +437,7 @@ impl App {
                             }
                         }
                     }
-                    StreamChunk::Thinking(text) => {
+                    ChunkKind::Thinking(text) => {
                         let summary: String = text.chars().take(100).collect();
                         self.last_thinking_summary = Some(
                             if summary.len() < text.len() { format!("{}...", summary) } else { summary }
@@ -599,24 +448,24 @@ impl App {
                             }
                         }
                     }
-                    StreamChunk::ToolUse { tool, status } => {
+                    ChunkKind::ToolUse { tool, detail } => {
                         if let Some(last) = self.chat_messages.last_mut() {
                             if last.role == "assistant" {
-                                let line = format!("[{}] {}", tool, status);
+                                let line = format!("[{}] {}", tool, detail);
                                 if !last.content.is_empty() {
                                     last.content.push('\n');
                                 }
                                 last.content.push_str(&line);
-                                last.blocks.push(MessageBlock::ToolUse { tool, detail: status });
+                                last.blocks.push(MessageBlock::ToolUse { tool, detail });
                             }
                         }
                     }
-                    StreamChunk::ToolResult { .. } => {}
-                    StreamChunk::CostUpdate { cost_usd, input_tokens, output_tokens } => {
+                    ChunkKind::ToolResult => {}
+                    ChunkKind::CostUpdate { cost_usd, input_tokens, output_tokens } => {
                         self.cost_usd = cost_usd;
                         self.token_count = (input_tokens + output_tokens) as u32;
                     }
-                    StreamChunk::Done => {
+                    ChunkKind::Done => {
                         self.chat_state = ChatState::Idle;
                         self.stream_rx = None;
                         self.last_turn_duration = self.turn_start.map(|t| t.elapsed());
@@ -627,7 +476,7 @@ impl App {
                         }
                         return;
                     }
-                    StreamChunk::Error(e) => {
+                    ChunkKind::Error(e) => {
                         if let Some(last) = self.chat_messages.last_mut() {
                             if last.role == "assistant" {
                                 last.content.push_str(&format!("\n[Error: {}]", e));
@@ -662,10 +511,15 @@ impl App {
                     } else if arg_part == "codex" || arg_part.starts_with("codex ") {
                         self.arg_suggestions = models_for_backend("codex");
                     } else {
-                        let all: Vec<String> = MODEL_REGISTRY.iter()
-                            .map(|m| format!("{} — {} ({})", m.id, m.display, m.context))
-                            .filter(|s| s.starts_with(arg_part))
-                            .collect();
+                        let mut all: Vec<String> = Vec::new();
+                        for b in backend::all_backends() {
+                            for m in b.models() {
+                                let label = format!("{} — {} ({})", m.id, m.display, m.context);
+                                if label.starts_with(arg_part) || m.id.starts_with(arg_part) {
+                                    all.push(label);
+                                }
+                            }
+                        }
                         self.arg_suggestions = all;
                     }
                 } else if !cmd.args.is_empty() {

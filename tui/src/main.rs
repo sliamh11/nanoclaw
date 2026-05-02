@@ -1,4 +1,5 @@
 mod app;
+mod backend;
 mod bidi;
 mod config;
 mod panels;
