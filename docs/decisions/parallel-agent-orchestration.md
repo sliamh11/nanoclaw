@@ -1,7 +1,8 @@
 # Parallel Agent Orchestration (TUI Sidechains)
 
 **Status:** Accepted  
-**Date:** 2026-05-03
+**Date:** 2026-05-03  
+**Scope:** `tui/src/app.rs`, `tui/src/backend/`, `tui/src/panels/`, `tui/src/ui.rs`, `tui/src/main.rs`
 
 ## Context
 
