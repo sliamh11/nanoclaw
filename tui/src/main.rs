@@ -84,6 +84,13 @@ fn main() -> io::Result<()> {
                 }
 
                 if app.tab == Tab::Chat {
+                    if key.modifiers.contains(KeyModifiers::SUPER) {
+                        match key.code {
+                            KeyCode::Backspace | KeyCode::Delete => app.input_delete_current_line(),
+                            _ => {}
+                        }
+                        continue;
+                    }
                     if key.modifiers.contains(KeyModifiers::CONTROL) {
                         match key.code {
                             KeyCode::Char('l') => { app.chat_messages.clear(); app.scroll_to_bottom(); }

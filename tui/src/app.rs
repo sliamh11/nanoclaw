@@ -68,6 +68,15 @@ pub struct CommandDef {
 
 pub const MODELS: &[&str] = &["sonnet", "opus", "haiku"];
 
+pub fn model_display(name: &str) -> &'static str {
+    match name {
+        "sonnet" => "Sonnet 4.6",
+        "opus" => "Opus 4.6",
+        "haiku" => "Haiku 4.5",
+        _ => "unknown",
+    }
+}
+
 pub const COMMANDS: &[CommandDef] = &[
     CommandDef { name: "/wardens", description: "Toggle warden quality gates", args: &["enable", "disable", "reset", "triggers", "instructions"] },
     CommandDef { name: "/services", description: "View service health status", args: &["refresh"] },
@@ -394,12 +403,14 @@ impl App {
             "/quit" => { std::process::exit(0); }
             "/model" => {
                 if arg.is_empty() {
-                    self.chat_messages.push(ChatMessage::simple("system", &format!("Current model: {}. Available: {}", self.model, MODELS.join(", "))));
+                    let available: Vec<&str> = MODELS.iter().map(|m| model_display(m)).collect();
+                    self.chat_messages.push(ChatMessage::simple("system", &format!("Current model: {}. Available: {}", model_display(&self.model), available.join(", "))));
                 } else if MODELS.contains(&arg) {
                     self.model = arg.to_string();
-                    self.chat_messages.push(ChatMessage::simple("system", &format!("Switched to {}", self.model)));
+                    self.chat_messages.push(ChatMessage::simple("system", &format!("Switched to {}", model_display(&self.model))));
                 } else {
-                    self.chat_messages.push(ChatMessage::simple("system", &format!("Unknown model: {}. Available: {}", arg, MODELS.join(", "))));
+                    let available: Vec<&str> = MODELS.iter().map(|m| model_display(m)).collect();
+                    self.chat_messages.push(ChatMessage::simple("system", &format!("Unknown model: {}. Available: {}", arg, available.join(", "))));
                 }
                 true
             }
@@ -670,6 +681,19 @@ impl App {
 
     pub fn input_end(&mut self) {
         self.input_cursor = self.input.len();
+    }
+
+    pub fn input_delete_current_line(&mut self) {
+        let line_start = self.input[..self.input_cursor].rfind('\n').map(|i| i + 1).unwrap_or(0);
+        let line_end = self.input[self.input_cursor..].find('\n')
+            .map(|i| self.input_cursor + i)
+            .unwrap_or(self.input.len());
+        // Remove the line and the preceding newline if not the first line
+        let drain_start = if line_start > 0 { line_start - 1 } else { line_start };
+        let drain_end = if line_end < self.input.len() && drain_start == line_start { line_end + 1 } else { line_end };
+        self.input.drain(drain_start..drain_end);
+        self.input_cursor = drain_start.min(self.input.len());
+        self.update_suggestions();
     }
 
     pub fn input_clear_line(&mut self) {

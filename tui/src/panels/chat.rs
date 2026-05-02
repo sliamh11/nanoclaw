@@ -158,32 +158,43 @@ fn render_welcome(lines: &mut Vec<Line<'static>>) {
 fn render_messages(frame: &mut Frame, app: &App, area: Rect) {
     let mut lines: Vec<Line> = Vec::new();
 
-    for msg in &app.chat_messages {
+    for (msg_idx, msg) in app.chat_messages.iter().enumerate() {
         if msg.role == "system" && msg.content.starts_with("Welcome to Deus") {
             render_welcome(&mut lines);
             continue;
         }
 
         if msg.role == "assistant" && !msg.blocks.is_empty() {
+            // Collect thinking blocks — show only the last one (latest thought)
+            let mut last_thinking: Option<&str> = None;
+            for block in &msg.blocks {
+                if let MessageBlock::Thinking(text) = block {
+                    last_thinking = Some(text);
+                }
+            }
+
+            if app.show_tools {
+                if let Some(text) = last_thinking {
+                    let line_count = text.lines().count();
+                    for (i, tline) in text.lines().take(5).enumerate() {
+                        let prefix = if i == 0 { " ⟡ " } else { "   " };
+                        lines.push(Line::from(vec![
+                            Span::styled(prefix, theme::muted()),
+                            Span::styled(tline.to_string(), theme::thinking()),
+                        ]));
+                    }
+                    if line_count > 5 {
+                        lines.push(Line::from(Span::styled(
+                            "   ⋯ (Ctrl+O to hide)",
+                            theme::muted(),
+                        )));
+                    }
+                }
+            }
+
             for block in &msg.blocks {
                 match block {
-                    MessageBlock::Thinking(text) => {
-                        if app.show_tools {
-                            for (i, tline) in text.lines().take(5).enumerate() {
-                                let prefix = if i == 0 { " ⟡ " } else { "   " };
-                                lines.push(Line::from(vec![
-                                    Span::styled(prefix, theme::muted()),
-                                    Span::styled(tline.to_string(), theme::thinking()),
-                                ]));
-                            }
-                            if text.lines().count() > 5 {
-                                lines.push(Line::from(Span::styled(
-                                    "   ⋯ (Ctrl+O to hide)",
-                                    theme::muted(),
-                                )));
-                            }
-                        }
-                    }
+                    MessageBlock::Thinking(_) => {}
                     MessageBlock::ToolUse { tool, detail } => {
                         lines.push(Line::from(vec![
                             Span::styled(" ▸ ", Style::default().fg(theme::FLAME)),
@@ -204,11 +215,10 @@ fn render_messages(frame: &mut Frame, app: &App, area: Rect) {
                 }
             }
         } else if msg.role == "user" {
-            for (i, line) in msg.content.lines().enumerate() {
+            for line in msg.content.lines() {
                 let reordered = bidi::visual_reorder(line);
-                let gutter = if i == 0 { "▎" } else { "▎" };
                 lines.push(Line::from(vec![
-                    Span::styled(gutter, Style::default().fg(theme::OCEAN)),
+                    Span::styled("▎", Style::default().fg(theme::OCEAN)),
                     Span::styled(format!(" {}", reordered), theme::user_msg()),
                 ]));
             }
@@ -222,7 +232,10 @@ fn render_messages(frame: &mut Frame, app: &App, area: Rect) {
                 lines.push(rendered);
             }
         }
-        lines.push(Line::from(""));
+        // Separator between messages, but not after the last one
+        if msg_idx < app.chat_messages.len() - 1 {
+            lines.push(Line::from(""));
+        }
     }
 
     if matches!(app.chat_state, crate::app::ChatState::Streaming) {
@@ -238,18 +251,18 @@ fn render_messages(frame: &mut Frame, app: &App, area: Rect) {
         }
     }
 
-    let visible = area.height;
-    let total = lines.len() as u16;
+    let visible = area.height as usize;
+    let total = lines.len();
     let max_scroll = total.saturating_sub(visible);
     let scroll = if app.scroll_pinned {
         max_scroll
     } else {
-        max_scroll.saturating_sub(app.scroll_offset)
+        max_scroll.saturating_sub(app.scroll_offset as usize)
     };
 
     let messages = Paragraph::new(lines)
         .wrap(Wrap { trim: false })
-        .scroll((scroll, 0));
+        .scroll((scroll as u16, 0));
     frame.render_widget(messages, area);
 }
 

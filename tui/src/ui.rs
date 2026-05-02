@@ -45,27 +45,20 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
     let mut left: Vec<Span> = Vec::new();
     let mut right: Vec<Span> = Vec::new();
 
-    // Left side: state + model + git branch
     let state_indicator = match app.chat_state {
         crate::app::ChatState::Idle => Span::styled("●", theme::good()),
-        crate::app::ChatState::Streaming => Span::styled(app.spinner_frame(), theme::warn()),
+        crate::app::ChatState::Streaming => Span::styled("●", theme::warn()),
     };
     left.push(Span::raw(" "));
     left.push(state_indicator);
-    left.push(Span::styled(format!(" {} ", app.model), theme::accent()));
+    left.push(Span::styled(
+        format!(" {} ", crate::app::model_display(&app.model)),
+        theme::accent(),
+    ));
 
     if !app.git_branch.is_empty() {
         left.push(Span::styled("│ ", theme::muted()));
         left.push(Span::styled(format!(" {}", app.git_branch), theme::dim()));
-    }
-
-    // Streaming: show thinking snapshot + elapsed
-    if matches!(app.chat_state, crate::app::ChatState::Streaming) {
-        if let Some(ref thinking) = app.last_thinking_summary {
-            left.push(Span::styled(" │ ", theme::muted()));
-            let preview: String = thinking.chars().take(40).collect();
-            left.push(Span::styled(preview, theme::thinking()));
-        }
     }
 
     // Right side: cost + turn duration + remaining
