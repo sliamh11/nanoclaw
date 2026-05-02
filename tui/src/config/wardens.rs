@@ -24,12 +24,18 @@ const TYPES: &[(&str, &str)] = &[
 ];
 
 fn config_path() -> PathBuf {
-    repo_root().join(".claude").join("wardens").join("config.json")
+    repo_root()
+        .join(".claude")
+        .join("wardens")
+        .join("config.json")
 }
 
 fn triggers_label(val: &Value, name: &str) -> String {
     if name == "session-retrospective" {
-        let threshold = val.get("auto_threshold").and_then(|v| v.as_u64()).unwrap_or(20);
+        let threshold = val
+            .get("auto_threshold")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(20);
         return format!("auto (threshold: {} sessions), manual", threshold);
     }
     match val.get("tools").and_then(|v| v.as_array()) {
@@ -67,7 +73,13 @@ pub fn load() -> Vec<WardenEntry> {
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string());
 
-            WardenEntry { name: name.clone(), enabled, warden_type, triggers, custom_instructions }
+            WardenEntry {
+                name: name.clone(),
+                enabled,
+                warden_type,
+                triggers,
+                custom_instructions,
+            }
         })
         .collect()
 }
@@ -84,10 +96,10 @@ pub fn save(entries: &[WardenEntry]) {
     };
 
     for entry in entries {
-        if let Some(val) = map.get_mut(&entry.name) {
-            if let Some(obj) = val.as_object_mut() {
-                obj.insert("enabled".to_string(), Value::Bool(entry.enabled));
-            }
+        if let Some(val) = map.get_mut(&entry.name)
+            && let Some(obj) = val.as_object_mut()
+        {
+            obj.insert("enabled".to_string(), Value::Bool(entry.enabled));
         }
     }
 

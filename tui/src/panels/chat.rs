@@ -1,9 +1,16 @@
+use std::cell::RefCell;
+
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 
-use crate::app::{App, MessageBlock, COMMANDS};
+use crate::app::{App, COMMANDS, MessageBlock, SubagentStatus};
 use crate::bidi;
+use crate::platform;
 use crate::theme;
+
+thread_local! {
+    static LINE_CACHE: RefCell<(u64, Vec<Line<'static>>)> = const { RefCell::new((u64::MAX, Vec::new())) };
+}
 
 pub fn render(frame: &mut Frame, app: &App, area: Rect) {
     let input_height = if app.is_multiline() {
@@ -11,11 +18,8 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
     } else {
         3
     };
-    let layout = Layout::vertical([
-        Constraint::Min(0),
-        Constraint::Length(input_height),
-    ])
-    .split(area);
+    let layout =
+        Layout::vertical([Constraint::Min(0), Constraint::Length(input_height)]).split(area);
 
     render_messages(frame, app, layout[0]);
     render_input(frame, app, layout[1]);
@@ -25,7 +29,11 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
     }
 }
 
-fn render_markdown_line(text: &str, in_code_block: bool, in_diff: bool) -> (Line<'static>, bool, bool) {
+fn render_markdown_line(
+    text: &str,
+    in_code_block: bool,
+    in_diff: bool,
+) -> (Line<'static>, bool, bool) {
     let mut code_block = in_code_block;
     let mut diff = in_diff;
     let text = bidi::visual_reorder(text);
@@ -35,15 +43,31 @@ fn render_markdown_line(text: &str, in_code_block: bool, in_diff: bool) -> (Line
         if code_block || diff {
             code_block = false;
             diff = false;
-            return (Line::from(Span::styled("  ───", theme::muted())), code_block, diff);
+            return (
+                Line::from(Span::styled("  ───", theme::muted())),
+                code_block,
+                diff,
+            );
         }
         if lang == "diff" {
             diff = true;
-            return (Line::from(Span::styled("  ─── diff", theme::muted())), code_block, diff);
+            return (
+                Line::from(Span::styled("  ─── diff", theme::muted())),
+                code_block,
+                diff,
+            );
         }
         code_block = true;
-        let label = if lang.is_empty() { "───".to_string() } else { format!("─── {}", lang) };
-        return (Line::from(Span::styled(format!("  {}", label), theme::muted())), code_block, diff);
+        let label = if lang.is_empty() {
+            "───".to_string()
+        } else {
+            format!("─── {}", lang)
+        };
+        return (
+            Line::from(Span::styled(format!("  {}", label), theme::muted())),
+            code_block,
+            diff,
+        );
     }
 
     if diff {
@@ -56,14 +80,19 @@ fn render_markdown_line(text: &str, in_code_block: bool, in_diff: bool) -> (Line
         } else {
             theme::dim()
         };
-        return (Line::from(Span::styled(format!("  │ {}", text), style)), code_block, diff);
+        return (
+            Line::from(Span::styled(format!("  │ {}", text), style)),
+            code_block,
+            diff,
+        );
     }
 
     if code_block {
-        return (Line::from(Span::styled(
-            format!("  │ {}", text),
-            theme::code(),
-        )), code_block, diff);
+        return (
+            Line::from(Span::styled(format!("  │ {}", text), theme::code())),
+            code_block,
+            diff,
+        );
     }
 
     if text.contains("**") {
@@ -96,10 +125,7 @@ fn render_markdown_line(text: &str, in_code_block: bool, in_diff: bool) -> (Line
             }
             remaining = remaining[start + 1..].to_string();
             if let Some(end) = remaining.find('`') {
-                spans.push(Span::styled(
-                    remaining[..end].to_string(),
-                    theme::code(),
-                ));
+                spans.push(Span::styled(remaining[..end].to_string(), theme::code()));
                 remaining = remaining[end + 1..].to_string();
             } else {
                 spans.push(Span::raw("`".to_string()));
@@ -111,25 +137,31 @@ fn render_markdown_line(text: &str, in_code_block: bool, in_diff: bool) -> (Line
         return (Line::from(spans), code_block, diff);
     }
 
-    if text.starts_with("## ") {
-        return (Line::from(Span::styled(
-            format!("  {}", &text[3..]),
-            theme::heading2(),
-        )), code_block, diff);
+    if let Some(stripped) = text.strip_prefix("## ") {
+        return (
+            Line::from(Span::styled(format!("  {}", stripped), theme::heading2())),
+            code_block,
+            diff,
+        );
     }
-    if text.starts_with("# ") {
-        return (Line::from(Span::styled(
-            format!("  {}", &text[2..]),
-            theme::heading1(),
-        )), code_block, diff);
+    if let Some(stripped) = text.strip_prefix("# ") {
+        return (
+            Line::from(Span::styled(format!("  {}", stripped), theme::heading1())),
+            code_block,
+            diff,
+        );
     }
 
     if text.starts_with("- ") || text.starts_with("* ") {
-        return (Line::from(vec![
-            Span::raw("  "),
-            Span::styled("• ", theme::bullet()),
-            Span::raw(text[2..].to_string()),
-        ]), code_block, diff);
+        return (
+            Line::from(vec![
+                Span::raw("  "),
+                Span::styled("• ", theme::bullet()),
+                Span::raw(text[2..].to_string()),
+            ]),
+            code_block,
+            diff,
+        );
     }
 
     (Line::from(format!("  {}", text)), code_block, diff)
@@ -155,9 +187,102 @@ fn render_welcome(lines: &mut Vec<Line<'static>>) {
     lines.push(Line::from(""));
 }
 
-fn render_messages(frame: &mut Frame, app: &App, area: Rect) {
-    let mut lines: Vec<Line> = Vec::new();
+fn render_subagent_block(
+    lines: &mut Vec<Line<'static>>,
+    app: &App,
+    subagent_type: &str,
+    description: &str,
+    status: &SubagentStatus,
+    output_preview: Option<&str>,
+    is_warden: bool,
+) {
+    let (icon, icon_style, name_style) = match (is_warden, status) {
+        (true, SubagentStatus::Running) => {
+            let spinner = app.spinner_frame();
+            (
+                format!(" ⛨{} ", spinner),
+                theme::warden_name(),
+                theme::warden_name(),
+            )
+        }
+        (true, SubagentStatus::Completed) => (
+            " ⛨✓ ".to_string(),
+            theme::verdict_ship(),
+            theme::warden_name(),
+        ),
+        (false, SubagentStatus::Running) => {
+            let spinner = app.spinner_frame();
+            (
+                format!(" ◈{} ", spinner),
+                theme::agent_name(),
+                theme::agent_name(),
+            )
+        }
+        (false, SubagentStatus::Completed) => (
+            " ◈✓ ".to_string(),
+            Style::default().fg(theme::GOOD),
+            theme::agent_name(),
+        ),
+    };
 
+    let label = if is_warden { "Warden" } else { "Agent" };
+    lines.push(Line::from(vec![
+        Span::styled(icon, icon_style),
+        Span::styled(format!("{} ({})", label, subagent_type), name_style),
+        Span::styled(format!("  {}", description), theme::agent_detail()),
+    ]));
+
+    if *status == SubagentStatus::Completed
+        && app.show_tools
+        && let Some(preview) = output_preview
+    {
+        let max_lines = if is_warden { 10 } else { 5 };
+        let total_lines = preview.lines().count();
+        for (i, line) in preview.lines().take(max_lines).enumerate() {
+            let text = if is_warden {
+                highlight_verdict(line)
+            } else {
+                Line::from(vec![
+                    Span::styled("   │ ", theme::muted()),
+                    Span::raw(line.to_string()),
+                ])
+            };
+            lines.push(text);
+            if i == max_lines - 1 && total_lines > max_lines {
+                lines.push(Line::from(Span::styled("   │ ⋯", theme::muted())));
+            }
+        }
+    }
+}
+
+fn highlight_verdict(line: &str) -> Line<'static> {
+    let trimmed = line.trim();
+    if trimmed.contains("SHIP") {
+        return Line::from(vec![
+            Span::styled("   │ ", theme::muted()),
+            Span::styled(line.to_string(), theme::verdict_ship()),
+        ]);
+    }
+    if trimmed.contains("REVISE") {
+        return Line::from(vec![
+            Span::styled("   │ ", theme::muted()),
+            Span::styled(line.to_string(), theme::verdict_revise()),
+        ]);
+    }
+    if trimmed.contains("HOLD") {
+        return Line::from(vec![
+            Span::styled("   │ ", theme::muted()),
+            Span::styled(line.to_string(), theme::verdict_hold()),
+        ]);
+    }
+    Line::from(vec![
+        Span::styled("   │ ", theme::muted()),
+        Span::raw(line.to_string()),
+    ])
+}
+
+fn build_message_lines(app: &App) -> Vec<Line<'static>> {
+    let mut lines: Vec<Line> = Vec::new();
     for (msg_idx, msg) in app.chat_messages.iter().enumerate() {
         if msg.role == "system" && msg.content.starts_with("Welcome to Deus") {
             render_welcome(&mut lines);
@@ -173,40 +298,59 @@ fn render_messages(frame: &mut Frame, app: &App, area: Rect) {
                 }
             }
 
-            if app.show_tools {
-                if let Some(text) = last_thinking {
-                    let line_count = text.lines().count();
-                    for (i, tline) in text.lines().take(5).enumerate() {
-                        let prefix = if i == 0 { " ⟡ " } else { "   " };
-                        lines.push(Line::from(vec![
-                            Span::styled(prefix, theme::muted()),
-                            Span::styled(tline.to_string(), theme::thinking()),
-                        ]));
-                    }
-                    if line_count > 5 {
-                        lines.push(Line::from(Span::styled(
-                            "   ⋯ (Ctrl+O to hide)",
-                            theme::muted(),
-                        )));
-                    }
+            if app.show_tools
+                && let Some(text) = last_thinking
+            {
+                let line_count = text.lines().count();
+                for (i, tline) in text.lines().take(5).enumerate() {
+                    let prefix = if i == 0 { " ⟡ " } else { "   " };
+                    lines.push(Line::from(vec![
+                        Span::styled(prefix, theme::muted()),
+                        Span::styled(tline.to_string(), theme::thinking()),
+                    ]));
+                }
+                if line_count > 5 {
+                    lines.push(Line::from(Span::styled(
+                        "   ⋯ (Ctrl+O to hide)",
+                        theme::muted(),
+                    )));
                 }
             }
 
             for block in &msg.blocks {
                 match block {
                     MessageBlock::Thinking(_) => {}
-                    MessageBlock::ToolUse { tool, detail } => {
+                    MessageBlock::ToolUse { tool, detail, .. } => {
                         lines.push(Line::from(vec![
                             Span::styled(" ▸ ", Style::default().fg(theme::FLAME)),
                             Span::styled(tool.clone(), theme::tool_name()),
                             Span::styled(format!(" {}", detail), theme::tool_detail()),
                         ]));
                     }
+                    MessageBlock::SubagentBlock {
+                        subagent_type,
+                        description,
+                        status,
+                        output_preview,
+                        is_warden,
+                        ..
+                    } => {
+                        render_subagent_block(
+                            &mut lines,
+                            app,
+                            subagent_type,
+                            description,
+                            status,
+                            output_preview.as_deref(),
+                            *is_warden,
+                        );
+                    }
                     MessageBlock::Text(text) => {
                         let mut in_code = false;
                         let mut in_diff = false;
                         for line in text.lines() {
-                            let (rendered, new_code, new_diff) = render_markdown_line(line, in_code, in_diff);
+                            let (rendered, new_code, new_diff) =
+                                render_markdown_line(line, in_code, in_diff);
                             in_code = new_code;
                             in_diff = new_diff;
                             lines.push(rendered);
@@ -232,17 +376,37 @@ fn render_messages(frame: &mut Frame, app: &App, area: Rect) {
                 lines.push(rendered);
             }
         }
-        // Separator between messages, but not after the last one
         if msg_idx < app.chat_messages.len() - 1 {
             lines.push(Line::from(""));
         }
     }
+    lines
+}
 
-    if matches!(app.chat_state, crate::app::ChatState::Streaming) {
-        let has_text = app.chat_messages.last().is_some_and(|m| m.role == "assistant" && !m.content.is_empty());
+fn render_messages(frame: &mut Frame, app: &App, area: Rect) {
+    let is_streaming = matches!(app.chat_state, crate::app::ChatState::Streaming);
+
+    let mut lines = LINE_CACHE.with(|cache| {
+        let mut cached = cache.borrow_mut();
+        if cached.0 != app.chat_version {
+            cached.1 = build_message_lines(app);
+            cached.0 = app.chat_version;
+        }
+        cached.1.clone()
+    });
+
+    // Streaming spinner appended per-frame (animated, not cached)
+    if is_streaming {
+        let has_text = app
+            .chat_messages
+            .last()
+            .is_some_and(|m| m.role == "assistant" && !m.content.is_empty());
         if !has_text {
             let spinner = app.spinner_frame();
-            let thinking_text = app.last_thinking_summary.as_deref().unwrap_or("thinking...");
+            let thinking_text = app
+                .last_thinking_summary
+                .as_deref()
+                .unwrap_or("thinking...");
             let preview: String = thinking_text.chars().take(60).collect();
             lines.push(Line::from(vec![
                 Span::styled(format!(" {} ", spinner), theme::warn()),
@@ -295,16 +459,7 @@ fn ghost_text(app: &App) -> String {
 fn render_input(frame: &mut Frame, app: &App, area: Rect) {
     let ghost = ghost_text(app);
 
-    let cwd = std::env::current_dir()
-        .map(|p| {
-            let home = dirs::home_dir().unwrap_or_default();
-            if let Ok(rel) = p.strip_prefix(&home) {
-                format!("~/{}", rel.display())
-            } else {
-                p.display().to_string()
-            }
-        })
-        .unwrap_or_default();
+    let cwd = platform::display_path(&platform::current_dir());
     let title = format!(" {} ", cwd);
 
     if app.is_multiline() {
@@ -316,12 +471,13 @@ fn render_input(frame: &mut Frame, app: &App, area: Rect) {
                 Span::raw(line.to_string()),
             ]));
         }
-        let input = Paragraph::new(text_lines)
-            .block(Block::default()
+        let input = Paragraph::new(text_lines).block(
+            Block::default()
                 .borders(Borders::ALL)
                 .title(title)
                 .title_style(theme::dim())
-                .border_style(theme::accent()));
+                .border_style(theme::accent()),
+        );
         frame.render_widget(input, area);
 
         let before_cursor = &app.input[..app.input_cursor];
@@ -332,23 +488,25 @@ fn render_input(frame: &mut Frame, app: &App, area: Rect) {
         let cursor_y = area.y + 1 + cursor_line as u16;
         frame.set_cursor_position((cursor_x, cursor_y));
     } else {
-        let mut spans = vec![
-            Span::styled(" › ", theme::accent_bold()),
-        ];
+        let mut spans = vec![Span::styled(" › ", theme::accent_bold())];
         if app.input.is_empty() && matches!(app.chat_state, crate::app::ChatState::Idle) {
-            spans.push(Span::styled("Type a message or / for commands...", theme::muted()));
+            spans.push(Span::styled(
+                "Type a message or / for commands...",
+                theme::muted(),
+            ));
         } else {
             spans.push(Span::raw(&app.input));
             if !ghost.is_empty() {
                 spans.push(Span::styled(ghost, theme::muted()));
             }
         }
-        let input = Paragraph::new(Line::from(spans))
-            .block(Block::default()
+        let input = Paragraph::new(Line::from(spans)).block(
+            Block::default()
                 .borders(Borders::ALL)
                 .title(title)
                 .title_style(theme::dim())
-                .border_style(theme::accent()));
+                .border_style(theme::accent()),
+        );
         frame.render_widget(input, area);
 
         let cursor_x = area.x + 4 + app.input[..app.input_cursor].chars().count() as u16;
@@ -368,7 +526,8 @@ fn render_suggestions(frame: &mut Frame, app: &App, input_area: Rect) {
         } else {
             0
         };
-        let items: Vec<Line> = app.arg_suggestions
+        let items: Vec<Line> = app
+            .arg_suggestions
             .iter()
             .enumerate()
             .skip(scroll_offset)
@@ -396,7 +555,8 @@ fn render_suggestions(frame: &mut Frame, app: &App, input_area: Rect) {
         } else {
             0
         };
-        let items: Vec<Line> = app.suggestions
+        let items: Vec<Line> = app
+            .suggestions
             .iter()
             .enumerate()
             .skip(scroll_offset)
@@ -424,10 +584,17 @@ fn render_suggestions(frame: &mut Frame, app: &App, input_area: Rect) {
     }
 
     let popup_height = items.len() as u16 + 2;
-    let max_item_width = items.iter()
-        .map(|l| l.spans.iter().map(|s| s.content.chars().count()).sum::<usize>())
+    let max_item_width = items
+        .iter()
+        .map(|l| {
+            l.spans
+                .iter()
+                .map(|s| s.content.chars().count())
+                .sum::<usize>()
+        })
         .max()
-        .unwrap_or(30) as u16 + 4;
+        .unwrap_or(30) as u16
+        + 4;
     let popup_width = max_item_width.max(30);
 
     let popup_area = Rect {

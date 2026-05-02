@@ -1,11 +1,10 @@
+use crate::platform;
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::fs;
 
 pub fn load() -> Vec<(String, String)> {
-    let path = dirs::home_dir()
-        .map(|h| h.join(".config").join("deus").join("config.json"))
-        .unwrap_or_default();
+    let path = platform::config_file();
 
     let content = match fs::read_to_string(&path) {
         Ok(c) => c,

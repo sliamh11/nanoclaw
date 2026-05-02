@@ -5,11 +5,7 @@ use crate::app::App;
 use crate::theme;
 
 pub fn render(frame: &mut Frame, app: &App, area: Rect) {
-    let layout = Layout::vertical([
-        Constraint::Min(0),
-        Constraint::Length(6),
-    ])
-    .split(area);
+    let layout = Layout::vertical([Constraint::Min(0), Constraint::Length(6)]).split(area);
 
     let items: Vec<ListItem> = app
         .wardens

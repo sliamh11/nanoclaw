@@ -1,6 +1,6 @@
+use crate::platform;
 use serde::Deserialize;
 use std::fs;
-use std::path::Path;
 use std::process::Command;
 use std::time::SystemTime;
 
@@ -25,31 +25,27 @@ struct HealthcheckFile {
 }
 
 fn check_launchctl(label: &str) -> &'static str {
-    if cfg!(not(target_os = "macos")) {
+    if !platform::is_macos() {
         return "unsupported";
     }
     let uid = unsafe { libc::getuid() };
     let target = format!("gui/{}/{}", uid, label);
-    let output = Command::new("launchctl")
-        .args(["print", &target])
-        .output();
+    let output = Command::new("launchctl").args(["print", &target]).output();
     match output {
         Ok(o) if o.status.success() => {
             let stdout = String::from_utf8_lossy(&o.stdout);
-            if stdout.contains("state = running") { "running" } else { "stopped" }
+            if stdout.contains("state = running") {
+                "running"
+            } else {
+                "stopped"
+            }
         }
         _ => "stopped",
     }
 }
 
 fn check_heartbeat(path: &str, max_staleness: u64) -> &'static str {
-    let expanded = if path.starts_with('~') {
-        dirs::home_dir()
-            .map(|h| h.join(&path[2..]))
-            .unwrap_or_else(|| Path::new(path).to_path_buf())
-    } else {
-        Path::new(path).to_path_buf()
-    };
+    let expanded = platform::expand_tilde(path);
 
     let meta = match fs::metadata(&expanded) {
         Ok(m) => m,
@@ -62,28 +58,34 @@ fn check_heartbeat(path: &str, max_staleness: u64) -> &'static str {
         .map(|d| d.as_secs())
         .unwrap_or(u64::MAX);
 
-    if age <= max_staleness { "running" } else { "stale" }
+    if age <= max_staleness {
+        "running"
+    } else {
+        "stale"
+    }
 }
 
 pub fn load() -> Vec<ServiceEntry> {
-    let config_dir = dirs::home_dir()
-        .map(|h| h.join(".config").join("deus").join("healthcheck.json"))
-        .unwrap_or_default();
+    let config_dir = platform::config_dir().join("healthcheck.json");
 
     let content = match fs::read_to_string(&config_dir) {
         Ok(c) => c,
-        Err(_) => return vec![ServiceEntry {
-            description: "healthcheck.json not found".to_string(),
-            status: "unknown".to_string(),
-        }],
+        Err(_) => {
+            return vec![ServiceEntry {
+                description: "healthcheck.json not found".to_string(),
+                status: "unknown".to_string(),
+            }];
+        }
     };
 
     let file: HealthcheckFile = match serde_json::from_str(&content) {
         Ok(f) => f,
-        Err(_) => return vec![ServiceEntry {
-            description: "invalid healthcheck.json".to_string(),
-            status: "unknown".to_string(),
-        }],
+        Err(_) => {
+            return vec![ServiceEntry {
+                description: "invalid healthcheck.json".to_string(),
+                status: "unknown".to_string(),
+            }];
+        }
     };
 
     file.jobs
@@ -101,7 +103,10 @@ pub fn load() -> Vec<ServiceEntry> {
                 }
                 _ => "unknown".to_string(),
             };
-            ServiceEntry { description: job.description.clone(), status }
+            ServiceEntry {
+                description: job.description.clone(),
+                status,
+            }
         })
         .collect()
 }

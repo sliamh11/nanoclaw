@@ -21,7 +21,11 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
                 Span::styled(format!("{} ", icon), Style::default().fg(color)),
                 Span::styled(
                     format!("{:42}", svc.description),
-                    if i == app.cursor { theme::bold() } else { Style::default() },
+                    if i == app.cursor {
+                        theme::bold()
+                    } else {
+                        Style::default()
+                    },
                 ),
                 Span::styled(&svc.status, theme::dim()),
             ]))

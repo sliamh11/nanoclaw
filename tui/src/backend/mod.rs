@@ -1,6 +1,7 @@
 pub mod claude;
 pub mod codex;
 
+use std::path::PathBuf;
 use std::process::Command;
 
 pub struct ModelDef {
@@ -16,9 +17,25 @@ pub struct StreamChunk {
 pub enum ChunkKind {
     Text(String),
     Thinking(String),
-    ToolUse { tool: String, detail: String },
-    ToolResult,
-    CostUpdate { cost_usd: f64, input_tokens: u64, output_tokens: u64 },
+    ToolUse {
+        id: String,
+        tool: String,
+        detail: String,
+    },
+    ToolResult {
+        id: String,
+        content_preview: String,
+    },
+    SubagentStart {
+        id: String,
+        subagent_type: String,
+        description: String,
+    },
+    CostUpdate {
+        cost_usd: f64,
+        input_tokens: u64,
+        output_tokens: u64,
+    },
     Done,
     Error(String),
 }
@@ -28,14 +45,21 @@ pub struct RunConfig {
     pub message: String,
     pub effort: String,
     pub is_continuation: bool,
+    pub system_context_file: Option<PathBuf>,
+    pub bypass_permissions: bool,
 }
+
+// Tool names that represent subagent/task spawning across providers.
+// Claude uses PascalCase, Codex uses snake_case — both lists here.
+pub const SUBAGENT_TOOLS_CLAUDE: &[&str] = &["Agent", "TaskCreate", "TaskUpdate"];
+pub const SUBAGENT_TOOLS_CODEX: &[&str] = &["spawn_agent", "task_create", "task_update"];
 
 pub trait Backend: Send + Sync {
     fn name(&self) -> &'static str;
     fn display_name(&self) -> &'static str;
     fn models(&self) -> &'static [ModelDef];
     fn build_command(&self, config: &RunConfig) -> Command;
-    fn parse_line(&self, line: &str) -> Option<StreamChunk>;
+    fn parse_line(&self, line: &str) -> Vec<StreamChunk>;
 }
 
 pub fn all_backends() -> Vec<Box<dyn Backend>> {
@@ -46,18 +70,16 @@ pub fn all_backends() -> Vec<Box<dyn Backend>> {
 }
 
 pub fn find_backend(model_id: &str) -> Option<Box<dyn Backend>> {
-    for b in all_backends() {
-        if b.models().iter().any(|m| m.id == model_id) {
-            return Some(b);
-        }
-    }
-    None
+    all_backends()
+        .into_iter()
+        .find(|b| b.models().iter().any(|m| m.id == model_id))
 }
 
 pub fn backend_for(model_id: &str) -> Box<dyn Backend> {
     find_backend(model_id).unwrap_or_else(|| Box::new(claude::ClaudeBackend))
 }
 
+#[allow(dead_code)]
 pub fn all_models() -> Vec<(&'static str, &'static ModelDef)> {
     let mut out = Vec::new();
     for b in all_backends() {
@@ -90,7 +112,9 @@ pub fn model_backend_name(id: &str) -> &'static str {
 pub fn models_for_backend(backend: &str) -> Vec<String> {
     for b in all_backends() {
         if b.name() == backend {
-            return b.models().iter()
+            return b
+                .models()
+                .iter()
                 .map(|m| format!("{} — {} ({})", m.id, m.display, m.context))
                 .collect();
         }
@@ -99,7 +123,8 @@ pub fn models_for_backend(backend: &str) -> Vec<String> {
 }
 
 pub fn backend_labels() -> Vec<String> {
-    all_backends().iter()
+    all_backends()
+        .iter()
         .map(|b| format!("{} — {}", b.name(), b.display_name()))
         .collect()
 }
