@@ -10,11 +10,7 @@ pub fn render(frame: &mut Frame, app: &App) {
 
     match app.tab {
         Tab::Chat => {
-            let layout = Layout::vertical([
-                Constraint::Min(0),
-                Constraint::Length(1),
-            ])
-            .split(area);
+            let layout = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).split(area);
 
             panels::chat::render(frame, app, layout[0]);
             render_status_bar(frame, app, layout[1]);
@@ -87,12 +83,18 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
 
     let elapsed_secs = app.session_start.elapsed().as_secs();
     let window_secs: u64 = 5 * 3600;
-    let remaining_pct = if elapsed_secs >= window_secs { 0 } else {
-        ((window_secs - elapsed_secs) * 100 / window_secs) as u64
+    let remaining_pct = if elapsed_secs >= window_secs {
+        0
+    } else {
+        (window_secs - elapsed_secs) * 100 / window_secs
     };
-    let remaining_color = if remaining_pct > 50 { theme::GOOD }
-        else if remaining_pct > 20 { theme::WARN }
-        else { theme::BAD };
+    let remaining_color = if remaining_pct > 50 {
+        theme::GOOD
+    } else if remaining_pct > 20 {
+        theme::WARN
+    } else {
+        theme::BAD
+    };
     right.push(Span::styled(
         format!("{}%", remaining_pct),
         Style::default().fg(remaining_color),

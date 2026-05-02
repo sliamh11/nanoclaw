@@ -17,10 +17,25 @@ pub struct StreamChunk {
 pub enum ChunkKind {
     Text(String),
     Thinking(String),
-    ToolUse { id: String, tool: String, detail: String },
-    ToolResult { id: String, content_preview: String },
-    SubagentStart { id: String, subagent_type: String, description: String },
-    CostUpdate { cost_usd: f64, input_tokens: u64, output_tokens: u64 },
+    ToolUse {
+        id: String,
+        tool: String,
+        detail: String,
+    },
+    ToolResult {
+        id: String,
+        content_preview: String,
+    },
+    SubagentStart {
+        id: String,
+        subagent_type: String,
+        description: String,
+    },
+    CostUpdate {
+        cost_usd: f64,
+        input_tokens: u64,
+        output_tokens: u64,
+    },
     Done,
     Error(String),
 }
@@ -55,18 +70,16 @@ pub fn all_backends() -> Vec<Box<dyn Backend>> {
 }
 
 pub fn find_backend(model_id: &str) -> Option<Box<dyn Backend>> {
-    for b in all_backends() {
-        if b.models().iter().any(|m| m.id == model_id) {
-            return Some(b);
-        }
-    }
-    None
+    all_backends()
+        .into_iter()
+        .find(|b| b.models().iter().any(|m| m.id == model_id))
 }
 
 pub fn backend_for(model_id: &str) -> Box<dyn Backend> {
     find_backend(model_id).unwrap_or_else(|| Box::new(claude::ClaudeBackend))
 }
 
+#[allow(dead_code)]
 pub fn all_models() -> Vec<(&'static str, &'static ModelDef)> {
     let mut out = Vec::new();
     for b in all_backends() {
@@ -99,7 +112,9 @@ pub fn model_backend_name(id: &str) -> &'static str {
 pub fn models_for_backend(backend: &str) -> Vec<String> {
     for b in all_backends() {
         if b.name() == backend {
-            return b.models().iter()
+            return b
+                .models()
+                .iter()
                 .map(|m| format!("{} — {} ({})", m.id, m.display, m.context))
                 .collect();
         }
@@ -108,7 +123,8 @@ pub fn models_for_backend(backend: &str) -> Vec<String> {
 }
 
 pub fn backend_labels() -> Vec<String> {
-    all_backends().iter()
+    all_backends()
+        .iter()
         .map(|b| format!("{} — {}", b.name(), b.display_name()))
         .collect()
 }

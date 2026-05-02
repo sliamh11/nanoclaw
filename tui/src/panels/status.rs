@@ -38,8 +38,16 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
     lines.push(Line::from(Span::styled("  CHANNELS", theme::bold())));
     lines.push(Line::from(""));
     for ch in &app.channels {
-        let (icon, color) = if ch.configured { ("●", theme::GOOD) } else { ("○", theme::BAD) };
-        let status = if ch.configured { "connected" } else { "not configured" };
+        let (icon, color) = if ch.configured {
+            ("●", theme::GOOD)
+        } else {
+            ("○", theme::BAD)
+        };
+        let status = if ch.configured {
+            "connected"
+        } else {
+            "not configured"
+        };
         lines.push(Line::from(vec![
             Span::styled(format!("  {} ", icon), Style::default().fg(color)),
             Span::raw(format!("{:16} {}", ch.name, status)),

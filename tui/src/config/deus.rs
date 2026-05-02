@@ -1,7 +1,7 @@
+use crate::platform;
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::fs;
-use crate::platform;
 
 pub fn load() -> Vec<(String, String)> {
     let path = platform::config_file();

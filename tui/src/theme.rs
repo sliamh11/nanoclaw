@@ -2,11 +2,15 @@ use ratatui::style::{Color, Modifier, Style};
 
 pub const EMBER: Color = Color::Rgb(0xE8, 0x72, 0x3A);
 pub const FLAME: Color = Color::Rgb(0xF4, 0xA2, 0x61);
+#[allow(dead_code)]
 pub const DEEP_TEAL: Color = Color::Rgb(0x1B, 0x7A, 0x6E);
 pub const OCEAN: Color = Color::Rgb(0x2E, 0xC4, 0xB6);
+#[allow(dead_code)]
 pub const SHADOW: Color = Color::Rgb(0xC4, 0x5A, 0x2A);
+#[allow(dead_code)]
 pub const NIGHT: Color = Color::Rgb(0x1A, 0x1A, 0x2E);
 
+#[allow(dead_code)]
 pub const SURFACE: Color = Color::Reset;
 pub const TEXT: Color = Color::White;
 pub const TEXT_DIM: Color = Color::Rgb(0x6C, 0x6C, 0x8A);
@@ -18,7 +22,9 @@ pub const WARN: Color = Color::Rgb(0xF4, 0xA2, 0x61);
 pub const BAD: Color = Color::Rgb(0xE8, 0x5D, 0x5D);
 
 pub const ACCENT: Color = OCEAN;
+#[allow(dead_code)]
 pub const ACCENT_ALT: Color = EMBER;
+#[allow(dead_code)]
 pub const PROMPT: Color = OCEAN;
 
 pub fn accent() -> Style {
@@ -38,7 +44,9 @@ pub fn muted() -> Style {
 }
 
 pub fn bold() -> Style {
-    Style::default().fg(Color::Rgb(0xFF, 0xFF, 0xFF)).add_modifier(Modifier::BOLD)
+    Style::default()
+        .fg(Color::Rgb(0xFF, 0xFF, 0xFF))
+        .add_modifier(Modifier::BOLD)
 }
 
 pub fn good() -> Style {
@@ -49,6 +57,7 @@ pub fn warn() -> Style {
     Style::default().fg(WARN)
 }
 
+#[allow(dead_code)]
 pub fn bad() -> Style {
     Style::default().fg(BAD)
 }
@@ -58,7 +67,9 @@ pub fn border() -> Style {
 }
 
 pub fn user_msg() -> Style {
-    Style::default().fg(Color::Rgb(0xFF, 0xFF, 0xFF)).add_modifier(Modifier::BOLD)
+    Style::default()
+        .fg(Color::Rgb(0xFF, 0xFF, 0xFF))
+        .add_modifier(Modifier::BOLD)
 }
 
 pub fn tool_name() -> Style {

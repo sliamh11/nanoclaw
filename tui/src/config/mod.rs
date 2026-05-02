@@ -3,12 +3,15 @@ pub mod deus;
 pub mod healthcheck;
 pub mod wardens;
 
-use std::path::PathBuf;
 use crate::platform;
+use std::path::PathBuf;
 
 pub fn repo_root() -> PathBuf {
     let exe = platform::current_exe();
-    let mut dir = exe.parent().unwrap_or(std::path::Path::new(".")).to_path_buf();
+    let mut dir = exe
+        .parent()
+        .unwrap_or(std::path::Path::new("."))
+        .to_path_buf();
     for _ in 0..5 {
         if dir.join(".claude").join("wardens").exists() {
             return dir;

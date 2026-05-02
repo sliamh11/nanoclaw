@@ -49,10 +49,12 @@ pub fn is_macos() -> bool {
     cfg!(target_os = "macos")
 }
 
+#[allow(dead_code)]
 pub fn is_linux() -> bool {
     cfg!(target_os = "linux")
 }
 
+#[allow(dead_code)]
 pub fn is_windows() -> bool {
     cfg!(target_os = "windows")
 }

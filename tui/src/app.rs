@@ -42,7 +42,12 @@ pub enum SubagentStatus {
 pub enum MessageBlock {
     Text(String),
     Thinking(String),
-    ToolUse { id: String, tool: String, detail: String },
+    ToolUse {
+        #[allow(dead_code)]
+        id: String,
+        tool: String,
+        detail: String,
+    },
     SubagentBlock {
         id: String,
         subagent_type: String,
@@ -82,28 +87,94 @@ pub struct CommandDef {
 }
 
 use crate::backend::{self, ChunkKind, RunConfig};
-pub use crate::backend::{model_display, model_backend_name as model_backend, model_ids,
-    models_for_backend, backend_labels};
+pub use crate::backend::{
+    backend_labels, model_backend_name as model_backend, model_display, model_ids,
+    models_for_backend,
+};
 
 pub const EFFORT_LEVELS: &[&str] = &["low", "medium", "high", "xhigh", "max"];
 
 pub const COMMANDS: &[CommandDef] = &[
-    CommandDef { name: "/wardens", description: "Quality gates", args: &["enable", "disable", "reset"] },
-    CommandDef { name: "/services", description: "Service health", args: &["refresh"] },
-    CommandDef { name: "/channels", description: "Channel status", args: &[] },
-    CommandDef { name: "/config", description: "Configuration", args: &["backend", "vault"] },
-    CommandDef { name: "/status", description: "System dashboard", args: &["refresh"] },
-    CommandDef { name: "/model", description: "Switch model", args: &["claude", "codex"] },
-    CommandDef { name: "/effort", description: "Reasoning effort", args: &["low", "medium", "high", "xhigh", "max"] },
-    CommandDef { name: "/compress", description: "Save to vault", args: &[] },
-    CommandDef { name: "/checkpoint", description: "Mid-session save", args: &[] },
-    CommandDef { name: "/compact", description: "Compact context", args: &[] },
-    CommandDef { name: "/resume", description: "Load recent work", args: &[] },
-    CommandDef { name: "/history", description: "Past sessions", args: &["today", "yesterday", "week"] },
-    CommandDef { name: "/init", description: "Init CLAUDE.md", args: &[] },
-    CommandDef { name: "/help", description: "Show commands", args: &[] },
-    CommandDef { name: "/clear", description: "Clear chat", args: &[] },
-    CommandDef { name: "/quit", description: "Exit", args: &[] },
+    CommandDef {
+        name: "/wardens",
+        description: "Quality gates",
+        args: &["enable", "disable", "reset"],
+    },
+    CommandDef {
+        name: "/services",
+        description: "Service health",
+        args: &["refresh"],
+    },
+    CommandDef {
+        name: "/channels",
+        description: "Channel status",
+        args: &[],
+    },
+    CommandDef {
+        name: "/config",
+        description: "Configuration",
+        args: &["backend", "vault"],
+    },
+    CommandDef {
+        name: "/status",
+        description: "System dashboard",
+        args: &["refresh"],
+    },
+    CommandDef {
+        name: "/model",
+        description: "Switch model",
+        args: &["claude", "codex"],
+    },
+    CommandDef {
+        name: "/effort",
+        description: "Reasoning effort",
+        args: &["low", "medium", "high", "xhigh", "max"],
+    },
+    CommandDef {
+        name: "/compress",
+        description: "Save to vault",
+        args: &[],
+    },
+    CommandDef {
+        name: "/checkpoint",
+        description: "Mid-session save",
+        args: &[],
+    },
+    CommandDef {
+        name: "/compact",
+        description: "Compact context",
+        args: &[],
+    },
+    CommandDef {
+        name: "/resume",
+        description: "Load recent work",
+        args: &[],
+    },
+    CommandDef {
+        name: "/history",
+        description: "Past sessions",
+        args: &["today", "yesterday", "week"],
+    },
+    CommandDef {
+        name: "/init",
+        description: "Init CLAUDE.md",
+        args: &[],
+    },
+    CommandDef {
+        name: "/help",
+        description: "Show commands",
+        args: &[],
+    },
+    CommandDef {
+        name: "/clear",
+        description: "Clear chat",
+        args: &[],
+    },
+    CommandDef {
+        name: "/quit",
+        description: "Exit",
+        args: &[],
+    },
 ];
 
 pub struct App {
@@ -144,6 +215,8 @@ pub struct App {
     pub bypass_permissions: bool,
     pub mode: String,
     pub active_subagent_ids: HashSet<String>,
+    pub chat_dirty: bool,
+    pub chat_version: u64,
 }
 
 // StreamChunk and parsing delegated to backend trait — see backend/mod.rs
@@ -166,8 +239,16 @@ fn detect_git_branch() -> String {
 pub const SPINNER_FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
 impl App {
+    pub fn mark_chat_changed(&mut self) {
+        self.chat_version = self.chat_version.wrapping_add(1);
+        self.chat_dirty = true;
+    }
+
     pub fn spinner_frame(&self) -> &'static str {
-        let elapsed = self.turn_start.map(|t| t.elapsed().as_millis()).unwrap_or(0);
+        let elapsed = self
+            .turn_start
+            .map(|t| t.elapsed().as_millis())
+            .unwrap_or(0);
         let idx = (elapsed / 80) as usize % SPINNER_FRAMES.len();
         SPINNER_FRAMES[idx]
     }
@@ -177,7 +258,11 @@ impl App {
         let bypass = platform::env_flag("DEUS_TUI_BYPASS");
         let mode = platform::env_var("DEUS_TUI_MODE").unwrap_or_else(|| "home".to_string());
         let backend = platform::env_var("DEUS_TUI_BACKEND").unwrap_or_else(|| "claude".to_string());
-        let default_model = if backend == "codex" { "gpt-5.4" } else { "sonnet" };
+        let default_model = if backend == "codex" {
+            "gpt-5.4"
+        } else {
+            "sonnet"
+        };
 
         let mut app = Self {
             tab: Tab::Chat,
@@ -191,7 +276,10 @@ impl App {
             suggestions: Vec::new(),
             arg_suggestions: Vec::new(),
             suggestion_cursor: 0,
-            chat_messages: vec![ChatMessage::simple("system", "Welcome to Deus. Type a message or / for commands.")],
+            chat_messages: vec![ChatMessage::simple(
+                "system",
+                "Welcome to Deus. Type a message or / for commands.",
+            )],
             chat_state: ChatState::Idle,
             stream_rx: None,
             turn_count: 0,
@@ -217,13 +305,15 @@ impl App {
             bypass_permissions: bypass,
             mode,
             active_subagent_ids: HashSet::new(),
+            chat_dirty: true,
+            chat_version: 0,
         };
         app.refresh();
 
-        if let Some(prompt) = platform::env_var("DEUS_TUI_INITIAL_PROMPT") {
-            if !prompt.is_empty() {
-                app.dispatch_message(prompt);
-            }
+        if let Some(prompt) = platform::env_var("DEUS_TUI_INITIAL_PROMPT")
+            && !prompt.is_empty()
+        {
+            app.dispatch_message(prompt);
         }
 
         app
@@ -272,12 +362,14 @@ impl App {
             self.input_cursor = 0;
             self.suggestions.clear();
             self.arg_suggestions.clear();
+            self.mark_chat_changed();
             return;
         }
 
         if matches!(self.chat_state, ChatState::Streaming) {
             self.queued_messages.push(msg);
-            self.chat_messages.push(ChatMessage::simple("system", "(queued)"));
+            self.chat_messages
+                .push(ChatMessage::simple("system", "(queued)"));
             self.input.clear();
             self.input_cursor = 0;
             self.suggestions.clear();
@@ -297,6 +389,7 @@ impl App {
         self.chat_state = ChatState::Streaming;
         self.turn_start = Some(Instant::now());
         self.last_thinking_summary = None;
+        self.mark_chat_changed();
         self.scroll_to_bottom();
 
         let (tx, rx) = mpsc::channel();
@@ -306,7 +399,11 @@ impl App {
             message: msg,
             effort: self.effort.clone(),
             is_continuation: self.turn_count > 0,
-            system_context_file: if self.turn_count == 0 { self.system_context_file.clone() } else { None },
+            system_context_file: if self.turn_count == 0 {
+                self.system_context_file.clone()
+            } else {
+                None
+            },
             bypass_permissions: self.bypass_permissions,
         };
         self.turn_count += 1;
@@ -324,7 +421,9 @@ impl App {
                             let mut reader = BufReader::new(stderr);
                             let _ = reader.read_to_string(&mut buf);
                             if !buf.trim().is_empty() {
-                                let _ = tx2.send(backend::StreamChunk { kind: ChunkKind::Error(buf.trim().to_string()) });
+                                let _ = tx2.send(backend::StreamChunk {
+                                    kind: ChunkKind::Error(buf.trim().to_string()),
+                                });
                             }
                         })
                     });
@@ -338,19 +437,29 @@ impl App {
                                     }
                                 }
                                 Err(e) => {
-                                    let _ = tx.send(backend::StreamChunk { kind: ChunkKind::Error(e.to_string()) });
+                                    let _ = tx.send(backend::StreamChunk {
+                                        kind: ChunkKind::Error(e.to_string()),
+                                    });
                                     break;
                                 }
                             }
                         }
                     }
                     let _ = process.wait();
-                    if let Some(h) = stderr_handle { let _ = h.join(); }
-                    let _ = tx.send(backend::StreamChunk { kind: ChunkKind::Done });
+                    if let Some(h) = stderr_handle {
+                        let _ = h.join();
+                    }
+                    let _ = tx.send(backend::StreamChunk {
+                        kind: ChunkKind::Done,
+                    });
                 }
                 Err(e) => {
-                    let _ = tx.send(backend::StreamChunk { kind: ChunkKind::Error(format!("Failed to launch: {}", e)) });
-                    let _ = tx.send(backend::StreamChunk { kind: ChunkKind::Done });
+                    let _ = tx.send(backend::StreamChunk {
+                        kind: ChunkKind::Error(format!("Failed to launch: {}", e)),
+                    });
+                    let _ = tx.send(backend::StreamChunk {
+                        kind: ChunkKind::Done,
+                    });
                 }
             }
         });
@@ -368,17 +477,42 @@ impl App {
         let arg = parts.get(1).unwrap_or(&"").trim();
 
         match cmd {
-            "/wardens" if arg.is_empty() => { self.tab = Tab::Wardens; self.cursor = 0; true }
+            "/wardens" if arg.is_empty() => {
+                self.tab = Tab::Wardens;
+                self.cursor = 0;
+                true
+            }
             "/wardens" => {
                 // /wardens enable|disable|reset <name> → pass to python CLI
                 false
             }
-            "/services" => { self.tab = Tab::Services; self.cursor = 0; true }
-            "/channels" => { self.tab = Tab::Channels; self.cursor = 0; true }
-            "/config" => { self.tab = Tab::Config; self.cursor = 0; true }
-            "/status" => { self.tab = Tab::Status; self.cursor = 0; true }
-            "/clear" => { self.chat_messages.clear(); true }
-            "/quit" => { std::process::exit(0); }
+            "/services" => {
+                self.tab = Tab::Services;
+                self.cursor = 0;
+                true
+            }
+            "/channels" => {
+                self.tab = Tab::Channels;
+                self.cursor = 0;
+                true
+            }
+            "/config" => {
+                self.tab = Tab::Config;
+                self.cursor = 0;
+                true
+            }
+            "/status" => {
+                self.tab = Tab::Status;
+                self.cursor = 0;
+                true
+            }
+            "/clear" => {
+                self.chat_messages.clear();
+                true
+            }
+            "/quit" => {
+                std::process::exit(0);
+            }
             "/model" => {
                 let ids = model_ids();
                 if arg.is_empty() {
@@ -392,16 +526,30 @@ impl App {
                     )));
                 } else if arg == "claude" {
                     let models = models_for_backend("claude");
-                    self.chat_messages.push(ChatMessage::simple("system", &format!(
-                        "Claude models:\n{}",
-                        models.iter().map(|m| format!("  {}", m)).collect::<Vec<_>>().join("\n"),
-                    )));
+                    self.chat_messages.push(ChatMessage::simple(
+                        "system",
+                        &format!(
+                            "Claude models:\n{}",
+                            models
+                                .iter()
+                                .map(|m| format!("  {}", m))
+                                .collect::<Vec<_>>()
+                                .join("\n"),
+                        ),
+                    ));
                 } else if arg == "codex" {
                     let models = models_for_backend("codex");
-                    self.chat_messages.push(ChatMessage::simple("system", &format!(
-                        "Codex models:\n{}",
-                        models.iter().map(|m| format!("  {}", m)).collect::<Vec<_>>().join("\n"),
-                    )));
+                    self.chat_messages.push(ChatMessage::simple(
+                        "system",
+                        &format!(
+                            "Codex models:\n{}",
+                            models
+                                .iter()
+                                .map(|m| format!("  {}", m))
+                                .collect::<Vec<_>>()
+                                .join("\n"),
+                        ),
+                    ));
                 } else if ids.contains(&arg) {
                     let prev_backend = model_backend(&self.model);
                     let new_backend = model_backend(arg);
@@ -413,36 +561,57 @@ impl App {
                             model_display(&self.model), new_backend, prev_backend, new_backend
                         )));
                     } else {
-                        self.chat_messages.push(ChatMessage::simple("system", &format!(
-                            "Switched to {} [{}]", model_display(&self.model), new_backend
-                        )));
+                        self.chat_messages.push(ChatMessage::simple(
+                            "system",
+                            &format!(
+                                "Switched to {} [{}]",
+                                model_display(&self.model),
+                                new_backend
+                            ),
+                        ));
                     }
                 } else {
-                    self.chat_messages.push(ChatMessage::simple("system", &format!(
-                        "Unknown model: {}. Try /model to see available models.", arg
-                    )));
+                    self.chat_messages.push(ChatMessage::simple(
+                        "system",
+                        &format!(
+                            "Unknown model: {}. Try /model to see available models.",
+                            arg
+                        ),
+                    ));
                 }
                 true
             }
             "/effort" => {
                 if arg.is_empty() {
-                    self.chat_messages.push(ChatMessage::simple("system", &format!(
-                        "Current effort: {}. Available: {}", self.effort, EFFORT_LEVELS.join(", ")
-                    )));
+                    self.chat_messages.push(ChatMessage::simple(
+                        "system",
+                        &format!(
+                            "Current effort: {}. Available: {}",
+                            self.effort,
+                            EFFORT_LEVELS.join(", ")
+                        ),
+                    ));
                 } else if EFFORT_LEVELS.contains(&arg) {
                     self.effort = arg.to_string();
-                    self.chat_messages.push(ChatMessage::simple("system", &format!(
-                        "Effort set to {}", self.effort
-                    )));
+                    self.chat_messages.push(ChatMessage::simple(
+                        "system",
+                        &format!("Effort set to {}", self.effort),
+                    ));
                 } else {
-                    self.chat_messages.push(ChatMessage::simple("system", &format!(
-                        "Unknown effort: {}. Available: {}", arg, EFFORT_LEVELS.join(", ")
-                    )));
+                    self.chat_messages.push(ChatMessage::simple(
+                        "system",
+                        &format!(
+                            "Unknown effort: {}. Available: {}",
+                            arg,
+                            EFFORT_LEVELS.join(", ")
+                        ),
+                    ));
                 }
                 true
             }
             "/help" => {
-                let help: String = COMMANDS.iter()
+                let help: String = COMMANDS
+                    .iter()
                     .map(|c| format!("  {:16} {}", c.name, c.description))
                     .collect::<Vec<_>>()
                     .join("\n");
@@ -450,7 +619,10 @@ impl App {
                 true
             }
             "/history" => {
-                self.chat_messages.push(ChatMessage::simple("system", "Session history browsing coming in Phase 2."));
+                self.chat_messages.push(ChatMessage::simple(
+                    "system",
+                    "Session history browsing coming in Phase 2.",
+                ));
                 true
             }
             "/init" | "/compress" | "/checkpoint" | "/compact" | "/resume" => {
@@ -466,74 +638,94 @@ impl App {
 
     pub fn poll_response(&mut self) {
         if let Some(rx) = &self.stream_rx {
+            let mut had_chunks = false;
             while let Ok(chunk) = rx.try_recv() {
+                had_chunks = true;
                 match chunk.kind {
                     ChunkKind::Text(text) => {
-                        if let Some(last) = self.chat_messages.last_mut() {
-                            if last.role == "assistant" {
-                                if !last.content.is_empty() {
-                                    last.content.push('\n');
-                                }
-                                last.content.push_str(&text);
-                                last.blocks.push(MessageBlock::Text(text));
+                        if let Some(last) = self.chat_messages.last_mut()
+                            && last.role == "assistant"
+                        {
+                            if !last.content.is_empty() {
+                                last.content.push('\n');
                             }
+                            last.content.push_str(&text);
+                            last.blocks.push(MessageBlock::Text(text));
                         }
                     }
                     ChunkKind::Thinking(text) => {
                         let summary: String = text.chars().take(100).collect();
-                        self.last_thinking_summary = Some(
-                            if summary.len() < text.len() { format!("{}...", summary) } else { summary }
-                        );
-                        if let Some(last) = self.chat_messages.last_mut() {
-                            if last.role == "assistant" {
-                                last.blocks.push(MessageBlock::Thinking(text));
-                            }
+                        self.last_thinking_summary = Some(if summary.len() < text.len() {
+                            format!("{}...", summary)
+                        } else {
+                            summary
+                        });
+                        if let Some(last) = self.chat_messages.last_mut()
+                            && last.role == "assistant"
+                        {
+                            last.blocks.push(MessageBlock::Thinking(text));
                         }
                     }
                     ChunkKind::ToolUse { id, tool, detail } => {
-                        if let Some(last) = self.chat_messages.last_mut() {
-                            if last.role == "assistant" {
-                                let line = format!("[{}] {}", tool, detail);
-                                if !last.content.is_empty() {
-                                    last.content.push('\n');
-                                }
-                                last.content.push_str(&line);
-                                last.blocks.push(MessageBlock::ToolUse { id, tool, detail });
+                        if let Some(last) = self.chat_messages.last_mut()
+                            && last.role == "assistant"
+                        {
+                            let line = format!("[{}] {}", tool, detail);
+                            if !last.content.is_empty() {
+                                last.content.push('\n');
                             }
+                            last.content.push_str(&line);
+                            last.blocks.push(MessageBlock::ToolUse { id, tool, detail });
                         }
                     }
-                    ChunkKind::SubagentStart { id, subagent_type, description } => {
+                    ChunkKind::SubagentStart {
+                        id,
+                        subagent_type,
+                        description,
+                    } => {
                         let is_warden = self.is_warden_name(&subagent_type);
                         self.active_subagent_ids.insert(id.clone());
-                        if let Some(last) = self.chat_messages.last_mut() {
-                            if last.role == "assistant" {
-                                last.blocks.push(MessageBlock::SubagentBlock {
-                                    id,
-                                    subagent_type,
-                                    description,
-                                    status: SubagentStatus::Running,
-                                    output_preview: None,
-                                    is_warden,
-                                });
-                            }
+                        if let Some(last) = self.chat_messages.last_mut()
+                            && last.role == "assistant"
+                        {
+                            last.blocks.push(MessageBlock::SubagentBlock {
+                                id,
+                                subagent_type,
+                                description,
+                                status: SubagentStatus::Running,
+                                output_preview: None,
+                                is_warden,
+                            });
                         }
                     }
-                    ChunkKind::ToolResult { id, content_preview } => {
-                        if self.active_subagent_ids.remove(&id) {
-                            if let Some(last) = self.chat_messages.last_mut() {
-                                for block in &mut last.blocks {
-                                    if let MessageBlock::SubagentBlock { id: bid, status, output_preview: preview, .. } = block {
-                                        if *bid == id {
-                                            *status = SubagentStatus::Completed;
-                                            *preview = Some(content_preview.clone());
-                                            break;
-                                        }
-                                    }
+                    ChunkKind::ToolResult {
+                        id,
+                        content_preview,
+                    } => {
+                        if self.active_subagent_ids.remove(&id)
+                            && let Some(last) = self.chat_messages.last_mut()
+                        {
+                            for block in &mut last.blocks {
+                                if let MessageBlock::SubagentBlock {
+                                    id: bid,
+                                    status,
+                                    output_preview: preview,
+                                    ..
+                                } = block
+                                    && *bid == id
+                                {
+                                    *status = SubagentStatus::Completed;
+                                    *preview = Some(content_preview.clone());
+                                    break;
                                 }
                             }
                         }
                     }
-                    ChunkKind::CostUpdate { cost_usd, input_tokens, output_tokens } => {
+                    ChunkKind::CostUpdate {
+                        cost_usd,
+                        input_tokens,
+                        output_tokens,
+                    } => {
                         self.cost_usd = cost_usd;
                         self.token_count = (input_tokens + output_tokens) as u32;
                     }
@@ -543,6 +735,7 @@ impl App {
                         self.last_turn_duration = self.turn_start.map(|t| t.elapsed());
                         self.turn_start = None;
                         self.active_subagent_ids.clear();
+                        self.mark_chat_changed();
                         if !self.queued_messages.is_empty() {
                             let next = self.queued_messages.remove(0);
                             self.dispatch_message(next);
@@ -550,13 +743,16 @@ impl App {
                         return;
                     }
                     ChunkKind::Error(e) => {
-                        if let Some(last) = self.chat_messages.last_mut() {
-                            if last.role == "assistant" {
-                                last.content.push_str(&format!("\n[Error: {}]", e));
-                            }
+                        if let Some(last) = self.chat_messages.last_mut()
+                            && last.role == "assistant"
+                        {
+                            last.content.push_str(&format!("\n[Error: {}]", e));
                         }
                     }
                 }
+            }
+            if had_chunks {
+                self.mark_chat_changed();
             }
         }
     }
@@ -596,7 +792,8 @@ impl App {
                         self.arg_suggestions = all;
                     }
                 } else if !cmd.args.is_empty() {
-                    self.arg_suggestions = cmd.args
+                    self.arg_suggestions = cmd
+                        .args
                         .iter()
                         .filter(|a| a.starts_with(arg_part))
                         .map(|a| a.to_string())
@@ -624,7 +821,8 @@ impl App {
     }
 
     pub fn has_suggestions(&self) -> bool {
-        (!self.suggestions.is_empty() || !self.arg_suggestions.is_empty()) && self.input.starts_with('/')
+        (!self.suggestions.is_empty() || !self.arg_suggestions.is_empty())
+            && self.input.starts_with('/')
     }
 
     pub fn dismiss_suggestions(&mut self) {
@@ -717,9 +915,7 @@ impl App {
         }
         let before = &self.input[..self.input_cursor];
         let end = before.trim_end().len();
-        let word_start = before[..end].rfind(' ')
-            .map(|i| i + 1)
-            .unwrap_or(0);
+        let word_start = before[..end].rfind(' ').map(|i| i + 1).unwrap_or(0);
         self.input.drain(word_start..self.input_cursor);
         self.input_cursor = word_start;
         self.update_suggestions();
@@ -766,13 +962,25 @@ impl App {
     }
 
     pub fn input_delete_current_line(&mut self) {
-        let line_start = self.input[..self.input_cursor].rfind('\n').map(|i| i + 1).unwrap_or(0);
-        let line_end = self.input[self.input_cursor..].find('\n')
+        let line_start = self.input[..self.input_cursor]
+            .rfind('\n')
+            .map(|i| i + 1)
+            .unwrap_or(0);
+        let line_end = self.input[self.input_cursor..]
+            .find('\n')
             .map(|i| self.input_cursor + i)
             .unwrap_or(self.input.len());
         // Remove the line and the preceding newline if not the first line
-        let drain_start = if line_start > 0 { line_start - 1 } else { line_start };
-        let drain_end = if line_end < self.input.len() && drain_start == line_start { line_end + 1 } else { line_end };
+        let drain_start = if line_start > 0 {
+            line_start - 1
+        } else {
+            line_start
+        };
+        let drain_end = if line_end < self.input.len() && drain_start == line_start {
+            line_end + 1
+        } else {
+            line_end
+        };
         self.input.drain(drain_start..drain_end);
         self.input_cursor = drain_start.min(self.input.len());
         self.update_suggestions();
@@ -819,11 +1027,16 @@ impl App {
         self.update_suggestions();
     }
 
+    #[allow(dead_code)]
     pub fn session_duration(&self) -> String {
         let secs = self.session_start.elapsed().as_secs();
-        if secs < 60 { format!("{}s", secs) }
-        else if secs < 3600 { format!("{}m", secs / 60) }
-        else { format!("{}h{}m", secs / 3600, (secs % 3600) / 60) }
+        if secs < 60 {
+            format!("{}s", secs)
+        } else if secs < 3600 {
+            format!("{}m", secs / 60)
+        } else {
+            format!("{}h{}m", secs / 3600, (secs % 3600) / 60)
+        }
     }
 
     pub fn toggle_tools(&mut self) {
@@ -862,20 +1075,24 @@ impl App {
     }
 
     pub fn input_word_left(&mut self) {
-        if self.input_cursor == 0 { return; }
+        if self.input_cursor == 0 {
+            return;
+        }
         let before = &self.input[..self.input_cursor];
         let trimmed = before.trim_end();
-        let pos = trimmed.rfind(|c: char| c == ' ' || c == '\n')
-            .map(|i| i + 1)
-            .unwrap_or(0);
+        let pos = trimmed.rfind([' ', '\n']).map(|i| i + 1).unwrap_or(0);
         self.input_cursor = pos;
     }
 
     pub fn input_word_right(&mut self) {
-        if self.input_cursor >= self.input.len() { return; }
+        if self.input_cursor >= self.input.len() {
+            return;
+        }
         let after = &self.input[self.input_cursor..];
-        let skip_word = after.find(|c: char| c == ' ' || c == '\n').unwrap_or(after.len());
-        let skip_space = after[skip_word..].find(|c: char| c != ' ' && c != '\n').unwrap_or(after.len() - skip_word);
+        let skip_word = after.find([' ', '\n']).unwrap_or(after.len());
+        let skip_space = after[skip_word..]
+            .find(|c: char| !matches!(c, ' ' | '\n'))
+            .unwrap_or(after.len() - skip_word);
         self.input_cursor += skip_word + skip_space;
     }
 
@@ -909,10 +1126,16 @@ impl App {
     pub fn input_line_down(&mut self) {
         let after = &self.input[self.input_cursor..];
         if let Some(nl) = after.find('\n') {
-            let line_start = self.input[..self.input_cursor].rfind('\n').map(|i| i + 1).unwrap_or(0);
+            let line_start = self.input[..self.input_cursor]
+                .rfind('\n')
+                .map(|i| i + 1)
+                .unwrap_or(0);
             let col = self.input_cursor - line_start;
             let next_start = self.input_cursor + nl + 1;
-            let next_end = self.input[next_start..].find('\n').map(|i| next_start + i).unwrap_or(self.input.len());
+            let next_end = self.input[next_start..]
+                .find('\n')
+                .map(|i| next_start + i)
+                .unwrap_or(self.input.len());
             let next_len = next_end - next_start;
             self.input_cursor = next_start + col.min(next_len);
         }
@@ -926,8 +1149,11 @@ impl App {
         };
         dur.map(|d| {
             let secs = d.as_secs();
-            if secs < 60 { format!("{}s", secs) }
-            else { format!("{}m{}s", secs / 60, secs % 60) }
+            if secs < 60 {
+                format!("{}s", secs)
+            } else {
+                format!("{}m{}s", secs / 60, secs % 60)
+            }
         })
     }
 
