@@ -38,7 +38,7 @@ pub fn muted() -> Style {
 }
 
 pub fn bold() -> Style {
-    Style::default().fg(TEXT).add_modifier(Modifier::BOLD)
+    Style::default().fg(Color::Rgb(0xFF, 0xFF, 0xFF)).add_modifier(Modifier::BOLD)
 }
 
 pub fn good() -> Style {
@@ -58,7 +58,7 @@ pub fn border() -> Style {
 }
 
 pub fn user_msg() -> Style {
-    Style::default().fg(TEXT).add_modifier(Modifier::BOLD)
+    Style::default().fg(Color::Rgb(0xFF, 0xFF, 0xFF)).add_modifier(Modifier::BOLD)
 }
 
 pub fn tool_name() -> Style {

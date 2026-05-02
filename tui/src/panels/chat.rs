@@ -169,14 +169,20 @@ fn render_messages(frame: &mut Frame, app: &App, area: Rect) {
                 match block {
                     MessageBlock::Thinking(text) => {
                         if app.show_tools {
-                            let preview: String = text.chars().take(120).collect();
-                            lines.push(Line::from(vec![
-                                Span::styled(" ⟡ ", theme::muted()),
-                                Span::styled(
-                                    if preview.len() < text.len() { format!("{}...", preview) } else { preview },
-                                    theme::thinking(),
-                                ),
-                            ]));
+                            for (i, tline) in text.lines().take(3).enumerate() {
+                                let prefix = if i == 0 { " ⟡ " } else { "   " };
+                                let preview: String = tline.chars().take(100).collect();
+                                lines.push(Line::from(vec![
+                                    Span::styled(prefix, theme::muted()),
+                                    Span::styled(preview, theme::thinking()),
+                                ]));
+                            }
+                            if text.lines().count() > 3 {
+                                lines.push(Line::from(Span::styled(
+                                    "   ⋯ (Ctrl+O to hide)",
+                                    theme::muted(),
+                                )));
+                            }
                         }
                     }
                     MessageBlock::ToolUse { tool, detail } => {
@@ -201,9 +207,13 @@ fn render_messages(frame: &mut Frame, app: &App, area: Rect) {
                 }
             }
         } else if msg.role == "user" {
-            for line in msg.content.lines() {
+            for (i, line) in msg.content.lines().enumerate() {
                 let reordered = bidi::visual_reorder(line);
-                lines.push(Line::from(Span::styled(format!(" {}", reordered), theme::user_msg())));
+                let gutter = if i == 0 { "▎" } else { "▎" };
+                lines.push(Line::from(vec![
+                    Span::styled(gutter, Style::default().fg(theme::OCEAN)),
+                    Span::styled(format!(" {}", reordered), theme::user_msg()),
+                ]));
             }
         } else {
             let mut in_code = false;

@@ -9,7 +9,7 @@ mod widgets;
 use std::io::{self, IsTerminal};
 use std::time::Duration;
 
-use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers, MouseEventKind, EnableMouseCapture, DisableMouseCapture};
+use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
 use crossterm::execute;
 use ratatui::prelude::*;
@@ -24,7 +24,7 @@ fn main() -> io::Result<()> {
 
     terminal::enable_raw_mode()?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+    execute!(stdout, EnterAlternateScreen)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
@@ -35,15 +35,7 @@ fn main() -> io::Result<()> {
         terminal.draw(|frame| ui::render(frame, &app))?;
 
         if event::poll(Duration::from_millis(50))? {
-            match event::read()? {
-            Event::Mouse(mouse) => {
-                match mouse.kind {
-                    MouseEventKind::ScrollUp => app.scroll_up(3),
-                    MouseEventKind::ScrollDown => app.scroll_down(3),
-                    _ => {}
-                }
-            }
-            Event::Key(key) => {
+            if let Event::Key(key) = event::read()? {
                 if key.kind != KeyEventKind::Press {
                     continue;
                 }
@@ -153,13 +145,11 @@ fn main() -> io::Result<()> {
                     }
                 }
             }
-            _ => {}
-            }
         }
     }
 
     terminal::disable_raw_mode()?;
-    execute!(io::stdout(), LeaveAlternateScreen, DisableMouseCapture)?;
+    execute!(io::stdout(), LeaveAlternateScreen)?;
     Ok(())
 }
 

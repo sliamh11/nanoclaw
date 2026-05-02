@@ -93,6 +93,7 @@ pub struct App {
     pub input_cursor: usize,
     pub input_history: Vec<String>,
     pub history_index: Option<usize>,
+    pub input_draft: String,
     pub kill_ring: String,
     pub suggestions: Vec<usize>,
     pub arg_suggestions: Vec<String>,
@@ -217,6 +218,7 @@ impl App {
             input_cursor: 0,
             input_history: Vec::new(),
             history_index: None,
+            input_draft: String::new(),
             kill_ring: String::new(),
             suggestions: Vec::new(),
             arg_suggestions: Vec::new(),
@@ -678,6 +680,9 @@ impl App {
         if self.input_history.is_empty() {
             return;
         }
+        if self.history_index.is_none() {
+            self.input_draft = self.input.clone();
+        }
         let idx = match self.history_index {
             None => self.input_history.len() - 1,
             Some(i) if i > 0 => i - 1,
@@ -698,7 +703,8 @@ impl App {
             }
             _ => {
                 self.history_index = None;
-                self.input.clear();
+                self.input = self.input_draft.clone();
+                self.input_draft.clear();
             }
         }
         self.input_cursor = self.input.len();
