@@ -77,7 +77,10 @@ fn main() -> io::Result<()> {
                     if key.modifiers.contains(KeyModifiers::CONTROL) {
                         match key.code {
                             KeyCode::Char('c') => {
-                                if matches!(app.chat_state, crate::app::ChatState::Streaming) {
+                                if matches!(
+                                    app.active().chat_state,
+                                    crate::app::ChatState::Streaming
+                                ) {
                                     app.cancel_response();
                                 } else {
                                     break;
@@ -102,7 +105,7 @@ fn main() -> io::Result<()> {
                         if key.modifiers.contains(KeyModifiers::CONTROL) {
                             match key.code {
                                 KeyCode::Char('l') => {
-                                    app.chat_messages.clear();
+                                    app.active_mut().chat_messages.clear();
                                     app.scroll_to_bottom();
                                 }
                                 KeyCode::Char('u') => app.input_clear_line(),
@@ -130,8 +133,10 @@ fn main() -> io::Result<()> {
                             KeyCode::Esc => {
                                 if app.has_suggestions() {
                                     app.dismiss_suggestions();
-                                } else if matches!(app.chat_state, crate::app::ChatState::Streaming)
-                                {
+                                } else if matches!(
+                                    app.active().chat_state,
+                                    crate::app::ChatState::Streaming
+                                ) {
                                     app.cancel_response();
                                 } else if let Some(first) = app.esc_pending {
                                     if first.elapsed().as_millis() < 500 {
@@ -339,7 +344,7 @@ mod tests {
 
         assert!(handled);
         assert_eq!(app.history_index, Some(1));
-        assert_eq!(app.scroll_offset, 3);
-        assert!(!app.scroll_pinned);
+        assert_eq!(app.active().scroll_offset, 3);
+        assert!(!app.active().scroll_pinned);
     }
 }

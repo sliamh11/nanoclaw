@@ -113,3 +113,10 @@ Common traps:
 - "Delete file X" — but a new file references X's old path.
 **Rule:** The fix must not reproduce the problem it solves. For patterns/regexes over sensitive values, source them from a GitHub Actions secret, an external gitignored file, a hash-based match, or other indirection — never commit the values inline. Run the fix through the same check it creates: if the implementation would trigger its own gate, revise.
 **Cite:** Slice C round 3 postmortem (2026-04-20 — CI gate was going to hardcode the very personal IDs it was designed to block).
+
+## design-pattern-selection
+**Severity:** blocking
+**Applies when:** Plan introduces new architecture, abstractions, trait hierarchies, registries, event systems, or any non-trivial structural code.
+**Check:** Does the plan identify which design pattern(s) apply (Strategy, Observer, Mediator, Factory, etc.) and justify the choice? Does it specify data structures with Big-O rationale where relevant (e.g., HashMap for O(1) lookup vs Vec scan)?
+**Rule:** Every non-trivial plan must name the design pattern(s) it uses and why they fit. Data structure choices must be justified when algorithmic complexity matters. Generic, modular designs are the default — new features should plug in without modifying or risking existing logic. If no standard pattern applies, the plan must state why and describe the custom approach.
+**Cite:** vault CLAUDE.md `design: pattern-driven | modular-generic`

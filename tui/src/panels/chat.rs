@@ -4,13 +4,13 @@ use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 use unicode_width::UnicodeWidthChar;
 
-use crate::app::{App, COMMANDS, MessageBlock, SubagentStatus};
+use crate::app::{App, COMMANDS, MessageBlock, SessionId, SubagentStatus};
 use crate::bidi;
 use crate::platform;
 use crate::theme;
 
 thread_local! {
-    static LINE_CACHE: RefCell<(u64, Vec<Line<'static>>)> = const { RefCell::new((u64::MAX, Vec::new())) };
+    static LINE_CACHE: RefCell<(SessionId, u64, Vec<Line<'static>>)> = const { RefCell::new((SessionId::MAIN, u64::MAX, Vec::new())) };
 }
 
 pub fn render(frame: &mut Frame, app: &App, area: Rect) {
@@ -279,8 +279,9 @@ fn highlight_verdict(line: &str) -> Line<'static> {
 }
 
 fn build_message_lines(app: &App) -> Vec<Line<'static>> {
+    let session = app.active();
     let mut lines: Vec<Line> = Vec::new();
-    for (msg_idx, msg) in app.chat_messages.iter().enumerate() {
+    for (msg_idx, msg) in session.chat_messages.iter().enumerate() {
         if msg.role == "system" && msg.content.starts_with("Welcome to Deus") {
             render_welcome(&mut lines);
             continue;
@@ -373,7 +374,7 @@ fn build_message_lines(app: &App) -> Vec<Line<'static>> {
                 lines.push(rendered);
             }
         }
-        if msg_idx < app.chat_messages.len() - 1 {
+        if msg_idx < session.chat_messages.len() - 1 {
             lines.push(Line::from(""));
         }
     }
@@ -381,26 +382,27 @@ fn build_message_lines(app: &App) -> Vec<Line<'static>> {
 }
 
 fn render_messages(frame: &mut Frame, app: &App, area: Rect) {
-    let is_streaming = matches!(app.chat_state, crate::app::ChatState::Streaming);
+    let session = app.active();
+    let is_streaming = matches!(session.chat_state, crate::app::ChatState::Streaming);
 
     let mut lines = LINE_CACHE.with(|cache| {
         let mut cached = cache.borrow_mut();
-        if cached.0 != app.chat_version {
-            cached.1 = build_message_lines(app);
-            cached.0 = app.chat_version;
+        if cached.0 != app.active_session || cached.1 != session.chat_version {
+            cached.2 = build_message_lines(app);
+            cached.0 = app.active_session;
+            cached.1 = session.chat_version;
         }
-        cached.1.clone()
+        cached.2.clone()
     });
 
-    // Streaming spinner appended per-frame (animated, not cached)
     if is_streaming {
-        let has_text = app
+        let has_text = session
             .chat_messages
             .last()
             .is_some_and(|m| m.role == "assistant" && !m.content.is_empty());
         if !has_text {
             let spinner = app.spinner_frame();
-            let thinking_text = app
+            let thinking_text = session
                 .last_thinking_summary
                 .as_deref()
                 .unwrap_or("thinking...");
@@ -415,10 +417,10 @@ fn render_messages(frame: &mut Frame, app: &App, area: Rect) {
     let visible = area.height as usize;
     let total = lines.len();
     let max_scroll = total.saturating_sub(visible);
-    let scroll = if app.scroll_pinned {
+    let scroll = if session.scroll_pinned {
         max_scroll
     } else {
-        max_scroll.saturating_sub(app.scroll_offset as usize)
+        max_scroll.saturating_sub(session.scroll_offset as usize)
     };
 
     let messages = Paragraph::new(lines)
@@ -476,7 +478,10 @@ fn build_input_lines(app: &App) -> (Vec<InputLine>, usize, String) {
     for (i, segment) in segments.iter().enumerate() {
         let prefix = if i == 0 { " › " } else { " … " };
         let mut text = String::from(prefix);
-        if app.input.is_empty() && i == 0 && matches!(app.chat_state, crate::app::ChatState::Idle) {
+        if app.input.is_empty()
+            && i == 0
+            && matches!(app.active().chat_state, crate::app::ChatState::Idle)
+        {
             text.push_str("Type a message or / for commands...");
             lines.push(InputLine {
                 text,
@@ -696,7 +701,7 @@ mod tests {
     #[test]
     fn long_input_expands_the_panel_height() {
         let mut app = App::new();
-        app.chat_state = ChatState::Idle;
+        app.active_mut().chat_state = ChatState::Idle;
         app.input = "abcdefghijklmnopqrstuvwxyz".to_string();
         app.input_cursor = app.input.len();
 
@@ -706,7 +711,7 @@ mod tests {
     #[test]
     fn wrapped_input_moves_the_cursor_down_a_row() {
         let mut app = App::new();
-        app.chat_state = ChatState::Idle;
+        app.active_mut().chat_state = ChatState::Idle;
         app.input = "abcdefghijklmnopqrstuvwxyz".to_string();
         app.input_cursor = app.input.len();
 
