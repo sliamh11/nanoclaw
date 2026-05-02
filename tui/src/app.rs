@@ -258,11 +258,13 @@ impl App {
         let bypass = platform::env_flag("DEUS_TUI_BYPASS");
         let mode = platform::env_var("DEUS_TUI_MODE").unwrap_or_else(|| "home".to_string());
         let backend = platform::env_var("DEUS_TUI_BACKEND").unwrap_or_else(|| "claude".to_string());
-        let default_model = if backend == "codex" {
+        let fallback_model = if backend == "codex" {
             "gpt-5.4"
         } else {
             "sonnet"
         };
+        let default_model =
+            config::deus::read_key("default_model").unwrap_or_else(|| fallback_model.to_string());
 
         let mut app = Self {
             tab: Tab::Chat,
@@ -283,7 +285,7 @@ impl App {
             chat_state: ChatState::Idle,
             stream_rx: None,
             turn_count: 0,
-            model: default_model.to_string(),
+            model: default_model,
             effort: "high".to_string(),
             token_count: 0,
             cost_usd: 0.0,
@@ -508,6 +510,13 @@ impl App {
             }
             "/clear" => {
                 self.chat_messages.clear();
+                self.turn_count = 0;
+                self.cost_usd = 0.0;
+                self.token_count = 0;
+                self.last_turn_duration = None;
+                self.last_thinking_summary = None;
+                self.active_subagent_ids.clear();
+                self.scroll_to_bottom();
                 true
             }
             "/quit" => {
@@ -1041,6 +1050,7 @@ impl App {
 
     pub fn toggle_tools(&mut self) {
         self.show_tools = !self.show_tools;
+        self.mark_chat_changed();
     }
 
     pub fn scroll_up(&mut self, amount: u16) {
@@ -1165,5 +1175,21 @@ impl App {
             Tab::Channels => self.channels.len(),
             Tab::Config => self.deus_config.len(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn toggle_tools_invalidates_the_chat_cache() {
+        let mut app = App::new();
+        let before = app.chat_version;
+
+        app.toggle_tools();
+
+        assert!(app.show_tools);
+        assert_ne!(app.chat_version, before);
     }
 }
