@@ -61,7 +61,7 @@ impl Backend for CodexBackend {
 
         let mut cmd = Command::new("codex");
         cmd.args(["exec", "--json", "-m", &config.model, "-c", &effort_cfg]);
-        if config.bypass_permissions {
+        if config.permissions.is_bypass() {
             cmd.arg("--dangerously-bypass-approvals-and-sandbox");
         }
         cmd.arg(&message);

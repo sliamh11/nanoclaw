@@ -52,6 +52,17 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
         theme::accent(),
     ));
 
+    if app.permissions.mode != "default" {
+        left.push(Span::styled("│ ", theme::muted()));
+        let perm_style = if app.permissions.is_bypass() {
+            theme::warn()
+        } else {
+            theme::dim()
+        };
+        left.push(Span::styled(format!(" {}", app.permissions.mode), perm_style));
+        left.push(Span::raw(" "));
+    }
+
     if let Some(hint) = chat_activity_hint(app) {
         left.push(Span::styled("│ ", theme::muted()));
         left.push(Span::styled(hint, theme::thinking()));
