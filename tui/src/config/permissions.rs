@@ -159,7 +159,10 @@ mod tests {
     #[test]
     fn codex_supports_fewer_modes() {
         assert!(PermissionsConfig::supports_mode("codex", "default"));
-        assert!(PermissionsConfig::supports_mode("codex", "bypassPermissions"));
+        assert!(PermissionsConfig::supports_mode(
+            "codex",
+            "bypassPermissions"
+        ));
         assert!(!PermissionsConfig::supports_mode("codex", "acceptEdits"));
     }
 

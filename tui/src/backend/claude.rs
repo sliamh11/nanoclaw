@@ -422,7 +422,10 @@ mod tests {
             },
         };
         let cmd = ClaudeBackend.build_command(&config);
-        let args: Vec<_> = cmd.get_args().map(|a| a.to_string_lossy().to_string()).collect();
+        let args: Vec<_> = cmd
+            .get_args()
+            .map(|a| a.to_string_lossy().to_string())
+            .collect();
         assert!(args.contains(&"--permission-mode".to_string()));
         assert!(args.contains(&"acceptEdits".to_string()));
         assert!(args.contains(&"--allowedTools".to_string()));
@@ -449,7 +452,10 @@ mod tests {
             },
         };
         let cmd = ClaudeBackend.build_command(&config);
-        let args: Vec<_> = cmd.get_args().map(|a| a.to_string_lossy().to_string()).collect();
+        let args: Vec<_> = cmd
+            .get_args()
+            .map(|a| a.to_string_lossy().to_string())
+            .collect();
         assert!(args.contains(&"--dangerously-skip-permissions".to_string()));
         assert!(args.contains(&"bypassPermissions".to_string()));
     }

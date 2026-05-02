@@ -59,7 +59,10 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
         } else {
             theme::dim()
         };
-        left.push(Span::styled(format!(" {}", app.permissions.mode), perm_style));
+        left.push(Span::styled(
+            format!(" {}", app.permissions.mode),
+            perm_style,
+        ));
         left.push(Span::raw(" "));
     }
 
