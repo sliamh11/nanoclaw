@@ -139,6 +139,9 @@ fn main() -> io::Result<()> {
                             if key.modifiers.contains(KeyModifiers::SHIFT) {
                                 app.input_newline();
                             } else {
+                                if app.has_suggestions() {
+                                    app.accept_suggestion();
+                                }
                                 app.send_message();
                             }
                         }
