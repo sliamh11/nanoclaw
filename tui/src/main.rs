@@ -140,6 +140,14 @@ fn main() -> io::Result<()> {
                                         app.update_suggestions();
                                     }
                                 }
+                                // Ctrl+Shift+B: direct session picker (CSI u encodes as Char('B') with CONTROL|SHIFT)
+                                KeyCode::Char('B')
+                                    if key.modifiers.contains(KeyModifiers::SHIFT)
+                                        && app.background_session_count() > 0 =>
+                                {
+                                    app.show_session_picker = true;
+                                    app.picker_cursor = 0;
+                                }
                                 KeyCode::Char('j') => app.input_newline(),
                                 _ => {}
                             }

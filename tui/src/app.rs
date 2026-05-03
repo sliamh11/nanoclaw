@@ -15,7 +15,28 @@ use crate::platform;
 static NEXT_SESSION_ID: AtomicU64 = AtomicU64::new(1);
 
 pub const TRANSCRIPT_CAP: usize = 200;
-pub const DEFAULT_AGENT_EFFORT: &str = "medium";
+
+pub struct EffortPolicy;
+
+impl EffortPolicy {
+    /// Centralized here (not per-backend) because task classification is a UX concern;
+    /// backends own only the flag encoding in build_command.
+    pub fn for_prompt(prompt: &str) -> &'static str {
+        let words: Vec<String> = prompt.to_lowercase()
+            .split_whitespace()
+            .map(|w| w.to_string())
+            .collect();
+        const HIGH: &[&str] = &["review", "plan", "analyze", "audit", "design", "architect"];
+        const LOW: &[&str] = &["find", "grep", "search", "list", "show", "check", "lookup"];
+        if words.iter().any(|w| HIGH.contains(&w.as_str())) {
+            return "high";
+        }
+        if words.iter().any(|w| LOW.contains(&w.as_str())) {
+            return "low";
+        }
+        "medium"
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct SessionId(pub u64);
@@ -106,10 +127,11 @@ pub enum ChatState {
     Streaming,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SessionState {
     Running,
     Completed,
+    Failed,
 }
 
 pub struct AgentArgs {
@@ -137,6 +159,7 @@ pub struct Session {
     pub permissions: PermissionsConfig,
     pub active_subagent_ids: HashSet<String>,
     pub last_subagent_hint: Option<String>,
+    pub had_error: bool,
     pub scroll_offset: u16,
     pub scroll_pinned: bool,
     pub chat_dirty: bool,
@@ -167,6 +190,7 @@ impl Session {
             permissions,
             active_subagent_ids: HashSet::new(),
             last_subagent_hint: None,
+            had_error: false,
             scroll_offset: 0,
             scroll_pinned: true,
             chat_dirty: true,
@@ -564,11 +588,26 @@ impl App {
         session.turn_count += 1;
         let be = backend::backend_for(&config.model);
 
+        let is_background = session_id != SessionId::MAIN;
         thread::spawn(move || {
             let child = be.build_command(&config).spawn();
 
             match child {
                 Ok(mut process) => {
+                    let kill_rx = if is_background {
+                        let (kill_tx, rx) = mpsc::channel::<()>();
+                        let timeout_secs: u64 = platform::env_var("DEUS_AGENT_TIMEOUT_SECS")
+                            .and_then(|s| s.parse().ok())
+                            .unwrap_or(600);
+                        thread::spawn(move || {
+                            thread::sleep(Duration::from_secs(timeout_secs));
+                            let _ = kill_tx.send(());
+                        });
+                        Some(rx)
+                    } else {
+                        None
+                    };
+
                     let stderr_handle = process.stderr.take().map(|stderr| {
                         let tx2 = tx.clone();
                         thread::spawn(move || {
@@ -600,9 +639,31 @@ impl App {
                             }
                         }
                     }
-                    let _ = process.wait();
                     if let Some(h) = stderr_handle {
                         let _ = h.join();
+                    }
+
+                    let timed_out = kill_rx
+                        .as_ref()
+                        .is_some_and(|rx| rx.try_recv().is_ok());
+                    if timed_out {
+                        let _ = process.kill();
+                    }
+                    let status = process.wait();
+                    if timed_out {
+                        let _ = tx.send(backend::StreamChunk {
+                            kind: ChunkKind::Error("Agent timed out".to_string()),
+                        });
+                    } else if let Ok(s) = &status
+                        && !s.success()
+                    {
+                        let code = s.code().unwrap_or(-1);
+                        let _ = tx.send(backend::StreamChunk {
+                            kind: ChunkKind::Error(format!(
+                                "Process exited with code {}",
+                                code
+                            )),
+                        });
                     }
                     let _ = tx.send(backend::StreamChunk {
                         kind: ChunkKind::Done,
@@ -630,7 +691,7 @@ impl App {
     pub fn spawn_agent(&mut self, prompt: String, model: Option<String>, effort: Option<String>) -> SessionId {
         let id = SessionId::next();
         let model = model.unwrap_or_else(|| self.active().model.clone());
-        let effort = effort.unwrap_or_else(|| DEFAULT_AGENT_EFFORT.to_string());
+        let effort = effort.unwrap_or_else(|| EffortPolicy::for_prompt(&prompt).to_string());
         let preview: String = prompt.chars().take(50).collect();
         let label = if preview.len() < prompt.len() {
             format!("{}...", preview)
@@ -656,6 +717,7 @@ impl App {
             permissions: self.active().permissions.clone(),
             active_subagent_ids: HashSet::new(),
             last_subagent_hint: None,
+            had_error: false,
             scroll_offset: 0,
             scroll_pinned: true,
             chat_dirty: true,
@@ -836,7 +898,7 @@ impl App {
                     .map(|c| format!("  {:16} {}", c.name, c.description))
                     .collect::<Vec<_>>()
                     .join("\n");
-                self.active_mut().chat_messages.push(ChatMessage::simple("system", &format!("Available commands:\n\n{}\n\nKeyboard shortcuts:\n  Ctrl+B  Session picker\n  Ctrl+L  Clear screen\n  Ctrl+U  Clear input line\n  Ctrl+K  Kill to end of line\n  Ctrl+Y  Yank (paste killed text)\n  Ctrl+A  Start of line\n  Ctrl+E  End of line\n  Ctrl+J  New line (multi-line input)\n  Ctrl+O  Toggle tool/thinking details\n  Ctrl+D  Exit\n  Alt+B   Word left\n  Alt+F   Word right\n  ↑/↓     Input history\n  PgUp/Dn Scroll chat\n  Mouse   Scroll chat (Shift+drag to select text)", help)));
+                self.active_mut().chat_messages.push(ChatMessage::simple("system", &format!("Available commands:\n\n{}\n\nKeyboard shortcuts:\n  Ctrl+B  Parallel agent / session picker\n  Ctrl+Shift+B  Session picker (direct)\n  Ctrl+L  Clear screen\n  Ctrl+U  Clear input line\n  Ctrl+K  Kill to end of line\n  Ctrl+Y  Yank (paste killed text)\n  Ctrl+A  Start of line\n  Ctrl+E  End of line\n  Ctrl+J  New line (multi-line input)\n  Ctrl+O  Toggle tool/thinking details\n  Ctrl+D  Exit\n  Alt+B   Word left\n  Alt+F   Word right\n  ↑/↓     Input history\n  PgUp/Dn Scroll chat\n  Mouse   Scroll chat (Shift+drag to select text)", help)));
                 true
             }
             "/history" => {
@@ -863,7 +925,7 @@ impl App {
                 let effort_label = args
                     .effort
                     .as_deref()
-                    .unwrap_or(DEFAULT_AGENT_EFFORT)
+                    .unwrap_or_else(|| EffortPolicy::for_prompt(&args.prompt))
                     .to_string();
                 self.spawn_agent(args.prompt, args.model, args.effort);
                 self.active_mut().chat_messages.push(ChatMessage::simple(
@@ -1178,14 +1240,23 @@ impl App {
                     session.last_subagent_hint = None;
                     session.mark_chat_changed();
                     if session_id != SessionId::MAIN {
-                        session.session_state = SessionState::Completed;
+                        session.session_state = if session.had_error {
+                            SessionState::Failed
+                        } else {
+                            SessionState::Completed
+                        };
                         session.trim_transcript();
                         let label = session.label.clone();
                         let summary = session.completion_summary();
+                        let prefix = if session.had_error {
+                            "Agent failed"
+                        } else {
+                            "Agent completed"
+                        };
                         if let Some(main) = self.sessions.get_mut(&SessionId::MAIN) {
                             main.chat_messages.push(ChatMessage::simple(
                                 "system",
-                                &format!("[Agent completed: {}] {}", label, summary),
+                                &format!("[{}: {}] {}", prefix, label, summary),
                             ));
                             main.mark_chat_changed();
                         }
@@ -1198,6 +1269,7 @@ impl App {
                 }
                 ChunkKind::Error(e) => {
                     let session = self.sessions.get_mut(&session_id).unwrap();
+                    session.had_error = true;
                     if let Some(last) = session.chat_messages.last_mut()
                         && last.role == "assistant"
                     {
@@ -1676,7 +1748,7 @@ impl App {
                 return;
             }
             if let Some(session) = self.sessions.get(&id)
-                && session.session_state != SessionState::Completed
+                && session.session_state == SessionState::Running
             {
                 return;
             }
@@ -2041,10 +2113,16 @@ mod tests {
     }
 
     #[test]
-    fn spawn_agent_uses_default_effort() {
+    fn spawn_agent_effort_from_policy() {
         let mut app = App::new();
-        let id = app.spawn_agent("test".to_string(), None, None);
-        assert_eq!(app.sessions.get(&id).unwrap().effort, DEFAULT_AGENT_EFFORT);
+        let id = app.spawn_agent("review the code".to_string(), None, None);
+        assert_eq!(app.sessions.get(&id).unwrap().effort, "high");
+
+        let id2 = app.spawn_agent("find the config file".to_string(), None, None);
+        assert_eq!(app.sessions.get(&id2).unwrap().effort, "low");
+
+        let id3 = app.spawn_agent("summarize this".to_string(), None, None);
+        assert_eq!(app.sessions.get(&id3).unwrap().effort, "medium");
     }
 
     #[test]
@@ -2162,5 +2240,105 @@ mod tests {
         app.poll_response();
 
         assert!(app.active().last_subagent_hint.is_none());
+    }
+
+    // --- EffortPolicy ---
+
+    #[test]
+    fn effort_policy_review_is_high() {
+        assert_eq!(EffortPolicy::for_prompt("review the code"), "high");
+        assert_eq!(EffortPolicy::for_prompt("plan the migration"), "high");
+        assert_eq!(EffortPolicy::for_prompt("analyze performance"), "high");
+    }
+
+    #[test]
+    fn effort_policy_find_is_low() {
+        assert_eq!(EffortPolicy::for_prompt("find the config file"), "low");
+        assert_eq!(EffortPolicy::for_prompt("grep for TODO"), "low");
+        assert_eq!(EffortPolicy::for_prompt("search for imports"), "low");
+    }
+
+    #[test]
+    fn effort_policy_general_is_medium() {
+        assert_eq!(EffortPolicy::for_prompt("summarize this"), "medium");
+        assert_eq!(EffortPolicy::for_prompt("refactor the module"), "medium");
+    }
+
+    #[test]
+    fn effort_policy_case_insensitive() {
+        assert_eq!(EffortPolicy::for_prompt("REVIEW the CODE"), "high");
+        assert_eq!(EffortPolicy::for_prompt("Find Files"), "low");
+    }
+
+    #[test]
+    fn spawn_agent_effort_explicit_overrides_policy() {
+        let mut app = App::new();
+        let id = app.spawn_agent("review the code".to_string(), None, Some("low".to_string()));
+        assert_eq!(app.sessions.get(&id).unwrap().effort, "low");
+    }
+
+    // --- Health monitoring ---
+
+    #[test]
+    fn error_chunk_sets_had_error() {
+        let mut app = App::new();
+        let id = app.spawn_agent("test".to_string(), None, None);
+        let session = app.sessions.get_mut(&id).unwrap();
+        session.chat_messages.push(ChatMessage {
+            role: "assistant".to_string(),
+            content: String::new(),
+            blocks: Vec::new(),
+        });
+        let (tx, rx) = std::sync::mpsc::channel();
+        session.stream_rx = Some(rx);
+        tx.send(backend::StreamChunk {
+            kind: ChunkKind::Error("something failed".to_string()),
+        })
+        .unwrap();
+        app.poll_response();
+
+        assert!(app.sessions.get(&id).unwrap().had_error);
+    }
+
+    #[test]
+    fn done_after_error_sets_failed() {
+        let mut app = App::new();
+        let id = app.spawn_agent("test".to_string(), None, None);
+        let session = app.sessions.get_mut(&id).unwrap();
+        session.chat_messages.push(ChatMessage {
+            role: "assistant".to_string(),
+            content: String::new(),
+            blocks: Vec::new(),
+        });
+        let (tx, rx) = std::sync::mpsc::channel();
+        session.stream_rx = Some(rx);
+        tx.send(backend::StreamChunk {
+            kind: ChunkKind::Error("crash".to_string()),
+        })
+        .unwrap();
+        tx.send(backend::StreamChunk {
+            kind: ChunkKind::Done,
+        })
+        .unwrap();
+        app.poll_response();
+
+        assert_eq!(
+            app.sessions.get(&id).unwrap().session_state,
+            SessionState::Failed
+        );
+    }
+
+    #[test]
+    fn failed_session_is_dismissible() {
+        let mut app = App::new();
+        let id = app.spawn_agent("test".to_string(), None, None);
+        let session = app.sessions.get_mut(&id).unwrap();
+        session.session_state = SessionState::Failed;
+        session.chat_state = ChatState::Idle;
+        session.stream_rx = None;
+
+        app.picker_cursor = 1;
+        app.dismiss_session();
+        assert!(!app.sessions.contains_key(&id));
     }
 }

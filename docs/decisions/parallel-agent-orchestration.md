@@ -53,3 +53,23 @@ The original Phase 5 spec included "process re-parenting" for hint-driven spawn:
 **Revised scope:** Phase 5d provides *discoverability* instead of re-parenting. When `SubagentStart` appears in the stream, the status bar shows a hint ("Ctrl+B: parallel agent"). Pressing Ctrl+B prefills the input with `/agent <description>`, letting the user spawn a new independent agent with the same task. This delivers the UX value (awareness + one-key spawn) without the architectural complexity.
 
 Full process re-parenting is deferred indefinitely — it would require backend CLI support for mid-stream session splitting, which neither Claude Code nor Codex CLI offers.
+
+### Dynamic Effort Classification
+
+**Amendment (Phase 5):** Background agent effort is classified by `EffortPolicy` in `app.rs`, a stateless classifier that maps prompt keywords to effort levels:
+
+| Task Type | Keywords | Effort |
+|-----------|----------|--------|
+| Planning/review | review, plan, analyze, audit, design, architect | high |
+| Lookup/search | find, grep, search, list, show, check, lookup | low |
+| General | (everything else) | medium |
+
+Explicit `--effort` flag always overrides the classifier. This supersedes the per-provider ownership of effort levels from `backend-strategy-trait.md` for the specific case of auto-classifying background agent effort. Backends continue to own flag encoding in `build_command`.
+
+### Health Monitoring
+
+**Amendment (Phase 5):** Background sessions track process health via:
+
+- **`SessionState::Failed`**: set when `had_error` is true at session completion. Shown as red ✗ in the session picker.
+- **Exit code detection**: non-zero exit codes from the backend process emit an error chunk before Done.
+- **Timeout**: background agents are killed after `DEUS_AGENT_TIMEOUT_SECS` (env var, default 600s). Uses a channel-based kill signal — the spawn thread is the sole owner of `Child`, a timeout thread sends a signal via `mpsc::channel`, and the spawn thread calls `child.kill()` only after stdout/stderr readers have joined (preventing PID reuse races).

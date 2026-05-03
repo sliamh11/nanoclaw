@@ -203,6 +203,7 @@ fn render_session_picker(frame: &mut Frame, app: &App, area: Rect) {
 
         let state_icon = match (&session.session_state, &session.chat_state) {
             (SessionState::Completed, _) => Span::styled("✓", theme::good()),
+            (SessionState::Failed, _) => Span::styled("✗", theme::bad()),
             (_, ChatState::Streaming) => Span::styled("●", theme::warn()),
             _ => Span::styled("○", theme::dim()),
         };
