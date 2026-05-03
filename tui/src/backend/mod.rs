@@ -127,9 +127,15 @@ pub fn all_models() -> Vec<(&'static str, &'static ModelDef)> {
 }
 
 pub fn parse_context_tokens(context: &str) -> u64 {
-    if let Some(n) = context.strip_suffix('M').and_then(|s| s.parse::<u64>().ok()) {
+    if let Some(n) = context
+        .strip_suffix('M')
+        .and_then(|s| s.parse::<u64>().ok())
+    {
         n * 1_000_000
-    } else if let Some(n) = context.strip_suffix('K').and_then(|s| s.parse::<u64>().ok()) {
+    } else if let Some(n) = context
+        .strip_suffix('K')
+        .and_then(|s| s.parse::<u64>().ok())
+    {
         n * 1_000
     } else {
         200_000

@@ -63,10 +63,7 @@ pub fn logo_lines() -> Vec<Line<'static>> {
         ]),
         Line::from(vec![
             Span::raw("      "),
-            Span::styled(
-                concat!("v", env!("CARGO_PKG_VERSION")),
-                theme::dim(),
-            ),
+            Span::styled(concat!("v", env!("CARGO_PKG_VERSION")), theme::dim()),
         ]),
         Line::from(""),
     ]

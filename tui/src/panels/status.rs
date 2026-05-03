@@ -12,7 +12,11 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
     lines.push(Line::from(""));
     for w in &app.wardens {
         let icon = if w.enabled { "●" } else { "○" };
-        let color = if w.enabled { theme::good_color() } else { theme::bad_color() };
+        let color = if w.enabled {
+            theme::good_color()
+        } else {
+            theme::bad_color()
+        };
         lines.push(Line::from(vec![
             Span::styled(format!("  {} ", icon), Style::default().fg(color)),
             Span::raw(format!("{:24} {}", w.name, w.warden_type)),

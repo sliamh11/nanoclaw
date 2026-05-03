@@ -247,15 +247,21 @@ pub fn warden_name() -> Style {
 }
 
 pub fn verdict_ship() -> Style {
-    Style::default().fg(good_color()).add_modifier(Modifier::BOLD)
+    Style::default()
+        .fg(good_color())
+        .add_modifier(Modifier::BOLD)
 }
 
 pub fn verdict_revise() -> Style {
-    Style::default().fg(warn_color()).add_modifier(Modifier::BOLD)
+    Style::default()
+        .fg(warn_color())
+        .add_modifier(Modifier::BOLD)
 }
 
 pub fn verdict_hold() -> Style {
-    Style::default().fg(bad_color()).add_modifier(Modifier::BOLD)
+    Style::default()
+        .fg(bad_color())
+        .add_modifier(Modifier::BOLD)
 }
 
 #[cfg(test)]
