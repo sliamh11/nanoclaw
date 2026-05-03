@@ -2192,24 +2192,21 @@ mod tests {
 
     #[test]
     fn spawn_agent_effort_from_policy() {
-        let mut app = App::new();
-        let id = app
-            .spawn_agent("review the code".to_string(), None, None)
-            .unwrap();
-        assert_eq!(app.sessions.get(&id).unwrap().effort, "high");
-
-        let id2 = app
-            .spawn_agent("find the config file".to_string(), None, None)
-            .unwrap();
-        assert_eq!(app.sessions.get(&id2).unwrap().effort, "low");
-
-        // Complete a session to free a slot on low-core CI runners
-        complete_session(&mut app, id);
-
-        let id3 = app
-            .spawn_agent("summarize this".to_string(), None, None)
-            .unwrap();
-        assert_eq!(app.sessions.get(&id3).unwrap().effort, "medium");
+        let cases = [
+            ("review the code", "high"),
+            ("find the config file", "low"),
+            ("summarize this", "medium"),
+        ];
+        for (prompt, expected) in cases {
+            let mut app = App::new();
+            let id = app.spawn_agent(prompt.to_string(), None, None).unwrap();
+            assert_eq!(
+                app.sessions.get(&id).unwrap().effort,
+                expected,
+                "prompt: {}",
+                prompt
+            );
+        }
     }
 
     #[test]
