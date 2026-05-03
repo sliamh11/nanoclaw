@@ -22,7 +22,8 @@ impl EffortPolicy {
     /// Centralized here (not per-backend) because task classification is a UX concern;
     /// backends own only the flag encoding in build_command.
     pub fn for_prompt(prompt: &str) -> &'static str {
-        let words: Vec<String> = prompt.to_lowercase()
+        let words: Vec<String> = prompt
+            .to_lowercase()
             .split_whitespace()
             .map(|w| w.to_string())
             .collect();
@@ -603,7 +604,9 @@ impl App {
                         thread::spawn(move || {
                             match cancel_rx.recv_timeout(Duration::from_secs(timeout_secs)) {
                                 Ok(()) => {}
-                                Err(_) => { let _ = kill_tx.send(()); }
+                                Err(_) => {
+                                    let _ = kill_tx.send(());
+                                }
                             }
                         });
                         (Some(kill_rx), Some(cancel_tx))
@@ -649,9 +652,7 @@ impl App {
                         let _ = tx.send(());
                     }
 
-                    let timed_out = kill_rx
-                        .as_ref()
-                        .is_some_and(|rx| rx.try_recv().is_ok());
+                    let timed_out = kill_rx.as_ref().is_some_and(|rx| rx.try_recv().is_ok());
                     if timed_out {
                         let _ = process.kill();
                     }
@@ -665,10 +666,7 @@ impl App {
                     {
                         let code = s.code().unwrap_or(-1);
                         let _ = tx.send(backend::StreamChunk {
-                            kind: ChunkKind::Error(format!(
-                                "Process exited with code {}",
-                                code
-                            )),
+                            kind: ChunkKind::Error(format!("Process exited with code {}", code)),
                         });
                     }
                     let _ = tx.send(backend::StreamChunk {
@@ -695,23 +693,36 @@ impl App {
     }
 
     pub fn max_agents() -> usize {
-        if let Some(val) = platform::env_var("DEUS_MAX_AGENTS")
-            .and_then(|s| s.parse::<usize>().ok())
+        if let Some(val) =
+            platform::env_var("DEUS_MAX_AGENTS").and_then(|s| s.parse::<usize>().ok())
         {
             return val.max(1);
         }
-        if let Some(val) = config::deus::read_key("max_parallel_agents")
-            .and_then(|s| s.parse::<usize>().ok())
+        if let Some(val) =
+            config::deus::read_key("max_parallel_agents").and_then(|s| s.parse::<usize>().ok())
         {
             return val.max(1);
         }
-        (thread::available_parallelism().map(|n| n.get()).unwrap_or(4) / 2).clamp(2, 8)
+        (thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(4)
+            / 2)
+        .clamp(2, 8)
     }
 
-    pub fn spawn_agent(&mut self, prompt: String, model: Option<String>, effort: Option<String>) -> Option<SessionId> {
+    pub fn spawn_agent(
+        &mut self,
+        prompt: String,
+        model: Option<String>,
+        effort: Option<String>,
+    ) -> Option<SessionId> {
         let limit = Self::max_agents();
-        let active_agents = self.sessions.iter()
-            .filter(|(id, s)| **id != SessionId::MAIN && matches!(s.chat_state, ChatState::Streaming))
+        let active_agents = self
+            .sessions
+            .iter()
+            .filter(|(id, s)| {
+                **id != SessionId::MAIN && matches!(s.chat_state, ChatState::Streaming)
+            })
             .count();
         if active_agents >= limit {
             self.active_mut().chat_messages.push(ChatMessage::simple(
@@ -959,7 +970,10 @@ impl App {
                     .as_deref()
                     .unwrap_or_else(|| EffortPolicy::for_prompt(&args.prompt))
                     .to_string();
-                if self.spawn_agent(args.prompt, args.model, args.effort).is_some() {
+                if self
+                    .spawn_agent(args.prompt, args.model, args.effort)
+                    .is_some()
+                {
                     self.active_mut().chat_messages.push(ChatMessage::simple(
                         "system",
                         &format!("Agent spawned (effort: {}): {}", effort_label, preview),
@@ -968,9 +982,10 @@ impl App {
                 true
             }
             "/agent" => {
-                self.active_mut()
-                    .chat_messages
-                    .push(ChatMessage::simple("system", "Usage: /agent [--effort <level>] [--model <id>] <prompt>"));
+                self.active_mut().chat_messages.push(ChatMessage::simple(
+                    "system",
+                    "Usage: /agent [--effort <level>] [--model <id>] <prompt>",
+                ));
                 true
             }
             "/sessions" => {
@@ -1298,8 +1313,7 @@ impl App {
                         }
                         self.sessions.remove(&session_id);
                         self.session_order.retain(|&sid| sid != session_id);
-                        if self.picker_cursor >= self.session_order.len()
-                            && self.picker_cursor > 0
+                        if self.picker_cursor >= self.session_order.len() && self.picker_cursor > 0
                         {
                             self.picker_cursor -= 1;
                         }
@@ -1884,7 +1898,9 @@ mod tests {
         assert_eq!(app.session_order.len(), 1);
         assert_eq!(app.background_session_count(), 0);
 
-        let id = app.spawn_agent("test task".to_string(), None, None).unwrap();
+        let id = app
+            .spawn_agent("test task".to_string(), None, None)
+            .unwrap();
 
         assert_eq!(app.session_order.len(), 2);
         assert_eq!(app.background_session_count(), 1);
@@ -1919,7 +1935,9 @@ mod tests {
     #[test]
     fn spawn_agent_accepts_custom_model() {
         let mut app = App::new();
-        let id = app.spawn_agent("test".to_string(), Some("haiku".to_string()), None).unwrap();
+        let id = app
+            .spawn_agent("test".to_string(), Some("haiku".to_string()), None)
+            .unwrap();
 
         assert_eq!(app.sessions.get(&id).unwrap().model, "haiku");
     }
@@ -2161,20 +2179,28 @@ mod tests {
     #[test]
     fn spawn_agent_effort_from_policy() {
         let mut app = App::new();
-        let id = app.spawn_agent("review the code".to_string(), None, None).unwrap();
+        let id = app
+            .spawn_agent("review the code".to_string(), None, None)
+            .unwrap();
         assert_eq!(app.sessions.get(&id).unwrap().effort, "high");
 
-        let id2 = app.spawn_agent("find the config file".to_string(), None, None).unwrap();
+        let id2 = app
+            .spawn_agent("find the config file".to_string(), None, None)
+            .unwrap();
         assert_eq!(app.sessions.get(&id2).unwrap().effort, "low");
 
-        let id3 = app.spawn_agent("summarize this".to_string(), None, None).unwrap();
+        let id3 = app
+            .spawn_agent("summarize this".to_string(), None, None)
+            .unwrap();
         assert_eq!(app.sessions.get(&id3).unwrap().effort, "medium");
     }
 
     #[test]
     fn spawn_agent_accepts_custom_effort() {
         let mut app = App::new();
-        let id = app.spawn_agent("test".to_string(), None, Some("max".to_string())).unwrap();
+        let id = app
+            .spawn_agent("test".to_string(), None, Some("max".to_string()))
+            .unwrap();
         assert_eq!(app.sessions.get(&id).unwrap().effort, "max");
     }
 
@@ -2218,7 +2244,9 @@ mod tests {
     #[test]
     fn completion_injects_notification_into_main() {
         let mut app = App::new();
-        let id = app.spawn_agent("find bugs".to_string(), None, None).unwrap();
+        let id = app
+            .spawn_agent("find bugs".to_string(), None, None)
+            .unwrap();
 
         let session = app.sessions.get_mut(&id).unwrap();
         session
@@ -2319,7 +2347,9 @@ mod tests {
     #[test]
     fn spawn_agent_effort_explicit_overrides_policy() {
         let mut app = App::new();
-        let id = app.spawn_agent("review the code".to_string(), None, Some("low".to_string())).unwrap();
+        let id = app
+            .spawn_agent("review the code".to_string(), None, Some("low".to_string()))
+            .unwrap();
         assert_eq!(app.sessions.get(&id).unwrap().effort, "low");
     }
 
@@ -2371,7 +2401,10 @@ mod tests {
         // Session is auto-GC'd — verify via main notification
         assert!(!app.sessions.contains_key(&id));
         let main = app.sessions.get(&SessionId::MAIN).unwrap();
-        let has_failed = main.chat_messages.iter().any(|m| m.content.contains("Agent failed"));
+        let has_failed = main
+            .chat_messages
+            .iter()
+            .any(|m| m.content.contains("Agent failed"));
         assert!(has_failed);
     }
 
@@ -2382,10 +2415,15 @@ mod tests {
         let mut app = App::new();
         let id = app.spawn_agent("test gc".to_string(), None, None).unwrap();
         let session = app.sessions.get_mut(&id).unwrap();
-        session.chat_messages.push(ChatMessage::simple("assistant", "done"));
+        session
+            .chat_messages
+            .push(ChatMessage::simple("assistant", "done"));
         let (tx, rx) = std::sync::mpsc::channel();
         session.stream_rx = Some(rx);
-        tx.send(backend::StreamChunk { kind: ChunkKind::Done }).unwrap();
+        tx.send(backend::StreamChunk {
+            kind: ChunkKind::Done,
+        })
+        .unwrap();
 
         app.poll_response();
 
@@ -2401,10 +2439,15 @@ mod tests {
         assert_eq!(app.active_session, id);
 
         let session = app.sessions.get_mut(&id).unwrap();
-        session.chat_messages.push(ChatMessage::simple("assistant", "done"));
+        session
+            .chat_messages
+            .push(ChatMessage::simple("assistant", "done"));
         let (tx, rx) = std::sync::mpsc::channel();
         session.stream_rx = Some(rx);
-        tx.send(backend::StreamChunk { kind: ChunkKind::Done }).unwrap();
+        tx.send(backend::StreamChunk {
+            kind: ChunkKind::Done,
+        })
+        .unwrap();
 
         app.poll_response();
 
@@ -2420,10 +2463,15 @@ mod tests {
         app.picker_cursor = 1;
 
         let session = app.sessions.get_mut(&id).unwrap();
-        session.chat_messages.push(ChatMessage::simple("assistant", "done"));
+        session
+            .chat_messages
+            .push(ChatMessage::simple("assistant", "done"));
         let (tx, rx) = std::sync::mpsc::channel();
         session.stream_rx = Some(rx);
-        tx.send(backend::StreamChunk { kind: ChunkKind::Done }).unwrap();
+        tx.send(backend::StreamChunk {
+            kind: ChunkKind::Done,
+        })
+        .unwrap();
 
         app.poll_response();
 
@@ -2464,10 +2512,15 @@ mod tests {
         // Complete one agent — auto-GC frees the slot
         let first = ids[0];
         let session = app.sessions.get_mut(&first).unwrap();
-        session.chat_messages.push(ChatMessage::simple("assistant", "done"));
+        session
+            .chat_messages
+            .push(ChatMessage::simple("assistant", "done"));
         let (tx, rx) = std::sync::mpsc::channel();
         session.stream_rx = Some(rx);
-        tx.send(backend::StreamChunk { kind: ChunkKind::Done }).unwrap();
+        tx.send(backend::StreamChunk {
+            kind: ChunkKind::Done,
+        })
+        .unwrap();
         app.poll_response();
 
         let after_gc = app.spawn_agent("now allowed".to_string(), None, None);
