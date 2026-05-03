@@ -72,4 +72,10 @@ Explicit `--effort` flag always overrides the classifier. This supersedes the pe
 
 - **`SessionState::Failed`**: set when `had_error` is true at session completion. Shown as red ✗ in the session picker.
 - **Exit code detection**: non-zero exit codes from the backend process emit an error chunk before Done.
-- **Timeout**: background agents are killed after `DEUS_AGENT_TIMEOUT_SECS` (env var, default 600s). Uses a channel-based kill signal — the spawn thread is the sole owner of `Child`, a timeout thread sends a signal via `mpsc::channel`, and the spawn thread calls `child.kill()` only after stdout/stderr readers have joined (preventing PID reuse races).
+- **Timeout**: background agents are killed after `DEUS_AGENT_TIMEOUT_SECS` (env var, default 600s). The timeout thread uses `recv_timeout` on a cancel channel instead of `thread::sleep` — when the agent finishes (stdout EOF + stderr join), the spawn thread sends a cancel signal, and the timeout thread exits immediately. If no cancel arrives within the timeout window, the timeout thread sends a kill signal via a separate channel. This prevents zombie sleep threads from accumulating for short-lived agents.
+
+### Session Lifecycle (Amendment — Phase 6)
+
+**Auto-cleanup:** Completed/failed background sessions are removed from `sessions` and `session_order` immediately after posting their completion summary to the main session. If the user was viewing the removed session, `active_session` resets to `SessionId::MAIN`. No TTL or deferred GC — sessions are ephemeral by design.
+
+**Concurrent limit:** `max_agents()` returns a configurable cap on concurrently streaming background agents. Precedence (first match wins): env `DEUS_MAX_AGENTS` → config `max_parallel_agents` → runtime `(available_parallelism() / 2).clamp(2, 8)`. Spawn is rejected at the cap with a user-facing error. The cap applies to actively-streaming agents only; once an agent completes and is GC'd, the slot is freed immediately.

@@ -594,18 +594,21 @@ impl App {
 
             match child {
                 Ok(mut process) => {
-                    let kill_rx = if is_background {
-                        let (kill_tx, rx) = mpsc::channel::<()>();
+                    let (kill_rx, cancel_tx) = if is_background {
+                        let (kill_tx, kill_rx) = mpsc::channel::<()>();
+                        let (cancel_tx, cancel_rx) = mpsc::channel::<()>();
                         let timeout_secs: u64 = platform::env_var("DEUS_AGENT_TIMEOUT_SECS")
                             .and_then(|s| s.parse().ok())
                             .unwrap_or(600);
                         thread::spawn(move || {
-                            thread::sleep(Duration::from_secs(timeout_secs));
-                            let _ = kill_tx.send(());
+                            match cancel_rx.recv_timeout(Duration::from_secs(timeout_secs)) {
+                                Ok(()) => {}
+                                Err(_) => { let _ = kill_tx.send(()); }
+                            }
                         });
-                        Some(rx)
+                        (Some(kill_rx), Some(cancel_tx))
                     } else {
-                        None
+                        (None, None)
                     };
 
                     let stderr_handle = process.stderr.take().map(|stderr| {
@@ -641,6 +644,9 @@ impl App {
                     }
                     if let Some(h) = stderr_handle {
                         let _ = h.join();
+                    }
+                    if let Some(tx) = cancel_tx {
+                        let _ = tx.send(());
                     }
 
                     let timed_out = kill_rx
@@ -688,7 +694,33 @@ impl App {
         });
     }
 
-    pub fn spawn_agent(&mut self, prompt: String, model: Option<String>, effort: Option<String>) -> SessionId {
+    pub fn max_agents() -> usize {
+        if let Some(val) = platform::env_var("DEUS_MAX_AGENTS")
+            .and_then(|s| s.parse::<usize>().ok())
+        {
+            return val.max(1);
+        }
+        if let Some(val) = config::deus::read_key("max_parallel_agents")
+            .and_then(|s| s.parse::<usize>().ok())
+        {
+            return val.max(1);
+        }
+        (thread::available_parallelism().map(|n| n.get()).unwrap_or(4) / 2).clamp(2, 8)
+    }
+
+    pub fn spawn_agent(&mut self, prompt: String, model: Option<String>, effort: Option<String>) -> Option<SessionId> {
+        let limit = Self::max_agents();
+        let active_agents = self.sessions.iter()
+            .filter(|(id, s)| **id != SessionId::MAIN && matches!(s.chat_state, ChatState::Streaming))
+            .count();
+        if active_agents >= limit {
+            self.active_mut().chat_messages.push(ChatMessage::simple(
+                "system",
+                &format!("At agent limit ({} streaming). Wait for one to finish or adjust DEUS_MAX_AGENTS.", limit),
+            ));
+            return None;
+        }
+
         let id = SessionId::next();
         let model = model.unwrap_or_else(|| self.active().model.clone());
         let effort = effort.unwrap_or_else(|| EffortPolicy::for_prompt(&prompt).to_string());
@@ -728,7 +760,7 @@ impl App {
         self.sessions.insert(id, session);
         self.session_order.push(id);
         self.dispatch_message_for(id, prompt);
-        id
+        Some(id)
     }
 
     fn handle_command(&mut self, msg: &str) -> bool {
@@ -927,11 +959,12 @@ impl App {
                     .as_deref()
                     .unwrap_or_else(|| EffortPolicy::for_prompt(&args.prompt))
                     .to_string();
-                self.spawn_agent(args.prompt, args.model, args.effort);
-                self.active_mut().chat_messages.push(ChatMessage::simple(
-                    "system",
-                    &format!("Agent spawned (effort: {}): {}", effort_label, preview),
-                ));
+                if self.spawn_agent(args.prompt, args.model, args.effort).is_some() {
+                    self.active_mut().chat_messages.push(ChatMessage::simple(
+                        "system",
+                        &format!("Agent spawned (effort: {}): {}", effort_label, preview),
+                    ));
+                }
                 true
             }
             "/agent" => {
@@ -1259,6 +1292,19 @@ impl App {
                                 &format!("[{}: {}] {}", prefix, label, summary),
                             ));
                             main.mark_chat_changed();
+                        }
+                        if self.active_session == session_id {
+                            self.active_session = SessionId::MAIN;
+                        }
+                        self.sessions.remove(&session_id);
+                        self.session_order.retain(|&sid| sid != session_id);
+                        if self.picker_cursor >= self.session_order.len()
+                            && self.picker_cursor > 0
+                        {
+                            self.picker_cursor -= 1;
+                        }
+                        if self.session_order.len() <= 1 {
+                            self.show_session_picker = false;
                         }
                     }
                     if session_id == self.active_session && !self.queued_messages.is_empty() {
@@ -1838,7 +1884,7 @@ mod tests {
         assert_eq!(app.session_order.len(), 1);
         assert_eq!(app.background_session_count(), 0);
 
-        let id = app.spawn_agent("test task".to_string(), None, None);
+        let id = app.spawn_agent("test task".to_string(), None, None).unwrap();
 
         assert_eq!(app.session_order.len(), 2);
         assert_eq!(app.background_session_count(), 1);
@@ -1854,7 +1900,7 @@ mod tests {
     fn spawn_agent_truncates_long_prompts() {
         let mut app = App::new();
         let long_prompt = "a".repeat(100);
-        let id = app.spawn_agent(long_prompt, None, None);
+        let id = app.spawn_agent(long_prompt, None, None).unwrap();
 
         let session = app.sessions.get(&id).unwrap();
         assert!(session.label.len() <= 54);
@@ -1865,7 +1911,7 @@ mod tests {
     fn spawn_agent_inherits_model() {
         let mut app = App::new();
         let main_model = app.active().model.clone();
-        let id = app.spawn_agent("test".to_string(), None, None);
+        let id = app.spawn_agent("test".to_string(), None, None).unwrap();
 
         assert_eq!(app.sessions.get(&id).unwrap().model, main_model);
     }
@@ -1873,7 +1919,7 @@ mod tests {
     #[test]
     fn spawn_agent_accepts_custom_model() {
         let mut app = App::new();
-        let id = app.spawn_agent("test".to_string(), Some("haiku".to_string()), None);
+        let id = app.spawn_agent("test".to_string(), Some("haiku".to_string()), None).unwrap();
 
         assert_eq!(app.sessions.get(&id).unwrap().model, "haiku");
     }
@@ -1881,8 +1927,8 @@ mod tests {
     #[test]
     fn session_picker_navigation() {
         let mut app = App::new();
-        app.spawn_agent("task 1".to_string(), None, None);
-        app.spawn_agent("task 2".to_string(), None, None);
+        app.spawn_agent("task 1".to_string(), None, None).unwrap();
+        app.spawn_agent("task 2".to_string(), None, None).unwrap();
 
         app.show_session_picker = true;
         app.picker_cursor = 0;
@@ -1903,7 +1949,7 @@ mod tests {
     #[test]
     fn session_picker_select_switches_active() {
         let mut app = App::new();
-        let id = app.spawn_agent("task".to_string(), None, None);
+        let id = app.spawn_agent("task".to_string(), None, None).unwrap();
 
         app.show_session_picker = true;
         app.picker_cursor = 1;
@@ -1916,7 +1962,7 @@ mod tests {
     #[test]
     fn dismiss_only_removes_completed_sessions() {
         let mut app = App::new();
-        let id = app.spawn_agent("task".to_string(), None, None);
+        let id = app.spawn_agent("task".to_string(), None, None).unwrap();
         assert_eq!(app.session_order.len(), 2);
 
         app.picker_cursor = 1;
@@ -1932,7 +1978,7 @@ mod tests {
     #[test]
     fn cannot_dismiss_main_session() {
         let mut app = App::new();
-        app.spawn_agent("task".to_string(), None, None);
+        app.spawn_agent("task".to_string(), None, None).unwrap();
 
         app.picker_cursor = 0;
         app.dismiss_session();
@@ -1942,7 +1988,7 @@ mod tests {
     #[test]
     fn switched_to_session_still_becomes_completed() {
         let mut app = App::new();
-        let id = app.spawn_agent("task".to_string(), None, None);
+        let id = app.spawn_agent("task".to_string(), None, None).unwrap();
 
         app.switch_to_session(id);
         assert_eq!(app.active_session, id);
@@ -1979,7 +2025,7 @@ mod tests {
     #[test]
     fn sessions_command_shows_picker_when_agents_exist() {
         let mut app = App::new();
-        app.spawn_agent("task".to_string(), None, None);
+        app.spawn_agent("task".to_string(), None, None).unwrap();
 
         let handled = app.handle_command("/sessions");
         assert!(handled);
@@ -1999,7 +2045,7 @@ mod tests {
     #[test]
     fn trim_transcript_removes_old_messages() {
         let mut app = App::new();
-        let id = app.spawn_agent("test".to_string(), None, None);
+        let id = app.spawn_agent("test".to_string(), None, None).unwrap();
         let session = app.sessions.get_mut(&id).unwrap();
         session.chat_state = ChatState::Idle;
         let pre_existing = session.chat_messages.len();
@@ -2032,7 +2078,7 @@ mod tests {
     #[test]
     fn trim_transcript_noop_while_streaming() {
         let mut app = App::new();
-        let id = app.spawn_agent("test".to_string(), None, None);
+        let id = app.spawn_agent("test".to_string(), None, None).unwrap();
         let session = app.sessions.get_mut(&id).unwrap();
         for _ in 0..(TRANSCRIPT_CAP + 50) {
             session
@@ -2046,7 +2092,7 @@ mod tests {
     #[test]
     fn trim_transcript_bumps_version() {
         let mut app = App::new();
-        let id = app.spawn_agent("test".to_string(), None, None);
+        let id = app.spawn_agent("test".to_string(), None, None).unwrap();
         let session = app.sessions.get_mut(&id).unwrap();
         session.chat_state = ChatState::Idle;
         for _ in 0..(TRANSCRIPT_CAP + 10) {
@@ -2115,20 +2161,20 @@ mod tests {
     #[test]
     fn spawn_agent_effort_from_policy() {
         let mut app = App::new();
-        let id = app.spawn_agent("review the code".to_string(), None, None);
+        let id = app.spawn_agent("review the code".to_string(), None, None).unwrap();
         assert_eq!(app.sessions.get(&id).unwrap().effort, "high");
 
-        let id2 = app.spawn_agent("find the config file".to_string(), None, None);
+        let id2 = app.spawn_agent("find the config file".to_string(), None, None).unwrap();
         assert_eq!(app.sessions.get(&id2).unwrap().effort, "low");
 
-        let id3 = app.spawn_agent("summarize this".to_string(), None, None);
+        let id3 = app.spawn_agent("summarize this".to_string(), None, None).unwrap();
         assert_eq!(app.sessions.get(&id3).unwrap().effort, "medium");
     }
 
     #[test]
     fn spawn_agent_accepts_custom_effort() {
         let mut app = App::new();
-        let id = app.spawn_agent("test".to_string(), None, Some("max".to_string()));
+        let id = app.spawn_agent("test".to_string(), None, Some("max".to_string())).unwrap();
         assert_eq!(app.sessions.get(&id).unwrap().effort, "max");
     }
 
@@ -2137,7 +2183,7 @@ mod tests {
     #[test]
     fn completion_summary_extracts_last_assistant_message() {
         let mut app = App::new();
-        let id = app.spawn_agent("test".to_string(), None, None);
+        let id = app.spawn_agent("test".to_string(), None, None).unwrap();
         let session = app.sessions.get_mut(&id).unwrap();
         session.chat_messages.push(ChatMessage::simple(
             "assistant",
@@ -2150,7 +2196,7 @@ mod tests {
     #[test]
     fn completion_summary_returns_no_output_when_empty() {
         let mut app = App::new();
-        let id = app.spawn_agent("test".to_string(), None, None);
+        let id = app.spawn_agent("test".to_string(), None, None).unwrap();
         let session = app.sessions.get(&id).unwrap();
         let summary = session.completion_summary();
         assert_eq!(summary, "(no output)");
@@ -2159,7 +2205,7 @@ mod tests {
     #[test]
     fn completion_summary_truncates_long_lines() {
         let mut app = App::new();
-        let id = app.spawn_agent("test".to_string(), None, None);
+        let id = app.spawn_agent("test".to_string(), None, None).unwrap();
         let session = app.sessions.get_mut(&id).unwrap();
         session
             .chat_messages
@@ -2172,7 +2218,7 @@ mod tests {
     #[test]
     fn completion_injects_notification_into_main() {
         let mut app = App::new();
-        let id = app.spawn_agent("find bugs".to_string(), None, None);
+        let id = app.spawn_agent("find bugs".to_string(), None, None).unwrap();
 
         let session = app.sessions.get_mut(&id).unwrap();
         session
@@ -2273,7 +2319,7 @@ mod tests {
     #[test]
     fn spawn_agent_effort_explicit_overrides_policy() {
         let mut app = App::new();
-        let id = app.spawn_agent("review the code".to_string(), None, Some("low".to_string()));
+        let id = app.spawn_agent("review the code".to_string(), None, Some("low".to_string())).unwrap();
         assert_eq!(app.sessions.get(&id).unwrap().effort, "low");
     }
 
@@ -2282,7 +2328,7 @@ mod tests {
     #[test]
     fn error_chunk_sets_had_error() {
         let mut app = App::new();
-        let id = app.spawn_agent("test".to_string(), None, None);
+        let id = app.spawn_agent("test".to_string(), None, None).unwrap();
         let session = app.sessions.get_mut(&id).unwrap();
         session.chat_messages.push(ChatMessage {
             role: "assistant".to_string(),
@@ -2301,9 +2347,9 @@ mod tests {
     }
 
     #[test]
-    fn done_after_error_sets_failed() {
+    fn done_after_error_notifies_main_as_failed() {
         let mut app = App::new();
-        let id = app.spawn_agent("test".to_string(), None, None);
+        let id = app.spawn_agent("test".to_string(), None, None).unwrap();
         let session = app.sessions.get_mut(&id).unwrap();
         session.chat_messages.push(ChatMessage {
             role: "assistant".to_string(),
@@ -2322,23 +2368,109 @@ mod tests {
         .unwrap();
         app.poll_response();
 
-        assert_eq!(
-            app.sessions.get(&id).unwrap().session_state,
-            SessionState::Failed
-        );
+        // Session is auto-GC'd — verify via main notification
+        assert!(!app.sessions.contains_key(&id));
+        let main = app.sessions.get(&SessionId::MAIN).unwrap();
+        let has_failed = main.chat_messages.iter().any(|m| m.content.contains("Agent failed"));
+        assert!(has_failed);
+    }
+
+    // --- Session auto-GC ---
+
+    #[test]
+    fn auto_gc_removes_completed_session() {
+        let mut app = App::new();
+        let id = app.spawn_agent("test gc".to_string(), None, None).unwrap();
+        let session = app.sessions.get_mut(&id).unwrap();
+        session.chat_messages.push(ChatMessage::simple("assistant", "done"));
+        let (tx, rx) = std::sync::mpsc::channel();
+        session.stream_rx = Some(rx);
+        tx.send(backend::StreamChunk { kind: ChunkKind::Done }).unwrap();
+
+        app.poll_response();
+
+        assert!(!app.sessions.contains_key(&id));
+        assert_eq!(app.session_order.len(), 1);
     }
 
     #[test]
-    fn failed_session_is_dismissible() {
+    fn auto_gc_resets_active_session_to_main() {
         let mut app = App::new();
-        let id = app.spawn_agent("test".to_string(), None, None);
-        let session = app.sessions.get_mut(&id).unwrap();
-        session.session_state = SessionState::Failed;
-        session.chat_state = ChatState::Idle;
-        session.stream_rx = None;
+        let id = app.spawn_agent("test".to_string(), None, None).unwrap();
+        app.switch_to_session(id);
+        assert_eq!(app.active_session, id);
 
-        app.picker_cursor = 1;
-        app.dismiss_session();
+        let session = app.sessions.get_mut(&id).unwrap();
+        session.chat_messages.push(ChatMessage::simple("assistant", "done"));
+        let (tx, rx) = std::sync::mpsc::channel();
+        session.stream_rx = Some(rx);
+        tx.send(backend::StreamChunk { kind: ChunkKind::Done }).unwrap();
+
+        app.poll_response();
+
+        assert_eq!(app.active_session, SessionId::MAIN);
         assert!(!app.sessions.contains_key(&id));
+    }
+
+    #[test]
+    fn auto_gc_closes_picker_when_no_sessions_remain() {
+        let mut app = App::new();
+        let id = app.spawn_agent("test".to_string(), None, None).unwrap();
+        app.show_session_picker = true;
+        app.picker_cursor = 1;
+
+        let session = app.sessions.get_mut(&id).unwrap();
+        session.chat_messages.push(ChatMessage::simple("assistant", "done"));
+        let (tx, rx) = std::sync::mpsc::channel();
+        session.stream_rx = Some(rx);
+        tx.send(backend::StreamChunk { kind: ChunkKind::Done }).unwrap();
+
+        app.poll_response();
+
+        assert!(!app.show_session_picker);
+        assert_eq!(app.picker_cursor, 0);
+    }
+
+    // --- Concurrent session limit ---
+
+    #[test]
+    fn max_agents_returns_positive() {
+        assert!(App::max_agents() >= 1);
+    }
+
+    #[test]
+    fn spawn_agent_rejects_at_limit() {
+        let mut app = App::new();
+        let limit = App::max_agents();
+        for i in 0..limit {
+            let result = app.spawn_agent(format!("task {}", i), None, None);
+            assert!(result.is_some(), "spawn {} should succeed", i);
+        }
+
+        let rejected = app.spawn_agent("one too many".to_string(), None, None);
+        assert!(rejected.is_none());
+    }
+
+    #[test]
+    fn spawn_agent_allows_after_gc() {
+        let mut app = App::new();
+        let limit = App::max_agents();
+        let mut ids = Vec::new();
+        for i in 0..limit {
+            ids.push(app.spawn_agent(format!("task {}", i), None, None).unwrap());
+        }
+        assert!(app.spawn_agent("blocked".to_string(), None, None).is_none());
+
+        // Complete one agent — auto-GC frees the slot
+        let first = ids[0];
+        let session = app.sessions.get_mut(&first).unwrap();
+        session.chat_messages.push(ChatMessage::simple("assistant", "done"));
+        let (tx, rx) = std::sync::mpsc::channel();
+        session.stream_rx = Some(rx);
+        tx.send(backend::StreamChunk { kind: ChunkKind::Done }).unwrap();
+        app.poll_response();
+
+        let after_gc = app.spawn_agent("now allowed".to_string(), None, None);
+        assert!(after_gc.is_some());
     }
 }
