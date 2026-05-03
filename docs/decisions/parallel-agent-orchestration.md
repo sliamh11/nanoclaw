@@ -18,7 +18,7 @@ The TUI currently supports a single chat session. Users need to spawn background
 ### Key Rulings
 
 1. **Sessions are backend-scoped 1:1.** A `SessionId` maps to exactly one `Box<dyn Backend>`. Never resume a Claude session on Codex (per `backend-neutral-agent-runtime.md`).
-2. **Hint-driven spawn.** When the AI wants to spawn a subagent (`SubagentStart` event), TUI shows "Ctrl+B to run in background" hint. User presses Ctrl+B to detach to sidechain, or ignores to continue inline. `/agent <prompt>` available as explicit fallback. Full auto-spawn (orchestrator decides without AI signal) deferred.
+2. **Explicit spawn first.** `/agent <prompt>` is the primary spawn mechanism (Phase 3+4). Hint-driven spawn (SubagentStart → "Ctrl+B to detach") requires process re-parenting — transferring an in-flight stream_rx to a new Session — and is deferred to Phase 5. Full auto-spawn (orchestrator decides without AI signal) is also deferred.
 3. **`std::sync::mpsc::sync_channel(256)`** — bounded backpressure, no external crate needed. O(N) `try_recv` per 50ms tick for N sessions.
 4. **`HashMap<SessionId, Session>`** for O(1) lookup by ID. `Vec<SessionId>` for insertion-ordered picker display.
 5. **Cross-platform kill** via `std::process::Child::kill()`, not `libc::kill`.
@@ -43,5 +43,5 @@ The `RunMode` enum abstracts this: each backend maps the enum variant to its own
 |-------|----|-------|
 | 1 | Session extraction | Refactor `App` fields into `Session` struct, zero behavior change |
 | 2 | Backend session mgmt | `RunMode` enum (`Normal`/`Resume`/`Ephemeral`) in `RunConfig` + both backends |
-| 3+4 | Spawn + picker UI | Background spawning, session picker, enter mode, commands |
-| 5 | Deferred | Bounded transcripts, dynamic effort, completion summaries, health monitoring (separate plan) |
+| 3+4 | Spawn + picker UI | `/agent` command, multi-session polling, Ctrl+B session picker, status bar indicator |
+| 5 | Deferred | Hint-driven spawn (process re-parenting), bounded transcripts, dynamic effort, completion summaries |

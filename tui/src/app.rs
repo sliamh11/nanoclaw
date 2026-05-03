@@ -12,16 +12,14 @@ use crate::config;
 use crate::config::permissions::PermissionsConfig;
 use crate::platform;
 
-#[allow(dead_code)]
 static NEXT_SESSION_ID: AtomicU64 = AtomicU64::new(1);
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct SessionId(pub u64);
 
 impl SessionId {
     pub const MAIN: Self = Self(0);
 
-    #[allow(dead_code)]
     pub fn next() -> Self {
         Self(NEXT_SESSION_ID.fetch_add(1, Ordering::Relaxed))
     }
@@ -105,9 +103,17 @@ pub enum ChatState {
     Streaming,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum SessionState {
+    Running,
+    Completed,
+}
+
 pub struct Session {
     #[allow(dead_code)]
     pub id: SessionId,
+    pub label: String,
+    pub session_state: SessionState,
     pub chat_messages: Vec<ChatMessage>,
     pub chat_state: ChatState,
     pub stream_rx: Option<mpsc::Receiver<backend::StreamChunk>>,
@@ -132,6 +138,8 @@ impl Session {
     fn new_main(model: String, effort: String, permissions: PermissionsConfig) -> Self {
         Self {
             id: SessionId::MAIN,
+            label: "main".to_string(),
+            session_state: SessionState::Running,
             chat_messages: vec![ChatMessage::simple(
                 "system",
                 "Welcome to Deus. Type a message or / for commands.",
@@ -253,6 +261,16 @@ pub const COMMANDS: &[CommandDef] = &[
         args: &["mode", "allow", "deny", "remove", "reset"],
     },
     CommandDef {
+        name: "/agent",
+        description: "Spawn background agent",
+        args: &[],
+    },
+    CommandDef {
+        name: "/sessions",
+        description: "Session picker",
+        args: &[],
+    },
+    CommandDef {
         name: "/clear",
         description: "Clear chat",
         args: &[],
@@ -268,6 +286,9 @@ pub struct App {
     // Session management
     pub sessions: HashMap<SessionId, Session>,
     pub active_session: SessionId,
+    pub session_order: Vec<SessionId>,
+    pub show_session_picker: bool,
+    pub picker_cursor: usize,
 
     // Global UI state
     pub tab: Tab,
@@ -362,6 +383,9 @@ impl App {
         let mut app = Self {
             sessions,
             active_session: main_id,
+            session_order: vec![main_id],
+            show_session_picker: false,
+            picker_cursor: 0,
 
             tab: Tab::Chat,
             cursor: 0,
@@ -464,8 +488,12 @@ impl App {
     }
 
     fn dispatch_message(&mut self, msg: String) {
+        self.dispatch_message_for(self.active_session, msg);
+    }
+
+    fn dispatch_message_for(&mut self, session_id: SessionId, msg: String) {
         let ctx_file = self.system_context_file.clone();
-        let session = self.active_mut();
+        let session = self.sessions.get_mut(&session_id).unwrap();
         session
             .chat_messages
             .push(ChatMessage::simple("user", &msg));
@@ -549,11 +577,52 @@ impl App {
             }
         });
 
-        self.active_mut().chat_messages.push(ChatMessage {
+        let session = self.sessions.get_mut(&session_id).unwrap();
+        session.chat_messages.push(ChatMessage {
             role: "assistant".to_string(),
             content: String::new(),
             blocks: Vec::new(),
         });
+    }
+
+    pub fn spawn_agent(&mut self, prompt: String, model: Option<String>) -> SessionId {
+        let id = SessionId::next();
+        let model = model.unwrap_or_else(|| self.active().model.clone());
+        let preview: String = prompt.chars().take(50).collect();
+        let label = if preview.len() < prompt.len() {
+            format!("{}...", preview)
+        } else {
+            preview
+        };
+
+        let session = Session {
+            id,
+            label,
+            session_state: SessionState::Running,
+            chat_messages: Vec::new(),
+            chat_state: ChatState::Idle,
+            stream_rx: None,
+            turn_count: 0,
+            model,
+            effort: "high".to_string(),
+            token_count: 0,
+            cost_usd: 0.0,
+            turn_start: None,
+            last_turn_duration: None,
+            last_thinking_summary: None,
+            permissions: self.active().permissions.clone(),
+            active_subagent_ids: HashSet::new(),
+            scroll_offset: 0,
+            scroll_pinned: true,
+            chat_dirty: true,
+            chat_version: 0,
+            run_mode: backend::RunMode::Ephemeral,
+        };
+
+        self.sessions.insert(id, session);
+        self.session_order.push(id);
+        self.dispatch_message_for(id, prompt);
+        id
     }
 
     fn handle_command(&mut self, msg: &str) -> bool {
@@ -723,7 +792,7 @@ impl App {
                     .map(|c| format!("  {:16} {}", c.name, c.description))
                     .collect::<Vec<_>>()
                     .join("\n");
-                self.active_mut().chat_messages.push(ChatMessage::simple("system", &format!("Available commands:\n\n{}\n\nKeyboard shortcuts:\n  Ctrl+L  Clear screen\n  Ctrl+U  Clear input line\n  Ctrl+K  Kill to end of line\n  Ctrl+Y  Yank (paste killed text)\n  Ctrl+A  Start of line\n  Ctrl+E  End of line\n  Ctrl+J  New line (multi-line input)\n  Ctrl+O  Toggle tool/thinking details\n  Ctrl+D  Exit\n  Alt+B   Word left\n  Alt+F   Word right\n  ↑/↓     Input history\n  PgUp/Dn Scroll chat\n  Mouse   Scroll chat (Shift+drag to select text)", help)));
+                self.active_mut().chat_messages.push(ChatMessage::simple("system", &format!("Available commands:\n\n{}\n\nKeyboard shortcuts:\n  Ctrl+B  Session picker\n  Ctrl+L  Clear screen\n  Ctrl+U  Clear input line\n  Ctrl+K  Kill to end of line\n  Ctrl+Y  Yank (paste killed text)\n  Ctrl+A  Start of line\n  Ctrl+E  End of line\n  Ctrl+J  New line (multi-line input)\n  Ctrl+O  Toggle tool/thinking details\n  Ctrl+D  Exit\n  Alt+B   Word left\n  Alt+F   Word right\n  ↑/↓     Input history\n  PgUp/Dn Scroll chat\n  Mouse   Scroll chat (Shift+drag to select text)", help)));
                 true
             }
             "/history" => {
@@ -735,6 +804,33 @@ impl App {
             }
             "/permissions" => {
                 self.handle_permissions_command(arg);
+                true
+            }
+            "/agent" if !arg.is_empty() => {
+                let preview: String = arg.chars().take(60).collect();
+                self.spawn_agent(arg.to_string(), None);
+                self.active_mut().chat_messages.push(ChatMessage::simple(
+                    "system",
+                    &format!("Agent spawned: {}", preview),
+                ));
+                true
+            }
+            "/agent" => {
+                self.active_mut()
+                    .chat_messages
+                    .push(ChatMessage::simple("system", "Usage: /agent <prompt>"));
+                true
+            }
+            "/sessions" => {
+                if self.session_order.len() <= 1 {
+                    self.active_mut().chat_messages.push(ChatMessage::simple(
+                        "system",
+                        "No background sessions. Use /agent <prompt> to spawn one.",
+                    ));
+                } else {
+                    self.show_session_picker = true;
+                    self.picker_cursor = 0;
+                }
                 true
             }
             "/init" | "/compress" | "/checkpoint" | "/compact" | "/resume" => false,
@@ -869,157 +965,180 @@ impl App {
     }
 
     pub fn poll_response(&mut self) {
-        let session = self.active_mut();
+        let ids: Vec<SessionId> = self.sessions.keys().copied().collect();
+        for id in ids {
+            self.poll_session(id);
+        }
+    }
+
+    fn poll_session(&mut self, session_id: SessionId) {
+        let session = match self.sessions.get(&session_id) {
+            Some(s) => s,
+            None => return,
+        };
+        if session.stream_rx.is_none() {
+            return;
+        }
+
+        let mut chunks: Vec<backend::StreamChunk> = Vec::new();
         if let Some(rx) = &session.stream_rx {
-            let mut had_chunks = false;
-            let mut chunks: Vec<backend::StreamChunk> = Vec::new();
             while let Ok(chunk) = rx.try_recv() {
-                had_chunks = true;
                 chunks.push(chunk);
             }
-            for chunk in chunks {
-                match chunk.kind {
-                    ChunkKind::Text(text) => {
-                        let session = self.active_mut();
-                        if let Some(last) = session.chat_messages.last_mut()
-                            && last.role == "assistant"
-                        {
-                            if !last.content.is_empty() {
-                                last.content.push('\n');
-                            }
-                            last.content.push_str(&text);
-                            last.blocks.push(MessageBlock::Text(text));
+        }
+        if chunks.is_empty() {
+            return;
+        }
+
+        for chunk in chunks {
+            match chunk.kind {
+                ChunkKind::Text(text) => {
+                    let session = self.sessions.get_mut(&session_id).unwrap();
+                    if let Some(last) = session.chat_messages.last_mut()
+                        && last.role == "assistant"
+                    {
+                        if !last.content.is_empty() {
+                            last.content.push('\n');
                         }
+                        last.content.push_str(&text);
+                        last.blocks.push(MessageBlock::Text(text));
                     }
-                    ChunkKind::Thinking(text) => {
-                        let summary: String = text.chars().take(100).collect();
-                        let session = self.active_mut();
-                        session.last_thinking_summary = Some(if summary.len() < text.len() {
-                            format!("{}...", summary)
-                        } else {
-                            summary
+                }
+                ChunkKind::Thinking(text) => {
+                    let summary: String = text.chars().take(100).collect();
+                    let session = self.sessions.get_mut(&session_id).unwrap();
+                    session.last_thinking_summary = Some(if summary.len() < text.len() {
+                        format!("{}...", summary)
+                    } else {
+                        summary
+                    });
+                    if let Some(last) = session.chat_messages.last_mut()
+                        && last.role == "assistant"
+                    {
+                        last.blocks.push(MessageBlock::Thinking(text));
+                    }
+                }
+                ChunkKind::ToolUse { id, tool, detail } => {
+                    let session = self.sessions.get_mut(&session_id).unwrap();
+                    if let Some(last) = session.chat_messages.last_mut()
+                        && last.role == "assistant"
+                    {
+                        let line = format!("[{}] {}", tool, detail);
+                        if !last.content.is_empty() {
+                            last.content.push('\n');
+                        }
+                        last.content.push_str(&line);
+                        last.blocks.push(MessageBlock::ToolUse { id, tool, detail });
+                    }
+                }
+                ChunkKind::SubagentStart {
+                    id,
+                    subagent_type,
+                    description,
+                } => {
+                    let is_warden = self.is_warden_name(&subagent_type);
+                    let session = self.sessions.get_mut(&session_id).unwrap();
+                    session.active_subagent_ids.insert(id.clone());
+                    if let Some(last) = session.chat_messages.last_mut()
+                        && last.role == "assistant"
+                    {
+                        last.blocks.push(MessageBlock::SubagentBlock {
+                            id,
+                            subagent_type,
+                            description,
+                            status: SubagentStatus::Running,
+                            output_preview: None,
+                            is_warden,
                         });
-                        if let Some(last) = session.chat_messages.last_mut()
-                            && last.role == "assistant"
-                        {
-                            last.blocks.push(MessageBlock::Thinking(text));
-                        }
                     }
-                    ChunkKind::ToolUse { id, tool, detail } => {
-                        let session = self.active_mut();
-                        if let Some(last) = session.chat_messages.last_mut()
-                            && last.role == "assistant"
-                        {
-                            let line = format!("[{}] {}", tool, detail);
-                            if !last.content.is_empty() {
-                                last.content.push('\n');
+                }
+                ChunkKind::ToolResult {
+                    id,
+                    content_preview,
+                } => {
+                    let session = self.sessions.get_mut(&session_id).unwrap();
+                    if session.active_subagent_ids.remove(&id)
+                        && let Some(last) = session.chat_messages.last_mut()
+                    {
+                        for block in &mut last.blocks {
+                            if let MessageBlock::SubagentBlock {
+                                id: bid,
+                                status,
+                                output_preview: preview,
+                                ..
+                            } = block
+                                && *bid == id
+                            {
+                                *status = SubagentStatus::Completed;
+                                *preview = Some(content_preview.clone());
+                                break;
                             }
-                            last.content.push_str(&line);
-                            last.blocks.push(MessageBlock::ToolUse { id, tool, detail });
-                        }
-                    }
-                    ChunkKind::SubagentStart {
-                        id,
-                        subagent_type,
-                        description,
-                    } => {
-                        let is_warden = self.is_warden_name(&subagent_type);
-                        let session = self.active_mut();
-                        session.active_subagent_ids.insert(id.clone());
-                        if let Some(last) = session.chat_messages.last_mut()
-                            && last.role == "assistant"
-                        {
-                            last.blocks.push(MessageBlock::SubagentBlock {
-                                id,
-                                subagent_type,
-                                description,
-                                status: SubagentStatus::Running,
-                                output_preview: None,
-                                is_warden,
-                            });
-                        }
-                    }
-                    ChunkKind::ToolResult {
-                        id,
-                        content_preview,
-                    } => {
-                        let session = self.active_mut();
-                        if session.active_subagent_ids.remove(&id)
-                            && let Some(last) = session.chat_messages.last_mut()
-                        {
-                            for block in &mut last.blocks {
-                                if let MessageBlock::SubagentBlock {
-                                    id: bid,
-                                    status,
-                                    output_preview: preview,
-                                    ..
-                                } = block
-                                    && *bid == id
-                                {
-                                    *status = SubagentStatus::Completed;
-                                    *preview = Some(content_preview.clone());
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                    ChunkKind::CostUpdate {
-                        cost_usd,
-                        input_tokens,
-                        output_tokens,
-                    } => {
-                        let session = self.active_mut();
-                        session.cost_usd = cost_usd;
-                        session.token_count = (input_tokens + output_tokens) as u32;
-                    }
-                    ChunkKind::PermissionDenials(denials) => {
-                        let denied_list: Vec<String> = denials
-                            .iter()
-                            .map(|d| {
-                                if d.tool_input_preview.is_empty() {
-                                    d.tool_name.clone()
-                                } else {
-                                    format!("{}({})", d.tool_name, d.tool_input_preview)
-                                }
-                            })
-                            .collect();
-                        self.active_mut()
-                            .chat_messages
-                            .push(ChatMessage::simple(
-                                "system",
-                                &format!(
-                                    "Permission denied for: {}\nUse /permissions allow <tool> to approve.",
-                                    denied_list.join(", ")
-                                ),
-                            ));
-                    }
-                    ChunkKind::Done => {
-                        let session = self.active_mut();
-                        session.chat_state = ChatState::Idle;
-                        session.stream_rx = None;
-                        session.last_turn_duration = session.turn_start.map(|t| t.elapsed());
-                        session.turn_start = None;
-                        session.active_subagent_ids.clear();
-                        session.mark_chat_changed();
-                        if !self.queued_messages.is_empty() {
-                            let next = self.queued_messages.remove(0);
-                            self.dispatch_message(next);
-                        }
-                        return;
-                    }
-                    ChunkKind::Error(e) => {
-                        let session = self.active_mut();
-                        if let Some(last) = session.chat_messages.last_mut()
-                            && last.role == "assistant"
-                        {
-                            last.content.push_str(&format!("\n[Error: {}]", e));
                         }
                     }
                 }
+                ChunkKind::CostUpdate {
+                    cost_usd,
+                    input_tokens,
+                    output_tokens,
+                } => {
+                    let session = self.sessions.get_mut(&session_id).unwrap();
+                    session.cost_usd = cost_usd;
+                    session.token_count = (input_tokens + output_tokens) as u32;
+                }
+                ChunkKind::PermissionDenials(denials) => {
+                    let denied_list: Vec<String> = denials
+                        .iter()
+                        .map(|d| {
+                            if d.tool_input_preview.is_empty() {
+                                d.tool_name.clone()
+                            } else {
+                                format!("{}({})", d.tool_name, d.tool_input_preview)
+                            }
+                        })
+                        .collect();
+                    self.sessions
+                        .get_mut(&session_id)
+                        .unwrap()
+                        .chat_messages
+                        .push(ChatMessage::simple(
+                            "system",
+                            &format!(
+                                "Permission denied for: {}\nUse /permissions allow <tool> to approve.",
+                                denied_list.join(", ")
+                            ),
+                        ));
+                }
+                ChunkKind::Done => {
+                    let session = self.sessions.get_mut(&session_id).unwrap();
+                    session.chat_state = ChatState::Idle;
+                    session.stream_rx = None;
+                    session.last_turn_duration = session.turn_start.map(|t| t.elapsed());
+                    session.turn_start = None;
+                    session.active_subagent_ids.clear();
+                    session.mark_chat_changed();
+                    if session_id != SessionId::MAIN {
+                        session.session_state = SessionState::Completed;
+                    }
+                    if session_id == self.active_session && !self.queued_messages.is_empty() {
+                        let next = self.queued_messages.remove(0);
+                        self.dispatch_message(next);
+                    }
+                    return;
+                }
+                ChunkKind::Error(e) => {
+                    let session = self.sessions.get_mut(&session_id).unwrap();
+                    if let Some(last) = session.chat_messages.last_mut()
+                        && last.role == "assistant"
+                    {
+                        last.content.push_str(&format!("\n[Error: {}]", e));
+                    }
+                }
             }
-            if had_chunks {
-                self.mark_chat_changed();
-            }
+        }
+        if session_id == self.active_session {
+            self.mark_chat_changed();
+        } else if let Some(s) = self.sessions.get_mut(&session_id) {
+            s.mark_chat_changed();
         }
     }
 
@@ -1454,6 +1573,66 @@ impl App {
         })
     }
 
+    pub fn switch_to_session(&mut self, id: SessionId) {
+        if self.sessions.contains_key(&id) {
+            self.active_session = id;
+            self.show_session_picker = false;
+            self.mark_chat_changed();
+        }
+    }
+
+    pub fn picker_next(&mut self) {
+        if self.picker_cursor + 1 < self.session_order.len() {
+            self.picker_cursor += 1;
+        }
+    }
+
+    pub fn picker_prev(&mut self) {
+        if self.picker_cursor > 0 {
+            self.picker_cursor -= 1;
+        }
+    }
+
+    pub fn picker_select(&mut self) {
+        if let Some(&id) = self.session_order.get(self.picker_cursor) {
+            self.switch_to_session(id);
+        }
+    }
+
+    pub fn dismiss_session(&mut self) {
+        if let Some(&id) = self.session_order.get(self.picker_cursor) {
+            if id == SessionId::MAIN {
+                return;
+            }
+            if let Some(session) = self.sessions.get(&id)
+                && session.session_state != SessionState::Completed
+            {
+                return;
+            }
+            self.sessions.remove(&id);
+            self.session_order.retain(|&sid| sid != id);
+            if self.picker_cursor >= self.session_order.len() && self.picker_cursor > 0 {
+                self.picker_cursor -= 1;
+            }
+            if self.session_order.len() <= 1 {
+                self.show_session_picker = false;
+            }
+        }
+    }
+
+    pub fn background_session_count(&self) -> usize {
+        self.session_order.len().saturating_sub(1)
+    }
+
+    pub fn streaming_background_count(&self) -> usize {
+        self.sessions
+            .iter()
+            .filter(|(id, s)| {
+                **id != self.active_session && matches!(s.chat_state, ChatState::Streaming)
+            })
+            .count()
+    }
+
     fn item_count(&self) -> usize {
         match self.tab {
             Tab::Chat | Tab::Status => 0,
@@ -1478,5 +1657,167 @@ mod tests {
 
         assert!(app.show_tools);
         assert_ne!(app.active().chat_version, before);
+    }
+
+    #[test]
+    fn spawn_agent_creates_background_session() {
+        let mut app = App::new();
+        assert_eq!(app.session_order.len(), 1);
+        assert_eq!(app.background_session_count(), 0);
+
+        let id = app.spawn_agent("test task".to_string(), None);
+
+        assert_eq!(app.session_order.len(), 2);
+        assert_eq!(app.background_session_count(), 1);
+        assert_ne!(id, SessionId::MAIN);
+        assert_eq!(app.active_session, SessionId::MAIN);
+
+        let session = app.sessions.get(&id).unwrap();
+        assert_eq!(session.run_mode, backend::RunMode::Ephemeral);
+        assert_eq!(session.label, "test task");
+    }
+
+    #[test]
+    fn spawn_agent_truncates_long_prompts() {
+        let mut app = App::new();
+        let long_prompt = "a".repeat(100);
+        let id = app.spawn_agent(long_prompt, None);
+
+        let session = app.sessions.get(&id).unwrap();
+        assert!(session.label.len() <= 54);
+        assert!(session.label.ends_with("..."));
+    }
+
+    #[test]
+    fn spawn_agent_inherits_model() {
+        let mut app = App::new();
+        let main_model = app.active().model.clone();
+        let id = app.spawn_agent("test".to_string(), None);
+
+        assert_eq!(app.sessions.get(&id).unwrap().model, main_model);
+    }
+
+    #[test]
+    fn spawn_agent_accepts_custom_model() {
+        let mut app = App::new();
+        let id = app.spawn_agent("test".to_string(), Some("haiku".to_string()));
+
+        assert_eq!(app.sessions.get(&id).unwrap().model, "haiku");
+    }
+
+    #[test]
+    fn session_picker_navigation() {
+        let mut app = App::new();
+        app.spawn_agent("task 1".to_string(), None);
+        app.spawn_agent("task 2".to_string(), None);
+
+        app.show_session_picker = true;
+        app.picker_cursor = 0;
+
+        app.picker_next();
+        assert_eq!(app.picker_cursor, 1);
+
+        app.picker_next();
+        assert_eq!(app.picker_cursor, 2);
+
+        app.picker_next();
+        assert_eq!(app.picker_cursor, 2);
+
+        app.picker_prev();
+        assert_eq!(app.picker_cursor, 1);
+    }
+
+    #[test]
+    fn session_picker_select_switches_active() {
+        let mut app = App::new();
+        let id = app.spawn_agent("task".to_string(), None);
+
+        app.show_session_picker = true;
+        app.picker_cursor = 1;
+        app.picker_select();
+
+        assert_eq!(app.active_session, id);
+        assert!(!app.show_session_picker);
+    }
+
+    #[test]
+    fn dismiss_only_removes_completed_sessions() {
+        let mut app = App::new();
+        let id = app.spawn_agent("task".to_string(), None);
+        assert_eq!(app.session_order.len(), 2);
+
+        app.picker_cursor = 1;
+        app.dismiss_session();
+        assert_eq!(app.session_order.len(), 2);
+
+        app.sessions.get_mut(&id).unwrap().session_state = SessionState::Completed;
+        app.dismiss_session();
+        assert_eq!(app.session_order.len(), 1);
+        assert!(!app.sessions.contains_key(&id));
+    }
+
+    #[test]
+    fn cannot_dismiss_main_session() {
+        let mut app = App::new();
+        app.spawn_agent("task".to_string(), None);
+
+        app.picker_cursor = 0;
+        app.dismiss_session();
+        assert!(app.sessions.contains_key(&SessionId::MAIN));
+    }
+
+    #[test]
+    fn switched_to_session_still_becomes_completed() {
+        let mut app = App::new();
+        let id = app.spawn_agent("task".to_string(), None);
+
+        app.switch_to_session(id);
+        assert_eq!(app.active_session, id);
+
+        {
+            let session = app.sessions.get_mut(&id).unwrap();
+            session.chat_state = ChatState::Idle;
+            session.stream_rx = None;
+            session.session_state = SessionState::Completed;
+        }
+
+        app.switch_to_session(SessionId::MAIN);
+        app.picker_cursor = 1;
+        app.dismiss_session();
+        assert!(!app.sessions.contains_key(&id));
+    }
+
+    #[test]
+    fn agent_command_spawns_session() {
+        let mut app = App::new();
+        let handled = app.handle_command("/agent do something");
+        assert!(handled);
+        assert_eq!(app.session_order.len(), 2);
+    }
+
+    #[test]
+    fn agent_command_empty_shows_usage() {
+        let mut app = App::new();
+        let handled = app.handle_command("/agent");
+        assert!(handled);
+        assert_eq!(app.session_order.len(), 1);
+    }
+
+    #[test]
+    fn sessions_command_shows_picker_when_agents_exist() {
+        let mut app = App::new();
+        app.spawn_agent("task".to_string(), None);
+
+        let handled = app.handle_command("/sessions");
+        assert!(handled);
+        assert!(app.show_session_picker);
+    }
+
+    #[test]
+    fn sessions_command_shows_hint_when_no_agents() {
+        let mut app = App::new();
+        let handled = app.handle_command("/sessions");
+        assert!(handled);
+        assert!(!app.show_session_picker);
     }
 }
