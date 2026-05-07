@@ -263,24 +263,33 @@ export class MultiAgentOrchestrator {
     };
 
     const session = await runtime.startOrResume(runContext);
-    const runResult = await runtime.runTurn(runContext, session, eventSink);
+    try {
+      const runResult = await runtime.runTurn(runContext, session, eventSink);
 
-    const rawOutput = outputParts.join('');
-    const parsed = parseStatusMarker(rawOutput, task.id);
+      const rawOutput = outputParts.join('');
+      const parsed = parseStatusMarker(rawOutput, task.id);
 
-    if (runResult.status === 'error') {
+      if (runResult.status === 'error') {
+        return {
+          status: 'BLOCKED',
+          output: rawOutput,
+          blockedReason: runResult.error ?? 'Runtime error',
+        };
+      }
+
       return {
-        status: 'BLOCKED',
-        output: rawOutput,
-        blockedReason: runResult.error ?? 'Runtime error',
+        status: parsed.status,
+        output: parsed.cleanOutput,
+        concerns: parsed.concerns,
+        blockedReason: parsed.blockedReason,
       };
+    } finally {
+      await runtime.close(session).catch((err) => {
+        logger.warn(
+          { err, taskId: task.id },
+          'Failed to close subagent session',
+        );
+      });
     }
-
-    return {
-      status: parsed.status,
-      output: parsed.cleanOutput,
-      concerns: parsed.concerns,
-      blockedReason: parsed.blockedReason,
-    };
   }
 }
