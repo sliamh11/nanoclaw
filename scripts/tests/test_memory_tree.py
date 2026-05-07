@@ -142,6 +142,29 @@ def stub_embed(monkeypatch):
     return s
 
 
+@pytest.fixture
+def stub_embed_batch(monkeypatch, stub_embed):
+    """Stub embed_batch_text using the same StubEmbed instance."""
+    def _batch(texts):
+        return [stub_embed(t) for t in texts]
+    monkeypatch.setattr(mt, "embed_batch_text", _batch)
+    return stub_embed
+
+
+@pytest.fixture
+def stub_approach_gen(monkeypatch):
+    """Deterministic approach-angle generator."""
+    def _gen(description, body_excerpt):
+        words = description.split()
+        return [
+            f"What about {words[0]}?" if words else "What about this?",
+            f"Tell me regarding {words[-1]}" if words else "Tell me about this",
+            f"How does {' '.join(words[:2])} work?" if len(words) >= 2 else "How does this work?",
+        ]
+    monkeypatch.setattr(mt, "generate_approach_angles", _gen)
+    return _gen
+
+
 # ── ID + hash helpers ─────────────────────────────────────────────────────────
 
 class TestIds:
@@ -1126,3 +1149,160 @@ class TestConceptExpansion:
         assert len(calls) == 1
         assert calls[0] == prompt, \
             f"embed_text should receive original prompt, got {calls[0]}"
+
+
+class TestApproachAngles:
+    """Tests for approach-angle embedding retrieval (Phase 1.5)."""
+
+    def _insert_with_angles(self, db, stub_embed, node_id, path, desc, chash, angle_queries):
+        """Helper: insert a node and its approach-angle embeddings."""
+        mt.upsert_node(
+            db, node_id=node_id, path=path,
+            title=path, description=desc,
+            level=0, node_type="feedback",
+            embedding=stub_embed(desc),
+            content_hash_val=chash,
+        )
+        now = mt._utc_iso()
+        for idx, q in enumerate(angle_queries):
+            vec = stub_embed(q)
+            db.execute(
+                """INSERT OR REPLACE INTO approach_angles
+                   (node_id, angle_idx, query_text, embedding, source_hash, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (node_id, idx, q, mt.serialize(vec), chash, now),
+            )
+        db.commit()
+
+    def test_approach_off_is_noop(self, tmp_db, stub_embed):
+        mt.upsert_node(
+            tmp_db, node_id="aa_001", path="auto-memory/aa.md",
+            title="AA", description="Test approach node",
+            level=0, node_type="feedback",
+            embedding=stub_embed("Test approach node"),
+            content_hash_val="h_aa",
+        )
+        tmp_db.commit()
+        result = mt.retrieve(
+            tmp_db, "anything", k=5,
+            use_abstain=False, use_approach_angles=False,
+        )
+        assert not any("approach_max" in t for t in result["trace"]), \
+            f"Should not have approach trace when off, got {result['trace']}"
+
+    def test_approach_empty_is_noop(self, tmp_db, stub_embed):
+        mt.upsert_node(
+            tmp_db, node_id="ae_001", path="auto-memory/ae.md",
+            title="AE", description="Test empty approach",
+            level=0, node_type="feedback",
+            embedding=stub_embed("Test empty approach"),
+            content_hash_val="h_ae",
+        )
+        tmp_db.commit()
+        result = mt.retrieve(
+            tmp_db, "anything", k=5,
+            use_abstain=False, use_approach_angles=True,
+        )
+        assert any("approach_empty" in t for t in result["trace"]), \
+            f"Should have approach_empty trace, got {result['trace']}"
+
+    def test_approach_boost_score(self, tmp_db, stub_embed):
+        self._insert_with_angles(
+            tmp_db, stub_embed,
+            node_id="ab_001", path="Persona/food.md",
+            desc="Roommate dietary preferences vegetarian Mediterranean",
+            chash="h_food",
+            angle_queries=[
+                "What should I order for dinner tonight",
+                "Does my roommate have food restrictions",
+                "What restaurants work for everyone at home",
+            ],
+        )
+        mt.upsert_node(
+            tmp_db, node_id="ab_002", path="auto-memory/unrelated.md",
+            title="Unrelated", description="Git workflow and CI pipeline rules",
+            level=0, node_type="feedback",
+            embedding=stub_embed("Git workflow and CI pipeline rules"),
+            content_hash_val="h_unrel",
+        )
+        tmp_db.commit()
+
+        result = mt.retrieve(
+            tmp_db, "What should I order for dinner tonight", k=5,
+            use_abstain=False, use_approach_angles=True, use_fts=False,
+        )
+        paths = [r["path"] for r in result["results"]]
+        assert paths[0] == "Persona/food.md", \
+            f"Approach-angle boosted node should rank first, got {paths}"
+        assert result["results"][0]["route"] == "approach"
+
+    def test_approach_max_not_avg(self, tmp_db, stub_embed):
+        self._insert_with_angles(
+            tmp_db, stub_embed,
+            node_id="am_001", path="auto-memory/max.md",
+            desc="Completely unrelated description for max test",
+            chash="h_max",
+            angle_queries=[
+                "Exact match query for testing max",
+                "Weak unrelated angle query one",
+                "Weak unrelated angle query two",
+            ],
+        )
+        tmp_db.commit()
+
+        result = mt.retrieve(
+            tmp_db, "Exact match query for testing max", k=5,
+            use_abstain=False, use_approach_angles=True, use_fts=False,
+        )
+        top = result["results"][0]
+        assert top["path"] == "auto-memory/max.md"
+        assert top["score"] > 0.5, "Max approach score should be high (exact match)"
+
+    def test_approach_rescues_from_abstain(self, tmp_db, stub_embed):
+        self._insert_with_angles(
+            tmp_db, stub_embed,
+            node_id="ar_001", path="Persona/rescue.md",
+            desc="Very specific obscure description unlikely to match",
+            chash="h_rescue",
+            angle_queries=[
+                "Rescue query that exactly matches user prompt",
+            ],
+        )
+        tmp_db.commit()
+
+        result_no_angles = mt.retrieve(
+            tmp_db, "Rescue query that exactly matches user prompt", k=5,
+            use_abstain=True, use_approach_angles=False, use_fts=False,
+        )
+        result_with_angles = mt.retrieve(
+            tmp_db, "Rescue query that exactly matches user prompt", k=5,
+            use_abstain=True, use_approach_angles=True, use_fts=False,
+        )
+        assert result_no_angles["fell_back"] or len(result_no_angles["results"]) == 0 or \
+            result_no_angles["confidence"] < result_with_angles["confidence"], \
+            "Approach angles should improve confidence vs content-only"
+        if result_with_angles["results"]:
+            assert result_with_angles["results"][0]["path"] == "Persona/rescue.md"
+
+    def test_backfill_skips_existing(self, tmp_db, stub_embed_batch, stub_approach_gen, tmp_path):
+        vault = tmp_path / "vault"
+        vault.mkdir()
+        (vault / "test.md").write_text(
+            "---\nid: bf_001\ntitle: Test\ndescription: Backfill test node\nlevel: 1\n---\nBody content."
+        )
+        mt.upsert_node(
+            tmp_db, node_id="bf_001", path="test.md",
+            title="Test", description="Backfill test node",
+            level=1, node_type="feedback",
+            embedding=stub_embed_batch("Backfill test node"),
+            content_hash_val="h_bf",
+        )
+        tmp_db.commit()
+
+        counts1 = mt.backfill_approach_angles(tmp_db, vault)
+        assert counts1["generated"] == 1
+        assert counts1["skipped"] == 0
+
+        counts2 = mt.backfill_approach_angles(tmp_db, vault)
+        assert counts2["generated"] == 0
+        assert counts2["skipped"] == 1

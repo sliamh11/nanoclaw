@@ -91,6 +91,11 @@ DEFAULT_SCORE_GAP_THRESHOLD = float(os.environ.get("DEUS_TREE_GAP", str(_DEFAULT
 DEFAULT_USE_FTS = os.environ.get("DEUS_TREE_FTS", "1") == "1"
 DEFAULT_RRF_K = int(os.environ.get("DEUS_TREE_RRF_K", "60"))
 
+# Approach-angle embeddings: synthetic query vectors per node for vocabulary
+# mismatch bridging. Off by default until validated via --bench-snapshot.
+DEFAULT_USE_APPROACH_ANGLES = os.environ.get("DEUS_APPROACH_ANGLES", "0") == "1"
+APPROACH_ANGLE_COUNT = 3
+
 # Optimized params: load from evolution artifact if DEUS_TREE_PARAMS=1.
 if os.environ.get("DEUS_TREE_PARAMS") == "1":
     _project_root = str(Path(__file__).resolve().parent.parent)
@@ -249,6 +254,79 @@ def embed_text(text: str) -> list[float]:
     """Embed via the evolution provider. Monkey-patched in tests."""
     from evolution.providers.embeddings import embed as _embed
     return _embed(text)
+
+
+def embed_batch_text(texts: list[str]) -> list[list[float]]:
+    """Batch embed via the evolution provider. Monkey-patched in tests."""
+    from evolution.providers.embeddings import embed_batch as _embed_batch
+    return _embed_batch(texts)
+
+
+# ── Approach-angle helpers ──────────────────────────────────────────────────
+
+_APPROACH_PROMPT_TEMPLATE = (
+    "You are a memory retrieval assistant. Given a knowledge entry's description "
+    "and content, generate exactly 3 short questions (15-25 words each) that a "
+    "user might ask where this entry would be the ideal answer. Use DIFFERENT "
+    "vocabulary and framing than the original text.\n\n"
+    "Description: __DESCRIPTION__\n"
+    "Content: __BODY__\n\n"
+    'Respond in JSON: {"questions": ["...", "...", "..."]}'
+)
+
+_OLLAMA_GENERATE_TIMEOUT = float(os.environ.get("DEUS_APPROACH_TIMEOUT", "30"))
+
+
+def generate_approach_angles(description: str, body_excerpt: str) -> list[str]:
+    """Generate approach-angle queries via Ollama. Monkey-patched in tests."""
+    import http.client
+    import json as _json
+    import urllib.parse
+
+    host = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
+    model = os.environ.get("DEUS_APPROACH_MODEL", "gemma3:4b")
+
+    parsed = urllib.parse.urlparse(host)
+    hostname = parsed.hostname or "localhost"
+    port = parsed.port or 11434
+
+    prompt = _APPROACH_PROMPT_TEMPLATE.replace("__DESCRIPTION__", description).replace("__BODY__", body_excerpt)
+    payload = _json.dumps({
+        "model": model,
+        "prompt": prompt,
+        "format": "json",
+        "stream": False,
+        "options": {"temperature": 0.7},
+    }).encode()
+
+    try:
+        conn = http.client.HTTPConnection(hostname, port, timeout=_OLLAMA_GENERATE_TIMEOUT)
+        conn.request("POST", "/api/generate", body=payload,
+                     headers={"Content-Type": "application/json"})
+        resp = conn.getresponse()
+        body = resp.read()
+        conn.close()
+        if resp.status != 200:
+            print(f"WARNING: Ollama generate returned {resp.status}", file=sys.stderr)
+            return []
+        data = _json.loads(body)
+        response_text = data.get("response", "")
+        parsed_resp = _json.loads(response_text)
+        questions = parsed_resp.get("questions", [])
+        if isinstance(questions, list) and all(isinstance(q, str) for q in questions):
+            return questions[:APPROACH_ANGLE_COUNT]
+        return []
+    except Exception as exc:
+        print(f"WARNING: approach-angle generation failed: {exc}", file=sys.stderr)
+        return []
+
+
+def _approach_available(db: sqlite3.Connection) -> bool:
+    """Check if the approach_angles table exists."""
+    row = db.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='approach_angles'"
+    ).fetchone()
+    return row is not None
 
 
 # ── FTS5 helpers ─────────────────────────────────────────────────────────────
@@ -503,6 +581,21 @@ def open_db(db_path: Path = None) -> sqlite3.Connection:
         pass  # FTS5 unavailable — hybrid degrades to vector-only
 
     db.execute("""
+        CREATE TABLE IF NOT EXISTS approach_angles (
+            node_id      TEXT NOT NULL,
+            angle_idx    INTEGER NOT NULL,
+            query_text   TEXT NOT NULL,
+            embedding    BLOB NOT NULL,
+            source_hash  TEXT NOT NULL,
+            created_at   TEXT NOT NULL,
+            PRIMARY KEY (node_id, angle_idx)
+        )
+    """)
+    db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_approach_node ON approach_angles(node_id)"
+    )
+
+    db.execute("""
         CREATE TABLE IF NOT EXISTS queries_log (
             id               INTEGER PRIMARY KEY AUTOINCREMENT,
             ts               TEXT NOT NULL,
@@ -740,6 +833,8 @@ def build_tree(
             db.execute("DELETE FROM nodes_fts")
         except sqlite3.OperationalError:
             pass
+        if _approach_available(db):
+            db.execute("DELETE FROM approach_angles")
         db.commit()
         _emit_audit({
             "action": "rebuild",
@@ -985,6 +1080,7 @@ def retrieve(
     rrf_k: int = DEFAULT_RRF_K,
     gap_threshold: float = DEFAULT_SCORE_GAP_THRESHOLD,
     concepts: list[str] | None = None,
+    use_approach_angles: bool = DEFAULT_USE_APPROACH_ANGLES,
 ) -> dict[str, Any]:
     """4-phase retrieval: flat cosine → FTS5 BM25 → graph expansion → abstain.
 
@@ -1021,6 +1117,45 @@ def retrieve(
 
     trace = [f"flat_top={scored[0][1]}:{best:.3f}" if scored else "flat_empty"]
     fell_back = False
+
+    # Phase 1.5: approach-angle cosine boost (runs before FTS so boosted
+    # scores flow into RRF fusion as the cosine component).
+    if use_approach_angles and _approach_available(db):
+        aa_rows = db.execute(
+            """SELECT a.node_id, a.embedding FROM approach_angles a
+               JOIN nodes n ON a.node_id = n.id AND a.source_hash = n.content_hash
+               WHERE n.orphaned_at IS NULL"""
+        ).fetchall()
+        if aa_rows:
+            try:
+                import numpy as np
+                aa_node_ids = [r[0] for r in aa_rows]
+                aa_matrix = np.array(
+                    [deserialize(r[1]) for r in aa_rows], dtype=np.float32
+                )
+                qv_np = np.array(qv, dtype=np.float32)
+                norms = np.linalg.norm(aa_matrix, axis=1, keepdims=True)
+                norms[norms == 0] = 1.0
+                aa_matrix /= norms
+                qv_norm = qv_np / (np.linalg.norm(qv_np) or 1.0)
+                sims = aa_matrix @ qv_norm
+                approach_max: dict[str, float] = {}
+                for nid, sim in zip(aa_node_ids, sims):
+                    if nid in node_lookup:
+                        approach_max[nid] = max(approach_max.get(nid, 0.0), float(sim))
+                for i, (nid, npath, ntitle, content_score, route) in enumerate(scored):
+                    aa_score = approach_max.get(nid, 0.0)
+                    if aa_score > content_score:
+                        scored[i] = (nid, npath, ntitle, aa_score, "approach")
+                        cosine_scores[nid] = aa_score
+                scored.sort(key=lambda r: r[3], reverse=True)
+                best = scored[0][3] if scored else best
+                aa_best = max(approach_max.values()) if approach_max else 0.0
+                trace.append(f"approach_max={aa_best:.3f}")
+            except ImportError:
+                trace.append("approach_no_numpy")
+        else:
+            trace.append("approach_empty")
 
     # Phase 1b: FTS5 BM25 keyword search + RRF fusion.
     fts_hits: list[tuple[str, int]] = []
@@ -2067,6 +2202,106 @@ def benchmark_loo(
     }
 
 
+# ── Approach-angle backfill ──────────────────────────────────────────────────
+
+def backfill_approach_angles(
+    db: sqlite3.Connection,
+    vault: Path,
+    *,
+    limit: int | None = None,
+    regenerate: bool = False,
+    node_id: str | None = None,
+    batch_size: int = 32,
+) -> dict[str, int]:
+    """Generate approach-angle embeddings for nodes missing them."""
+    counts = {"total": 0, "generated": 0, "skipped": 0, "failed": 0}
+
+    if node_id:
+        rows = db.execute(
+            "SELECT id, path, description, content_hash FROM nodes WHERE id = ? AND orphaned_at IS NULL",
+            (node_id,),
+        ).fetchall()
+    else:
+        rows = db.execute(
+            "SELECT id, path, description, content_hash FROM nodes WHERE orphaned_at IS NULL"
+        ).fetchall()
+
+    pending_embeds: list[tuple[str, int, str, str]] = []  # (node_id, idx, query, hash)
+
+    for nid, npath, ndesc, chash in rows:
+        if limit is not None and counts["generated"] >= limit:
+            break
+        counts["total"] += 1
+
+        if not regenerate:
+            existing = db.execute(
+                "SELECT 1 FROM approach_angles WHERE node_id = ? AND source_hash = ?",
+                (nid, chash),
+            ).fetchone()
+            if existing:
+                counts["skipped"] += 1
+                continue
+
+        p = vault / npath
+        if not p.exists():
+            if is_external_namespace(npath):
+                ext_dir = os.environ.get(EXTERNAL_DIR_ENV)
+                if ext_dir:
+                    filename = npath[len(EXTERNAL_NAMESPACE):]
+                    p = Path(ext_dir).expanduser() / filename
+                if not p.exists():
+                    counts["failed"] += 1
+                    continue
+            else:
+                counts["failed"] += 1
+                continue
+
+        content = p.read_text(encoding="utf-8", errors="replace")
+        embed_src = embedding_source(ndesc, content) if is_external_namespace(npath) else ndesc
+        body_excerpt = embed_src
+
+        questions = generate_approach_angles(ndesc, body_excerpt)
+        if not questions:
+            counts["failed"] += 1
+            print(f"  WARN: no angles generated for {npath}", file=sys.stderr)
+            continue
+
+        for idx, q in enumerate(questions):
+            pending_embeds.append((nid, idx, q, chash))
+
+        counts["generated"] += 1
+        print(f"  [{counts['generated']}/{len(rows)}] Generated {len(questions)} angles for {npath}", file=sys.stderr)
+
+        if len(pending_embeds) >= batch_size:
+            texts = [pe[2] for pe in pending_embeds]
+            vecs = embed_batch_text(texts)
+            now = _utc_iso()
+            for (pe_nid, pe_idx, pe_q, pe_hash), vec in zip(pending_embeds, vecs):
+                db.execute(
+                    """INSERT OR REPLACE INTO approach_angles
+                       (node_id, angle_idx, query_text, embedding, source_hash, created_at)
+                       VALUES (?, ?, ?, ?, ?, ?)""",
+                    (pe_nid, pe_idx, pe_q, serialize(vec), pe_hash, now),
+                )
+            db.commit()
+            pending_embeds.clear()
+
+    if pending_embeds:
+        texts = [pe[2] for pe in pending_embeds]
+        vecs = embed_batch_text(texts)
+        now = _utc_iso()
+        for (pe_nid, pe_idx, pe_q, pe_hash), vec in zip(pending_embeds, vecs):
+            db.execute(
+                """INSERT OR REPLACE INTO approach_angles
+                   (node_id, angle_idx, query_text, embedding, source_hash, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (pe_nid, pe_idx, pe_q, serialize(vec), pe_hash, now),
+            )
+        db.commit()
+
+    return counts
+
+
 # ── CLI ───────────────────────────────────────────────────────────────────────
 
 def main(argv: list[str] | None = None) -> int:
@@ -2129,6 +2364,13 @@ def main(argv: list[str] | None = None) -> int:
     p_ext = sub.add_parser("reindex-external", help="Index auto-memory files from DEUS_AUTO_MEMORY_DIR")
     p_ext.add_argument("--skip-embed", action="store_true", help="Skip embedding API calls")
     p_ext.add_argument("--json", action="store_true")
+
+    p_angles = sub.add_parser("backfill-angles", help="Generate approach-angle embeddings for all nodes")
+    p_angles.add_argument("--limit", type=int, help="Process at most N nodes")
+    p_angles.add_argument("--regenerate", action="store_true", help="Force regeneration even for fresh nodes")
+    p_angles.add_argument("--node-id", help="Process a single node")
+    p_angles.add_argument("--batch-size", type=int, default=32)
+    p_angles.add_argument("--json", action="store_true")
 
     p_bench = sub.add_parser("benchmark", help="Run benchmark on labeled dataset")
     p_bench.add_argument("dataset_jsonl", help="Path to JSONL benchmark dataset")
@@ -2249,6 +2491,20 @@ def main(argv: list[str] | None = None) -> int:
                 f"id_written={counts['id_written']} "
                 f"skipped={counts['skipped']}"
             )
+        return 0
+
+    if args.cmd == "backfill-angles":
+        counts = backfill_approach_angles(
+            db, vault,
+            limit=args.limit,
+            regenerate=args.regenerate,
+            node_id=args.node_id,
+            batch_size=args.batch_size,
+        )
+        if args.json:
+            print(json.dumps(counts, indent=2))
+        else:
+            print(f"Done: {counts['generated']} generated, {counts['skipped']} skipped, {counts['failed']} failed")
         return 0
 
     if args.cmd == "calibrate":
