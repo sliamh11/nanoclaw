@@ -95,6 +95,7 @@ DEFAULT_RRF_K = int(os.environ.get("DEUS_TREE_RRF_K", "60"))
 # mismatch bridging. Off by default until validated via --bench-snapshot.
 DEFAULT_USE_APPROACH_ANGLES = os.environ.get("DEUS_APPROACH_ANGLES", "0") == "1"
 APPROACH_ANGLE_COUNT = 3
+APPROACH_MIN_SCORE = float(os.environ.get("DEUS_APPROACH_MIN", "0.55"))
 
 # Optimized params: load from evolution artifact if DEUS_TREE_PARAMS=1.
 if os.environ.get("DEUS_TREE_PARAMS") == "1":
@@ -1145,7 +1146,7 @@ def retrieve(
                         approach_max[nid] = max(approach_max.get(nid, 0.0), float(sim))
                 for i, (nid, npath, ntitle, content_score, route) in enumerate(scored):
                     aa_score = approach_max.get(nid, 0.0)
-                    if aa_score > content_score:
+                    if aa_score > content_score and aa_score >= APPROACH_MIN_SCORE:
                         scored[i] = (nid, npath, ntitle, aa_score, "approach")
                         cosine_scores[nid] = aa_score
                 scored.sort(key=lambda r: r[3], reverse=True)
