@@ -93,7 +93,7 @@ DEFAULT_RRF_K = int(os.environ.get("DEUS_TREE_RRF_K", "60"))
 
 # Approach-angle embeddings: synthetic query vectors per node for vocabulary
 # mismatch bridging. Off by default until validated via --bench-snapshot.
-DEFAULT_USE_APPROACH_ANGLES = os.environ.get("DEUS_APPROACH_ANGLES", "0") == "1"
+DEFAULT_USE_APPROACH_ANGLES = os.environ.get("DEUS_APPROACH_ANGLES", "1") == "1"
 APPROACH_ANGLE_COUNT = 3
 APPROACH_MIN_SCORE = float(os.environ.get("DEUS_APPROACH_MIN", "0.55"))
 
