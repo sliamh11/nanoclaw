@@ -1452,6 +1452,12 @@ $STARTUP_INSTRUCTION"
     shift
     exec node "$SCRIPT_DIR/dist/solutions/cli.js" "$@"
     ;;
+  sweep)
+    shift
+    local bench_file="${1:-$SCRIPT_DIR/scripts/tests/fixtures/memory_tree_queries.jsonl}"
+    echo "Running threshold sweep on $(wc -l < "$bench_file" | tr -d ' ') queries..."
+    exec python3 "$SCRIPT_DIR/scripts/memory_tree.py" calibrate-sweep "$bench_file" --json
+    ;;
   tui)
     shift
     local tui_bin="$SCRIPT_DIR/tui/target/release/deus-tui"
@@ -1462,7 +1468,7 @@ $STARTUP_INSTRUCTION"
     exec "$tui_bin" "$@"
     ;;
   *)
-    echo "Usage: deus [claude|codex] [home|auth|web|backend|gcal|listen|logs|solution|tui]"
+    echo "Usage: deus [claude|codex] [home|auth|web|backend|gcal|listen|logs|solution|sweep|tui]"
     echo ""
     echo "  deus            Launch in current directory (external project mode if not ~/deus)"
     echo "  deus codex      Launch with Codex (OpenAI) for this session"
@@ -1475,6 +1481,7 @@ $STARTUP_INSTRUCTION"
     echo "  deus listen     Record from mic, transcribe, and copy to clipboard"
     echo "  deus logs       Review system health logs (rotate|review|summary|pinned)"
     echo "  deus solution   Manage solution atoms (list|search|add)"
+    echo "  deus sweep      Run threshold calibration sweep against benchmark queries"
     echo "  deus tui        Interactive terminal UI (set tui_default=true in config to use by default)"
     ;;
 esac

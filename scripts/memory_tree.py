@@ -1164,6 +1164,8 @@ def retrieve(
     gap_threshold: float = DEFAULT_SCORE_GAP_THRESHOLD,
     concepts: list[str] | None = None,
     use_approach_angles: bool = DEFAULT_USE_APPROACH_ANGLES,
+    coverage_threshold: float = APPROACH_COVERAGE_THRESHOLD,
+    content_cap: float = COVERAGE_CONTENT_CAP,
 ) -> dict[str, Any]:
     """4-phase retrieval: flat cosine → FTS5 BM25 → graph expansion → abstain.
 
@@ -1319,10 +1321,10 @@ def retrieve(
     # vector-only would surface.
     cosine_sorted = sorted(cosine_scores.values(), reverse=True)
     if (use_abstain and aa_best > 0
-            and aa_best < APPROACH_COVERAGE_THRESHOLD
-            and best < COVERAGE_CONTENT_CAP):
+            and aa_best < coverage_threshold
+            and best < content_cap):
         fell_back = True
-        trace.append(f"abstain:coverage={aa_best:.3f}<{APPROACH_COVERAGE_THRESHOLD}")
+        trace.append(f"abstain:coverage={aa_best:.3f}<{coverage_threshold}")
         top = []
     elif use_abstain and best < abstain_threshold:
         fell_back = True
@@ -2011,6 +2013,90 @@ def calibrate(db: sqlite3.Connection, labeled: list[dict[str, Any]]) -> dict[str
     }
 
 
+def calibrate_sweep(
+    db: sqlite3.Connection,
+    dataset: list[dict[str, Any]],
+    *,
+    k: int = 5,
+    min_recall: float = 0.70,
+) -> dict[str, Any]:
+    """Grid search for optimal thresholds using Pareto selection.
+
+    Per benchmark-regression-gate.md §3, recall and abstain_accuracy are
+    kept separate — never blended into a single score. The sweep finds
+    combos where recall >= min_recall, then ranks by abstain_accuracy.
+    """
+    import itertools
+
+    # Pre-cache query embeddings so Ollama isn't called per-combo.
+    _cache: dict[str, list[float]] = {}
+    for item in dataset:
+        q = item["query"]
+        if q not in _cache:
+            _cache[q] = embed_text(q)
+
+    _orig_embed = embed_text
+
+    def _cached_embed(text: str) -> list[float]:
+        if text in _cache:
+            return _cache[text]
+        return _orig_embed(text)
+
+    import memory_tree as _self
+    _self.embed_text = _cached_embed
+
+    abstain_vals = [round(x, 2) for x in _frange(0.25, 0.41, 0.03)]
+    gap_vals = [round(x, 2) for x in _frange(0.02, 0.09, 0.02)]
+    coverage_vals = [round(x, 2) for x in _frange(0.40, 0.61, 0.05)]
+    cap_vals = [round(x, 2) for x in _frange(0.30, 0.46, 0.05)]
+
+    results: list[dict[str, Any]] = []
+    try:
+        for abstain_t, gap_t, cov_t, cap_t in itertools.product(
+            abstain_vals, gap_vals, coverage_vals, cap_vals,
+        ):
+            r = benchmark(db, dataset, k=k, abstain_threshold=abstain_t,
+                          gap_threshold=gap_t, use_fts=True,
+                          coverage_threshold=cov_t, content_cap=cap_t)
+
+            results.append({
+                "abstain_threshold": abstain_t,
+                "gap_threshold": gap_t,
+                "coverage_threshold": cov_t,
+                "content_cap": cap_t,
+                "recall": r["recall_at_k"],
+                "mrr": r["mrr_at_k"],
+                "abstain_accuracy": r.get("abstain_accuracy", 0.0),
+            })
+    finally:
+        _self.embed_text = _orig_embed
+
+    feasible = [r for r in results if r["recall"] >= min_recall]
+    feasible.sort(key=lambda x: x["abstain_accuracy"], reverse=True)
+    all_sorted = sorted(results, key=lambda x: (x["recall"], x["abstain_accuracy"]), reverse=True)
+
+    return {
+        "best": feasible[0] if feasible else all_sorted[0],
+        "pareto_top_5": feasible[:5] if feasible else all_sorted[:5],
+        "total_combos": len(results),
+        "feasible_count": len(feasible),
+        "min_recall_constraint": min_recall,
+        "current_defaults": {
+            "abstain_threshold": DEFAULT_ABSTAIN_THRESHOLD,
+            "gap_threshold": DEFAULT_SCORE_GAP_THRESHOLD,
+            "coverage_threshold": APPROACH_COVERAGE_THRESHOLD,
+            "content_cap": COVERAGE_CONTENT_CAP,
+        },
+    }
+
+
+def _frange(start: float, stop: float, step: float):
+    v = start
+    while v < stop:
+        yield v
+        v += step
+
+
 # ── Benchmark ─────────────────────────────────────────────────────────────────
 
 def benchmark(
@@ -2026,6 +2112,8 @@ def benchmark(
     use_abstain: bool = True,
     use_fts: bool = DEFAULT_USE_FTS,
     wrong_confident_score: float = 0.65,
+    coverage_threshold: float = APPROACH_COVERAGE_THRESHOLD,
+    content_cap: float = COVERAGE_CONTENT_CAP,
 ) -> dict[str, Any]:
     """Run dataset queries, compute recall@k, MRR@k, per-tag breakdown, latency.
 
@@ -2069,6 +2157,8 @@ def benchmark(
             use_see_also=use_see_also,
             use_abstain=use_abstain,
             use_fts=use_fts,
+            coverage_threshold=coverage_threshold,
+            content_cap=content_cap,
         )
         latencies.append(_time.monotonic() - t0)
 
@@ -2481,6 +2571,10 @@ def main(argv: list[str] | None = None) -> int:
     p_calib = sub.add_parser("calibrate", help="Fit thresholds from labeled data")
     p_calib.add_argument("labeled_jsonl", help="Path to labeled dataset (JSONL)")
 
+    p_sweep = sub.add_parser("calibrate-sweep", help="Grid search for optimal thresholds")
+    p_sweep.add_argument("dataset_jsonl", help="Path to JSONL benchmark dataset")
+    p_sweep.add_argument("--json", action="store_true")
+
     sub.add_parser("manifest", help="Generate thin manifest from all indexed nodes")
 
     p_ext = sub.add_parser("reindex-external", help="Index auto-memory files from DEUS_AUTO_MEMORY_DIR")
@@ -2678,6 +2772,23 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "calibrate":
         data = [json.loads(l) for l in Path(args.labeled_jsonl).read_text().splitlines() if l.strip()]
         print(json.dumps(calibrate(db, data), indent=2))
+        return 0
+
+    if args.cmd == "calibrate-sweep":
+        data = [json.loads(l) for l in Path(args.dataset_jsonl).read_text().splitlines() if l.strip()]
+        result = calibrate_sweep(db, data)
+        if args.json:
+            print(json.dumps(result, indent=2))
+        else:
+            b = result["best"]
+            c = result["current_defaults"]
+            print(f"Best (recall>={result['min_recall_constraint']}): "
+                  f"abstain={b['abstain_threshold']}, gap={b['gap_threshold']}, "
+                  f"coverage={b['coverage_threshold']}, cap={b['content_cap']}")
+            print(f"  recall={b['recall']:.3f}, mrr={b['mrr']:.3f}, abstain_acc={b['abstain_accuracy']:.3f}")
+            print(f"Current: abstain={c['abstain_threshold']}, gap={c['gap_threshold']}, "
+                  f"coverage={c['coverage_threshold']}, cap={c['content_cap']}")
+            print(f"Searched {result['total_combos']} combos, {result['feasible_count']} feasible")
         return 0
 
     if args.cmd == "benchmark":
