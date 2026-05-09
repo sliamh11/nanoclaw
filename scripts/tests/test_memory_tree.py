@@ -1309,7 +1309,7 @@ class TestApproachAngles:
 
 
 class TestEntityCoverage:
-    """Tests for entity coverage manifest (Phase 2.5)."""
+    """Tests for entity coverage manifest."""
 
     def test_extract_entities_basic(self):
         ents = mt.extract_entities("university student enrolled in math physics program")
