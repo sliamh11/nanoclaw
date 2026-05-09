@@ -302,6 +302,7 @@ def generate_approach_angles(description: str, body_excerpt: str) -> list[str]:
         "prompt": prompt,
         "format": "json",
         "stream": False,
+        "think": False,
         "options": {"temperature": 0.7},
     }).encode()
 
