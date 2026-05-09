@@ -88,6 +88,48 @@ def _log_retrieval(
         pass
 
 
+ATOM_DIST_THRESHOLD = float(os.environ.get("DEUS_ATOM_DIST", "1.2"))
+
+
+def _atom_fallback(query: str, k: int) -> str | None:
+    """Best-effort fallback: query atoms when tree abstains. Returns None on any failure."""
+    try:
+        import memory_indexer as mi
+
+        mi_db = mi.open_db()
+        count = mi_db.execute(
+            "SELECT COUNT(*) FROM entries WHERE type = 'atom' AND orphaned_at IS NULL"
+        ).fetchone()[0]
+        if count == 0:
+            mi_db.close()
+            return None
+
+        q_vec = mi.embed(query)
+        rows = mi_db.execute(
+            """SELECT e.tldr, v.distance
+               FROM embeddings v JOIN entries e ON e.id = v.rowid
+               WHERE v.embedding MATCH ? AND k = ?
+               AND e.type = 'atom' AND e.orphaned_at IS NULL
+               ORDER BY v.distance LIMIT ?""",
+            [mi.serialize(q_vec), k * 3, k],
+        ).fetchall()
+        mi_db.close()
+
+        # 1.2 is a starting heuristic — not yet calibrated against the atom corpus.
+        good = [(tldr, dist) for tldr, dist in rows if dist < ATOM_DIST_THRESHOLD]
+        if not good:
+            return None
+
+        lines = ["=== Auto-retrieved memory (atom fallback) ==="]
+        for tldr, dist in good:
+            lines.append(f"- {tldr}")
+        lines.append("=== End auto-retrieved memory ===")
+        return "\n".join(lines)
+    except Exception as exc:
+        print(f"[deus] atom_fallback failed: {exc}", file=sys.stderr)
+        return None
+
+
 def recall(
     query: str,
     *,
@@ -113,6 +155,19 @@ def recall(
         raw = mt.retrieve(db, query, k=k, abstain_threshold=threshold, concepts=concepts)
     finally:
         db.close()
+
+    if raw["fell_back"]:
+        atom_context = _atom_fallback(query, k)
+        if atom_context:
+            raw["atom_fallback"] = True
+            _log_retrieval(query, raw, source)
+            return {
+                "context": atom_context,
+                "paths": [],
+                "confidence": raw["confidence"],
+                "fell_back": False,
+                "atom_fallback": True,
+            }
 
     context = _format_context(raw["results"], raw["fell_back"])
     paths = [r["path"] for r in raw["results"]] if not raw["fell_back"] else []
