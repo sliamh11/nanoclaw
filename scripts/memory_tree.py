@@ -97,11 +97,8 @@ DEFAULT_USE_APPROACH_ANGLES = os.environ.get("DEUS_APPROACH_ANGLES", "1") == "1"
 APPROACH_ANGLE_COUNT = 3
 APPROACH_MIN_SCORE = float(os.environ.get("DEUS_APPROACH_MIN", "0.55"))
 APPROACH_ALPHA = float(os.environ.get("DEUS_APPROACH_ALPHA", "0.0"))
-
-# Entity coverage: penalize confidence when query entities have no overlap
-# with any node's entity set. Soft penalty, not hard gate.
-DEFAULT_USE_ENTITY_CHECK = os.environ.get("DEUS_ENTITY_CHECK", "0") == "1"
-ENTITY_PENALTY = float(os.environ.get("DEUS_ENTITY_PENALTY", "0.85"))
+APPROACH_COVERAGE_THRESHOLD = float(os.environ.get("DEUS_APPROACH_COVERAGE", "0.50"))
+COVERAGE_CONTENT_CAP = float(os.environ.get("DEUS_COVERAGE_CAP", "0.35"))
 
 # Optimized params: load from evolution artifact if DEUS_TREE_PARAMS=1.
 if os.environ.get("DEUS_TREE_PARAMS") == "1":
@@ -274,8 +271,10 @@ def embed_batch_text(texts: list[str]) -> list[list[float]]:
 _APPROACH_PROMPT_TEMPLATE = (
     "You are a memory retrieval assistant. Given a knowledge entry's description "
     "and content, generate exactly 3 short questions (15-25 words each) that a "
-    "user might ask where this entry would be the ideal answer. Use DIFFERENT "
-    "vocabulary and framing than the original text.\n\n"
+    "user might ask where this entry would be the ideal answer. Each question "
+    "MUST use different vocabulary AND a different tone: one casual/first-person "
+    '("what\'s my..."), one formal/third-person ("does the user..."), and one '
+    "indirect/contextual. Avoid repeating words from the original text.\n\n"
     "Description: __DESCRIPTION__\n"
     "Content: __BODY__\n\n"
     'Respond in JSON: {"questions": ["...", "...", "..."]}'
@@ -291,7 +290,7 @@ def generate_approach_angles(description: str, body_excerpt: str) -> list[str]:
     import urllib.parse
 
     host = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
-    model = os.environ.get("DEUS_APPROACH_MODEL", "gemma3:4b")
+    model = os.environ.get("DEUS_APPROACH_MODEL", "gemma4:e4b")
 
     parsed = urllib.parse.urlparse(host)
     hostname = parsed.hostname or "localhost"
@@ -761,8 +760,6 @@ def upsert_node(
     if angle_rows:
         fts_body = fts_body + " " + " ".join(r[0] for r in angle_rows)
     _fts_upsert(db, node_id, title, description, fts_body)
-    if DEFAULT_USE_ENTITY_CHECK:
-        _upsert_entities(db, node_id, title, description)
 
 
 def upsert_edge(
@@ -1202,6 +1199,7 @@ def retrieve(
 
     trace = [f"flat_top={scored[0][1]}:{best:.3f}" if scored else "flat_empty"]
     fell_back = False
+    aa_best = 0.0
 
     # Phase 1.5: approach-angle cosine boost (runs before FTS so boosted
     # scores flow into RRF fusion as the cosine component).
@@ -1315,18 +1313,17 @@ def retrieve(
         top = merged
         trace.append(f"expanded→{len(expanded)}")
 
-    if use_abstain and _entities_available(db) and DEFAULT_USE_ENTITY_CHECK:
-        if not _query_entity_overlap(db, query):
-            best *= ENTITY_PENALTY
-            for nid in cosine_scores:
-                cosine_scores[nid] *= ENTITY_PENALTY
-            trace.append(f"entity_penalty={ENTITY_PENALTY}")
-
-    # Phase 3: abstain gates on raw cosine scores (not RRF order).
-    # Compute gap from cosine-sorted scores so RRF reordering can't
-    # accidentally trigger abstain on queries that vector-only would surface.
+    # Phase 3: abstain gates on raw cosine scores (not RRF order) so
+    # RRF reordering can't accidentally trigger abstain on queries that
+    # vector-only would surface.
     cosine_sorted = sorted(cosine_scores.values(), reverse=True)
-    if use_abstain and best < abstain_threshold:
+    if (use_abstain and aa_best > 0
+            and aa_best < APPROACH_COVERAGE_THRESHOLD
+            and best < COVERAGE_CONTENT_CAP):
+        fell_back = True
+        trace.append(f"abstain:coverage={aa_best:.3f}<{APPROACH_COVERAGE_THRESHOLD}")
+        top = []
+    elif use_abstain and best < abstain_threshold:
         fell_back = True
         trace.append("abstain:threshold")
         top = []

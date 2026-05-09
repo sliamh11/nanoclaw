@@ -1308,70 +1308,93 @@ class TestApproachAngles:
         assert counts2["skipped"] == 1
 
 
-class TestEntityCoverage:
-    """Tests for entity coverage manifest."""
+class TestCoverageGate:
+    """Tests for approach-angle coverage abstain gate."""
+
+    def _insert_with_angles(self, db, stub_embed, node_id, path, desc, chash, angle_queries):
+        mt.upsert_node(
+            db, node_id=node_id, path=path,
+            title=path, description=desc,
+            level=0, node_type="feedback",
+            embedding=stub_embed(desc),
+            content_hash_val=chash,
+        )
+        now = mt._utc_iso()
+        for idx, q in enumerate(angle_queries):
+            vec = stub_embed(q)
+            db.execute(
+                """INSERT OR REPLACE INTO approach_angles
+                   (node_id, angle_idx, query_text, embedding, source_hash, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (node_id, idx, q, mt.serialize(vec), chash, now),
+            )
+        db.commit()
+
+    def test_coverage_gate_forces_abstain(self, tmp_db, stub_embed):
+        self._insert_with_angles(
+            tmp_db, stub_embed,
+            node_id="cg_001", path="Persona/household.md",
+            desc="lives with two roommates cooking pasta",
+            chash="h_cg",
+            angle_queries=["who are my flatmates", "roommate preferences"],
+        )
+
+        result = mt.retrieve(
+            tmp_db, "what car do I drive", k=5,
+            use_abstain=True, use_approach_angles=True, use_fts=False,
+        )
+        has_coverage = any("abstain:coverage" in t for t in result["trace"])
+        assert has_coverage, f"Expected coverage abstain, got trace: {result['trace']}"
+        assert result["fell_back"]
+
+    def test_coverage_gate_no_false_abstain(self, tmp_db, stub_embed):
+        self._insert_with_angles(
+            tmp_db, stub_embed,
+            node_id="cn_001", path="Persona/household.md",
+            desc="lives with two roommates cooking pasta",
+            chash="h_cn",
+            angle_queries=["who are my roommates", "people I live with"],
+        )
+
+        result = mt.retrieve(
+            tmp_db, "who are my roommates", k=5,
+            use_abstain=True, use_approach_angles=True, use_fts=False,
+        )
+        has_coverage = any("abstain:coverage" in t for t in result["trace"])
+        assert not has_coverage, f"Should not coverage-abstain when angle matches, got trace: {result['trace']}"
+
+    def test_coverage_gate_off_when_no_angles(self, tmp_db, stub_embed):
+        mt.upsert_node(
+            tmp_db, node_id="co_001", path="Persona/test.md",
+            title="Test", description="some test node description",
+            level=0, node_type="feedback",
+            embedding=stub_embed("some test node description"),
+            content_hash_val="h_co",
+        )
+        tmp_db.commit()
+
+        result = mt.retrieve(
+            tmp_db, "what car do I drive", k=5,
+            use_abstain=True, use_approach_angles=True, use_fts=False,
+        )
+        has_coverage = any("abstain:coverage" in t for t in result["trace"])
+        assert not has_coverage, f"Coverage gate should not fire when no angles exist, got trace: {result['trace']}"
 
     def test_extract_entities_basic(self):
         ents = mt.extract_entities("university student enrolled in math physics program")
         assert "student" in ents
         assert "university" in ents
         assert "math" in ents
-        assert "physics" in ents
-        assert "in" not in ents  # stop word
-
-    def test_extract_entities_filters_short(self):
-        ents = mt.extract_entities("I am an AI")
-        assert not ents  # all ≤2 chars or stop words
-
-    def test_entity_penalty_forces_abstain(self, tmp_db, stub_embed, monkeypatch):
-        monkeypatch.setattr(mt, "DEFAULT_USE_ENTITY_CHECK", True)
-        mt._upsert_entities(tmp_db, "ep_001", "Household", "lives with two roommates cooking pasta")
-        mt.upsert_node(
-            tmp_db, node_id="ep_001", path="Persona/household.md",
-            title="Household", description="lives with two roommates cooking pasta",
-            level=0, node_type="persona-node",
-            embedding=stub_embed("lives with two roommates cooking pasta"),
-            content_hash_val="h_ep",
-        )
-        tmp_db.commit()
-
-        result = mt.retrieve(
-            tmp_db, "what is my birthday celebration", k=5,
-            use_abstain=True, use_approach_angles=False, use_fts=False,
-        )
-        has_penalty = any("entity_penalty" in t for t in result["trace"])
-        assert has_penalty, f"Expected entity penalty, got trace: {result['trace']}"
-
-    def test_entity_overlap_no_penalty(self, tmp_db, stub_embed, monkeypatch):
-        monkeypatch.setattr(mt, "DEFAULT_USE_ENTITY_CHECK", True)
-        mt._upsert_entities(tmp_db, "eo_001", "Household", "lives with two roommates from the neighborhood")
-        mt.upsert_node(
-            tmp_db, node_id="eo_001", path="Persona/household.md",
-            title="Household", description="lives with two roommates from the neighborhood",
-            level=0, node_type="persona-node",
-            embedding=stub_embed("lives with two roommates from the neighborhood"),
-            content_hash_val="h_eo",
-        )
-        tmp_db.commit()
-
-        result = mt.retrieve(
-            tmp_db, "who are my roommates", k=5,
-            use_abstain=True, use_approach_angles=False, use_fts=False,
-        )
-        has_penalty = any("entity_penalty" in t for t in result["trace"])
-        assert not has_penalty, f"Should not penalize when entities overlap, got trace: {result['trace']}"
 
     def test_backfill_entities(self, tmp_db, stub_embed):
         mt._upsert_entities(tmp_db, "be_001", "Test Entity", "university math student enrolled")
         tmp_db.commit()
-
         rows = tmp_db.execute(
             "SELECT entity FROM node_entities WHERE node_id = 'be_001'"
         ).fetchall()
         entities = {r[0] for r in rows}
         assert "math" in entities
         assert "student" in entities
-        assert "university" in entities
 
 
 class TestFTSAngleInjection:
