@@ -2,6 +2,7 @@
 
 **Status:** Accepted  
 **Date:** 2026-05-09  
+**Scope:** scripts/memory_tree.py, deus-cmd.sh  
 **Supersedes:** None  
 **Related:** benchmark-regression-gate.md, embedding-model-selection.md
 
