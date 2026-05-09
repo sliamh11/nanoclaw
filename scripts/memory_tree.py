@@ -96,6 +96,12 @@ DEFAULT_RRF_K = int(os.environ.get("DEUS_TREE_RRF_K", "60"))
 DEFAULT_USE_APPROACH_ANGLES = os.environ.get("DEUS_APPROACH_ANGLES", "1") == "1"
 APPROACH_ANGLE_COUNT = 3
 APPROACH_MIN_SCORE = float(os.environ.get("DEUS_APPROACH_MIN", "0.55"))
+APPROACH_ALPHA = float(os.environ.get("DEUS_APPROACH_ALPHA", "0.0"))
+
+# Entity coverage: penalize confidence when query entities have no overlap
+# with any node's entity set. Soft penalty, not hard gate.
+DEFAULT_USE_ENTITY_CHECK = os.environ.get("DEUS_ENTITY_CHECK", "0") == "1"
+ENTITY_PENALTY = float(os.environ.get("DEUS_ENTITY_PENALTY", "0.85"))
 
 # Optimized params: load from evolution artifact if DEUS_TREE_PARAMS=1.
 if os.environ.get("DEUS_TREE_PARAMS") == "1":
@@ -326,6 +332,62 @@ def _approach_available(db: sqlite3.Connection) -> bool:
     """Check if the approach_angles table exists."""
     row = db.execute(
         "SELECT 1 FROM sqlite_master WHERE type='table' AND name='approach_angles'"
+    ).fetchone()
+    return row is not None
+
+
+# ── Entity coverage helpers ──────────────────────────────────────────────────
+
+_ENTITY_EXTRA_STOPS = frozenset({
+    "and", "use", "name", "names", "get", "got", "like", "need", "know",
+    "tell", "order", "tonight", "today", "going", "want", "whats", "thing", "things",
+    "way", "make", "new", "old", "one", "two", "three", "good", "bad",
+    "type", "kind", "part", "set", "run", "end", "put", "let", "try",
+    "see", "say", "said", "take", "come", "look", "find", "give", "keep",
+    "still", "also", "back", "even", "well", "here", "now", "own",
+})
+
+
+def extract_entities(text: str) -> set[str]:
+    """Extract key topic-nouns from text. Pure Python, no LLM."""
+    cleaned = re.sub(r"[^a-zA-Z0-9 ]", " ", text.lower())
+    stops = FTS_STOP_WORDS | _ENTITY_EXTRA_STOPS
+    return {w for w in cleaned.split() if len(w) >= 3 and w not in stops}
+
+
+def _entities_available(db: sqlite3.Connection) -> bool:
+    row = db.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='node_entities'"
+    ).fetchone()
+    return row is not None
+
+
+def _upsert_entities(
+    db: sqlite3.Connection, node_id: str, title: str, description: str,
+) -> None:
+    """Extract and store entities for a node."""
+    entities = extract_entities(f"{title} {description}")
+    db.execute("DELETE FROM node_entities WHERE node_id = ?", (node_id,))
+    for ent in entities:
+        db.execute(
+            "INSERT OR IGNORE INTO node_entities (node_id, entity) VALUES (?, ?)",
+            (node_id, ent),
+        )
+
+
+def _query_entity_overlap(db: sqlite3.Connection, query: str) -> bool:
+    """Check if any node in the DB shares an entity with the query.
+
+    Only penalize when ≥2 query entities exist and none overlap — single
+    entity queries are too ambiguous to gate on.
+    """
+    query_ents = extract_entities(query)
+    if len(query_ents) < 2:
+        return True  # too few entities to judge
+    placeholders = ",".join("?" for _ in query_ents)
+    row = db.execute(
+        f"SELECT 1 FROM node_entities WHERE entity IN ({placeholders}) LIMIT 1",
+        list(query_ents),
     ).fetchone()
     return row is not None
 
@@ -597,6 +659,17 @@ def open_db(db_path: Path = None) -> sqlite3.Connection:
     )
 
     db.execute("""
+        CREATE TABLE IF NOT EXISTS node_entities (
+            node_id  TEXT NOT NULL,
+            entity   TEXT NOT NULL,
+            PRIMARY KEY (node_id, entity)
+        )
+    """)
+    db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_entity ON node_entities(entity)"
+    )
+
+    db.execute("""
         CREATE TABLE IF NOT EXISTS queries_log (
             id               INTEGER PRIMARY KEY AUTOINCREMENT,
             ts               TEXT NOT NULL,
@@ -680,7 +753,16 @@ def upsert_node(
             "INSERT INTO embeddings(rowid, embedding) VALUES (?, ?)",
             (rowid, serialize(embedding)),
         )
-    _fts_upsert(db, node_id, title, description, body_text or "")
+    fts_body = body_text or ""
+    angle_rows = db.execute(
+        "SELECT query_text FROM approach_angles WHERE node_id = ? AND source_hash = ?",
+        (node_id, content_hash_val),
+    ).fetchall()
+    if angle_rows:
+        fts_body = fts_body + " " + " ".join(r[0] for r in angle_rows)
+    _fts_upsert(db, node_id, title, description, fts_body)
+    if DEFAULT_USE_ENTITY_CHECK:
+        _upsert_entities(db, node_id, title, description)
 
 
 def upsert_edge(
@@ -836,6 +918,8 @@ def build_tree(
             pass
         if _approach_available(db):
             db.execute("DELETE FROM approach_angles")
+        if _entities_available(db):
+            db.execute("DELETE FROM node_entities")
         db.commit()
         _emit_audit({
             "action": "rebuild",
@@ -1146,9 +1230,11 @@ def retrieve(
                         approach_max[nid] = max(approach_max.get(nid, 0.0), float(sim))
                 for i, (nid, npath, ntitle, content_score, route) in enumerate(scored):
                     aa_score = approach_max.get(nid, 0.0)
-                    if aa_score > content_score and aa_score >= APPROACH_MIN_SCORE:
-                        scored[i] = (nid, npath, ntitle, aa_score, "approach")
-                        cosine_scores[nid] = aa_score
+                    if aa_score >= APPROACH_MIN_SCORE:
+                        blended = APPROACH_ALPHA * content_score + (1 - APPROACH_ALPHA) * aa_score
+                        if blended > content_score:
+                            scored[i] = (nid, npath, ntitle, blended, "approach")
+                            cosine_scores[nid] = blended
                 scored.sort(key=lambda r: r[3], reverse=True)
                 best = scored[0][3] if scored else best
                 aa_best = max(approach_max.values()) if approach_max else 0.0
@@ -1228,6 +1314,13 @@ def retrieve(
         merged = sorted(expanded.values(), key=lambda r: r[3], reverse=True)[:k]
         top = merged
         trace.append(f"expanded→{len(expanded)}")
+
+    if use_abstain and _entities_available(db) and DEFAULT_USE_ENTITY_CHECK:
+        if not _query_entity_overlap(db, query):
+            best *= ENTITY_PENALTY
+            for nid in cosine_scores:
+                cosine_scores[nid] *= ENTITY_PENALTY
+            trace.append(f"entity_penalty={ENTITY_PENALTY}")
 
     # Phase 3: abstain gates on raw cosine scores (not RRF order).
     # Compute gap from cosine-sorted scores so RRF reordering can't
@@ -2300,6 +2393,36 @@ def backfill_approach_angles(
             )
         db.commit()
 
+    # Re-sync FTS5 body with newly generated angle text.
+    if counts["generated"] > 0 and _fts_available(db):
+        synced = 0
+        for row in rows:
+            nid, npath = row[0], row[1]
+            nrow = db.execute(
+                "SELECT title, description, content_hash FROM nodes WHERE id = ? AND orphaned_at IS NULL",
+                (nid,),
+            ).fetchone()
+            if not nrow:
+                continue
+            ntitle, ndesc, nchash = nrow
+            angle_texts = db.execute(
+                "SELECT query_text FROM approach_angles WHERE node_id = ? AND source_hash = ?",
+                (nid, nchash),
+            ).fetchall()
+            if not angle_texts:
+                continue
+            p = vault / npath
+            if not p.exists() and is_external_namespace(npath):
+                ext_dir = os.environ.get(EXTERNAL_DIR_ENV)
+                if ext_dir:
+                    p = Path(ext_dir).expanduser() / npath[len(EXTERNAL_NAMESPACE):]
+            raw_body = _body_from_content(p.read_text(encoding="utf-8", errors="replace")) if p.exists() else ""
+            enriched = raw_body + " " + " ".join(r[0] for r in angle_texts)
+            _fts_upsert(db, nid, ntitle, ndesc, enriched)
+            synced += 1
+        db.commit()
+        print(f"  Synced FTS5 for {synced} nodes", file=sys.stderr)
+
     return counts
 
 
@@ -2372,6 +2495,11 @@ def main(argv: list[str] | None = None) -> int:
     p_angles.add_argument("--node-id", help="Process a single node")
     p_angles.add_argument("--batch-size", type=int, default=32)
     p_angles.add_argument("--json", action="store_true")
+
+    p_entities = sub.add_parser("backfill-entities", help="Extract entities for all nodes")
+    p_entities.add_argument("--json", action="store_true")
+
+    sub.add_parser("sync-fts-angles", help="Re-inject approach-angle text into FTS5 body")
 
     p_bench = sub.add_parser("benchmark", help="Run benchmark on labeled dataset")
     p_bench.add_argument("dataset_jsonl", help="Path to JSONL benchmark dataset")
@@ -2506,6 +2634,47 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(counts, indent=2))
         else:
             print(f"Done: {counts['generated']} generated, {counts['skipped']} skipped, {counts['failed']} failed")
+        return 0
+
+    if args.cmd == "backfill-entities":
+        rows = db.execute(
+            "SELECT id, title, description FROM nodes WHERE orphaned_at IS NULL"
+        ).fetchall()
+        count = 0
+        for nid, title, desc in rows:
+            _upsert_entities(db, nid, title, desc)
+            count += 1
+        db.commit()
+        result = {"total": count}
+        if args.json:
+            print(json.dumps(result, indent=2))
+        else:
+            print(f"Extracted entities for {count} nodes")
+        return 0
+
+    if args.cmd == "sync-fts-angles":
+        rows = db.execute(
+            "SELECT n.id, n.path, n.title, n.description, n.content_hash FROM nodes n WHERE n.orphaned_at IS NULL"
+        ).fetchall()
+        count = 0
+        for nid, npath, title, desc, chash in rows:
+            angle_rows = db.execute(
+                "SELECT query_text FROM approach_angles WHERE node_id = ? AND source_hash = ?",
+                (nid, chash),
+            ).fetchall()
+            if not angle_rows:
+                continue
+            p = vault / npath
+            if not p.exists() and is_external_namespace(npath):
+                ext_dir = os.environ.get(EXTERNAL_DIR_ENV)
+                if ext_dir:
+                    p = Path(ext_dir).expanduser() / npath[len(EXTERNAL_NAMESPACE):]
+            raw_body = _body_from_content(p.read_text(encoding="utf-8", errors="replace")) if p.exists() else ""
+            enriched = raw_body + " " + " ".join(r[0] for r in angle_rows)
+            _fts_upsert(db, nid, title, desc, enriched)
+            count += 1
+        db.commit()
+        print(f"Synced FTS5 with approach angles for {count} nodes")
         return 0
 
     if args.cmd == "calibrate":
