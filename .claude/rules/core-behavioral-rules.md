@@ -14,6 +14,8 @@
 - Show commit message and wait for approval before committing.
 - Source edits require plan review approval before proceeding.
 - Never proceed while a review agent is running. Wait for its verdict.
+- REVISE from any warden means re-run after fixes until SHIP. Never touch markers, commit, or proceed on REVISE — no exceptions, no "close enough," no time-pressure rationalization.
+- Quality over speed by default. Never shortcut a warden loop, skip a review round, or rationalize lower standards because of time pressure, autonomy grants, or late-session fatigue. Only skip when the user explicitly says to prioritize speed.
 - Never merge failing CI. Never use --admin/direct push except emergencies.
 
 ## Verification & Honesty
@@ -21,9 +23,13 @@
 - Delegated review findings must include grep evidence, not just conclusions.
 - Check production logs before optimizing synthetic benchmarks.
 - Predict outcome before running expensive operations. Skip if predictable.
+- Before fixing anything, identify what changed to cause it. Diagnosis before treatment — prescriptive error messages are not a substitute for root-cause investigation.
+- Before committing to any solution, evaluate alternatives. Rushing into the first fix risks introducing bugs, missing better approaches, and degrading performance. Decide, then act — never the reverse.
+- Don't solve problems that don't exist yet. Speculative hardening, premature abstractions, and features without a real caller are waste. Real usage reveals real gaps.
 
 ## Workflow
 - Feature branch before implementing. Use git worktree, never checkout in main.
+- One concern per branch. Unrelated changes bundled together are harder to review, revert, and bisect.
 - All independent work runs parallel + background. Don't ask, just do it.
 - Default subagent model is Sonnet. Escalate to Opus only with stated reason.
 - Default to cross-platform. Flag OS-specific code loudly in PRs.
@@ -31,3 +37,4 @@
 
 ## Memory & Context
 - Before implementing a feature, search memory (`memory_tree.py query "<topic>"`) for prior decisions and research. Cite the retrieved path.
+- Never duplicate content across files. When a rule or config applies in multiple places, write it once and reference it. Duplication is drift waiting to happen.
