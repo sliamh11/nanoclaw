@@ -90,6 +90,7 @@ export class McpChannelAdapter implements Channel {
         if (params.logger !== 'incoming_message') return;
 
         const chatJid = data.chat_id as string;
+        if (!chatJid) return;
         const meta = data.metadata as Record<string, unknown> | undefined;
         const msg: NewMessage = {
           id: data.id as string,

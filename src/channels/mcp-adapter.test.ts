@@ -74,6 +74,7 @@ describe('McpChannelAdapter', () => {
   it('should not crash when notification data is missing chat_id', () => {
     const opts = makeOpts();
     new McpChannelAdapter(opts);
+    expect(capturedHandlers).toHaveLength(1);
     const handler = capturedHandlers[capturedHandlers.length - 1];
 
     // data entirely absent — should return early without calling any callback
@@ -82,7 +83,7 @@ describe('McpChannelAdapter', () => {
     ).not.toThrow();
     expect(opts.onMessage).not.toHaveBeenCalled();
 
-    // data present but chat_id missing — should not throw
+    // data present but chat_id missing — source guards and must not call onMessage
     expect(() =>
       handler({
         params: {
@@ -91,10 +92,66 @@ describe('McpChannelAdapter', () => {
         },
       }),
     ).not.toThrow();
+    expect(opts.onMessage).not.toHaveBeenCalled();
+  });
+
+  it('should dispatch incoming_reaction to onReaction callback', () => {
+    const opts = makeOpts();
+    new McpChannelAdapter(opts);
+    expect(capturedHandlers).toHaveLength(1);
+    const handler = capturedHandlers[capturedHandlers.length - 1];
+
+    handler({
+      params: {
+        logger: 'incoming_reaction',
+        data: {
+          chat_id: 'group@g.us',
+          sender: 'alice@c.us',
+          sender_name: 'Alice',
+          reacted_to_message_id: 'msg-1',
+          emoji: '👍',
+          timestamp: '1234567890',
+          is_group: true,
+        },
+      },
+    });
+
+    expect(opts.onReaction).toHaveBeenCalledWith('group@g.us', {
+      chat_jid: 'group@g.us',
+      sender: 'alice@c.us',
+      sender_name: 'Alice',
+      reacted_to_message_id: 'msg-1',
+      emoji: '👍',
+      timestamp: '1234567890',
+      is_group: true,
+    });
+  });
+
+  it('should not crash on incoming_reaction when onReaction callback is absent', () => {
+    new McpChannelAdapter({ ...makeOpts(), onReaction: undefined });
+    expect(capturedHandlers).toHaveLength(1);
+    const handler = capturedHandlers[capturedHandlers.length - 1];
+
+    expect(() =>
+      handler({
+        params: {
+          logger: 'incoming_reaction',
+          data: {
+            chat_id: 'group@g.us',
+            sender: 'alice@c.us',
+            sender_name: 'Alice',
+            reacted_to_message_id: 'msg-1',
+            emoji: '👍',
+            timestamp: '1234567890',
+          },
+        },
+      }),
+    ).not.toThrow();
   });
 
   it('should call send_typing on the matching channel', async () => {
     const adapter = new McpChannelAdapter(makeOpts());
+    await adapter.connect();
     await adapter.setTyping('123@c.us', true);
 
     expect(mockCallTool).toHaveBeenCalledWith({
