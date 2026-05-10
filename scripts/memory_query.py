@@ -88,11 +88,13 @@ def _log_retrieval(
         pass
 
 
-ATOM_DIST_THRESHOLD = float(os.environ.get("DEUS_ATOM_DIST", "1.2"))
+ATOM_DIST_THRESHOLD = float(os.environ.get("DEUS_ATOM_DIST", "0"))
 
 
 def _atom_fallback(query: str, k: int) -> str | None:
     """Best-effort fallback: query atoms when tree abstains. Returns None on any failure."""
+    if ATOM_DIST_THRESHOLD <= 0:
+        return None
     try:
         import memory_indexer as mi
 
@@ -115,7 +117,6 @@ def _atom_fallback(query: str, k: int) -> str | None:
         ).fetchall()
         mi_db.close()
 
-        # 1.2 is a starting heuristic — not yet calibrated against the atom corpus.
         good = [(tldr, dist) for tldr, dist in rows if dist < ATOM_DIST_THRESHOLD]
         if not good:
             return None
