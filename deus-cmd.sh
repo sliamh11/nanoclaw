@@ -1461,8 +1461,28 @@ $STARTUP_INSTRUCTION"
     fi
     exec "$tui_bin" "$@"
     ;;
+  orchestrate)
+    shift
+    local orch_dir="$SCRIPT_DIR/src/private/orchestrator"
+    if [[ ! -d "$orch_dir" ]]; then
+      echo "Orchestrator not installed. Expected at: $orch_dir"
+      exit 1
+    fi
+    if [[ -z "$1" ]]; then
+      echo "Usage: deus orchestrate <project-path> [--issues <path>]"
+      exit 1
+    fi
+    local proj_path
+    proj_path="$(cd "$1" 2>/dev/null && pwd)" || { echo "Invalid project path: $1"; exit 1; }
+    shift
+    if [[ ! -f "$orch_dir/dist/cli.js" ]]; then
+      echo "Building orchestrator..." >&2
+      (cd "$orch_dir" && npm run build) || { echo "Orchestrator build failed"; exit 1; }
+    fi
+    exec node "$orch_dir/dist/cli.js" "$proj_path" "$@"
+    ;;
   *)
-    echo "Usage: deus [claude|codex] [home|auth|web|backend|gcal|listen|logs|solution|tui]"
+    echo "Usage: deus [claude|codex] [home|auth|web|backend|gcal|listen|logs|solution|orchestrate|tui]"
     echo ""
     echo "  deus            Launch in current directory (external project mode if not ~/deus)"
     echo "  deus codex      Launch with Codex (OpenAI) for this session"
@@ -1474,6 +1494,7 @@ $STARTUP_INSTRUCTION"
     echo "  deus gcal       Google Calendar token management (status|auth|ping)"
     echo "  deus listen     Record from mic, transcribe, and copy to clipboard"
     echo "  deus logs       Review system health logs (rotate|review|summary|pinned)"
+    echo "  deus orchestrate <path>  Run AI agent orchestrator on a project"
     echo "  deus solution   Manage solution atoms (list|search|add)"
     echo "  deus tui        Interactive terminal UI (set tui_default=true in config to use by default)"
     ;;

@@ -120,6 +120,7 @@ Commands that must remain stable across backends:
 - `deus claude`
 - `deus codex`
 - `deus openai`
+- `deus orchestrate <project-path>`
 - `DEUS_CLI_AGENT=claude|codex`
 - `DEUS_AGENT_BACKEND=claude|openai`
 - `/settings`
