@@ -341,8 +341,9 @@ fn build_message_lines(app: &App) -> Vec<Line<'static>> {
                             let was_in_code = in_code || in_diff;
                             let (rendered, new_code, new_diff) =
                                 render_markdown_line(line, in_code, in_diff);
-                            let is_heading =
-                                !in_code && !in_diff && (line.starts_with("# ") || line.starts_with("## "));
+                            let is_heading = !in_code
+                                && !in_diff
+                                && (line.starts_with("# ") || line.starts_with("## "));
                             let code_closed = was_in_code && !new_code && !new_diff;
                             in_code = new_code;
                             in_diff = new_diff;
