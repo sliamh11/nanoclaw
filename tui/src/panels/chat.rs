@@ -338,11 +338,18 @@ fn build_message_lines(app: &App) -> Vec<Line<'static>> {
                         let mut in_code = false;
                         let mut in_diff = false;
                         for line in text.lines() {
+                            let was_in_code = in_code || in_diff;
                             let (rendered, new_code, new_diff) =
                                 render_markdown_line(line, in_code, in_diff);
+                            let is_heading =
+                                !in_code && !in_diff && (line.starts_with("# ") || line.starts_with("## "));
+                            let code_closed = was_in_code && !new_code && !new_diff;
                             in_code = new_code;
                             in_diff = new_diff;
                             lines.push(rendered);
+                            if code_closed || is_heading {
+                                lines.push(Line::from(""));
+                            }
                         }
                     }
                 }
@@ -359,16 +366,24 @@ fn build_message_lines(app: &App) -> Vec<Line<'static>> {
             let mut in_code = false;
             let mut in_diff = false;
             for line in msg.content.lines() {
+                let was_in_code = in_code || in_diff;
                 let (rendered, new_code, new_diff) = render_markdown_line(line, in_code, in_diff);
+                let is_heading =
+                    !in_code && !in_diff && (line.starts_with("# ") || line.starts_with("## "));
+                let code_closed = was_in_code && !new_code && !new_diff;
                 in_code = new_code;
                 in_diff = new_diff;
                 lines.push(rendered);
+                if code_closed || is_heading {
+                    lines.push(Line::from(""));
+                }
             }
         }
         if msg_idx < session.chat_messages.len() - 1 {
             lines.push(Line::from(""));
         }
     }
+    lines.push(Line::from(""));
     lines
 }
 
@@ -630,15 +645,15 @@ fn build_input_lines(app: &App, _content_width: usize) -> (Vec<InputLine>, usize
 }
 
 fn input_panel_height(app: &App, width: u16, available_height: u16) -> u16 {
-    let content_width = width.saturating_sub(2).max(1) as usize;
+    let content_width = width.max(1) as usize;
     let (lines, _, _) = build_input_lines(app, content_width);
     let visual_rows = lines.len() as u16;
     let max_input = (available_height * 2 / 3).max(5);
-    (visual_rows + 2).min(max_input)
+    (visual_rows + 1).min(max_input)
 }
 
 fn input_cursor_position(app: &App, area: Rect, scroll: u16) -> (u16, u16) {
-    let content_width = area.width.saturating_sub(2).max(1) as usize;
+    let content_width = area.width.max(1) as usize;
     let (_, cursor_line, cursor_text) = build_input_lines(app, content_width);
 
     let prefix = if cursor_line == 0 { " › " } else { " … " };
@@ -662,19 +677,19 @@ fn input_cursor_position(app: &App, area: Rect, scroll: u16) -> (u16, u16) {
 
     let absolute_row = (row_offset + cursor_row) as u16;
     (
-        area.x + 1 + cursor_col as u16,
+        area.x + cursor_col as u16,
         area.y + 1 + absolute_row.saturating_sub(scroll),
     )
 }
 
 fn render_input(frame: &mut Frame, app: &App, area: Rect) {
-    let content_width = area.width.saturating_sub(2).max(1) as usize;
+    let content_width = area.width.max(1) as usize;
     let (lines, cursor_line, cursor_text) = build_input_lines(app, content_width);
 
     let cwd = platform::display_path(&platform::current_dir());
     let title = format!(" {} ", cwd);
 
-    let visible_rows = area.height.saturating_sub(2);
+    let visible_rows = area.height.saturating_sub(1);
 
     let prefix = if cursor_line == 0 { " › " } else { " … " };
     let cursor_display = format!("{}{}", prefix, cursor_text);
@@ -705,7 +720,7 @@ fn render_input(frame: &mut Frame, app: &App, area: Rect) {
     let text_lines: Vec<Line> = lines.into_iter().map(|line| line.line).collect();
     let input = Paragraph::new(text_lines).scroll((scroll, 0)).block(
         Block::default()
-            .borders(Borders::ALL)
+            .borders(Borders::TOP)
             .title(title)
             .title_style(theme::dim())
             .border_style(theme::accent()),
@@ -860,7 +875,7 @@ mod tests {
             0,
         );
 
-        assert_eq!(cursor_x, 2);
+        assert_eq!(cursor_x, 13);
         assert!(cursor_y > 1);
     }
 
@@ -882,13 +897,13 @@ mod tests {
             0,
         );
 
-        // Content width = 16 - 2 (borders) = 14
-        // Char-wrap of " › hello world this is a longer line" at width 14:
-        //   row 0: " › hello world" (14)
-        //   row 1: " this is a lon" (14)
-        //   row 2: "ger line"       (8)
-        // cursor_y = 0 + 1 + 2 = 3, cursor_x = 0 + 1 + 8 = 9
+        // Content width = 16 (no side borders)
+        // Char-wrap of " › hello world this is a longer line" at width 16:
+        //   row 0: " › hello world t" (16)
+        //   row 1: "his is a longer " (16)
+        //   row 2: "line"              (4)
+        // cursor_y = 0 + 1 + 2 = 3, cursor_x = 0 + 4 = 4
         assert_eq!(cy, 3);
-        assert_eq!(cx, 9);
+        assert_eq!(cx, 4);
     }
 }
