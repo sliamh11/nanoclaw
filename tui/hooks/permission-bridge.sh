@@ -29,9 +29,9 @@ fi
 
 PREVIEW=$(printf '%s' "$INPUT" | jq -r '
   .tool_input |
-  if .command then (.command | .[0:80])
+  if .command then .command
   elif .file_path then .file_path
-  elif .description then (.description | .[0:80])
+  elif .description then .description
   else ""
   end
 ' 2>/dev/null || echo "")

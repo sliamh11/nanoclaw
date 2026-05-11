@@ -331,6 +331,11 @@ pub const COMMANDS: &[CommandDef] = &[
         args: &[],
     },
     CommandDef {
+        name: "/history",
+        description: "Past sessions",
+        args: &[],
+    },
+    CommandDef {
         name: "/init",
         description: "Init CLAUDE.md",
         args: &[],
@@ -407,6 +412,7 @@ pub struct App {
 
     pub auto_compact_threshold: f64,
     pub pending_attachments: Vec<crate::clipboard::Attachment>,
+    pub clear_pending: bool,
 }
 
 // StreamChunk and parsing delegated to backend trait — see backend/mod.rs
@@ -449,6 +455,46 @@ impl App {
             .unwrap_or(0);
         let idx = (elapsed / 80) as usize % SPINNER_FRAMES.len();
         SPINNER_FRAMES[idx]
+    }
+
+    /// Returns true when the first Esc has been pressed and we are still
+    /// within the 500 ms double-tap window.
+    pub fn esc_pending_active(&self) -> bool {
+        matches!(self.esc_pending, Some(t) if t.elapsed().as_millis() < 500)
+    }
+
+    /// Non-Chat panel order used for Tab / Shift+Tab cycling.
+    const PANEL_ORDER: [Tab; 5] = [
+        Tab::Wardens,
+        Tab::Services,
+        Tab::Channels,
+        Tab::Config,
+        Tab::Status,
+    ];
+
+    /// Cycle to the next non-Chat panel (wraps around).
+    pub fn next_panel(&mut self) {
+        let idx = Self::PANEL_ORDER
+            .iter()
+            .position(|t| *t == self.tab)
+            .unwrap_or(0);
+        self.tab = Self::PANEL_ORDER[(idx + 1) % Self::PANEL_ORDER.len()];
+        self.cursor = 0;
+    }
+
+    /// Cycle to the previous non-Chat panel (wraps around).
+    pub fn prev_panel(&mut self) {
+        let idx = Self::PANEL_ORDER
+            .iter()
+            .position(|t| *t == self.tab)
+            .unwrap_or(0);
+        let prev = if idx == 0 {
+            Self::PANEL_ORDER.len() - 1
+        } else {
+            idx - 1
+        };
+        self.tab = Self::PANEL_ORDER[prev];
+        self.cursor = 0;
     }
 
     pub fn new() -> Self {
@@ -523,6 +569,7 @@ impl App {
                 })
                 .unwrap_or(0.75),
             pending_attachments: Vec::new(),
+            clear_pending: false,
         };
         app.refresh();
         app.load_history();
@@ -637,10 +684,15 @@ impl App {
         let final_msg = self.build_message_with_attachments(&msg);
 
         if matches!(self.active().chat_state, ChatState::Streaming) {
-            self.queued_messages.push(final_msg);
+            self.queued_messages.push(final_msg.clone());
+            let queued_label = format!(
+                "{}\n(queued — will send when current turn finishes)",
+                final_msg
+            );
             self.active_mut()
                 .chat_messages
-                .push(ChatMessage::simple("system", "(queued)"));
+                .push(ChatMessage::simple("system", &queued_label));
+            self.mark_chat_changed();
             self.input.clear();
             self.input_cursor = 0;
             self.suggestions.clear();
@@ -675,15 +727,17 @@ impl App {
     }
 
     fn dispatch_message(&mut self, msg: String) {
-        self.dispatch_message_for(self.active_session, msg);
+        self.dispatch_message_for(self.active_session, msg, false);
     }
 
-    fn dispatch_message_for(&mut self, session_id: SessionId, msg: String) {
+    fn dispatch_message_for(&mut self, session_id: SessionId, msg: String, skip_user_push: bool) {
         let ctx_file = self.system_context_file.clone();
         let session = self.sessions.get_mut(&session_id).unwrap();
-        session
-            .chat_messages
-            .push(ChatMessage::simple("user", &msg));
+        if !skip_user_push {
+            session
+                .chat_messages
+                .push(ChatMessage::simple("user", &msg));
+        }
         session.chat_state = ChatState::Streaming;
         session.turn_start = Some(Instant::now());
         session.last_thinking_summary = None;
@@ -806,7 +860,7 @@ impl App {
                         let code = s.code().unwrap_or(-1);
                         let _ = tx.send(backend::StreamChunk {
                             kind: ChunkKind::Error(humanize_error(&format!(
-                                "Process exited with code {}",
+                                "Something stopped unexpectedly (exit {}). Try your request again, or restart Deus if the problem persists.",
                                 code
                             ))),
                         });
@@ -817,7 +871,7 @@ impl App {
                 }
                 Err(e) => {
                     let _ = tx.send(backend::StreamChunk {
-                        kind: ChunkKind::Error(humanize_error(&format!("Failed to launch: {}", e))),
+                        kind: ChunkKind::Error(humanize_error(&format!("Couldn't start the agent ({}). Check that the container is built — run /setup to rebuild if needed.", e))),
                     });
                     let _ = tx.send(backend::StreamChunk {
                         kind: ChunkKind::Done,
@@ -869,7 +923,7 @@ impl App {
         if active_agents >= limit {
             self.active_mut().chat_messages.push(ChatMessage::simple(
                 "system",
-                &format!("At agent limit ({} streaming). Wait for one to finish or adjust DEUS_MAX_AGENTS.", limit),
+                &format!("Running the maximum number of parallel agents ({}). Wait for one to finish, or increase the limit in /config.", limit),
             ));
             return None;
         }
@@ -915,7 +969,7 @@ impl App {
 
         self.sessions.insert(id, session);
         self.session_order.push(id);
-        self.dispatch_message_for(id, prompt);
+        self.dispatch_message_for(id, prompt, false);
         Some(id)
     }
 
@@ -923,6 +977,11 @@ impl App {
         let parts: Vec<&str> = msg.splitn(2, ' ').collect();
         let cmd = parts[0];
         let arg = parts.get(1).unwrap_or(&"").trim();
+
+        // Cancel pending /clear on any non-/clear input
+        if cmd != "/clear" && self.clear_pending {
+            self.clear_pending = false;
+        }
 
         match cmd {
             "/wardens" if arg.is_empty() => {
@@ -1082,6 +1141,13 @@ impl App {
                 self.active_mut().chat_messages.push(ChatMessage::simple("system", &format!("Available commands:\n\n{}\n\nKeyboard shortcuts:\n  Ctrl+G  Open $EDITOR for long prompts\n  Ctrl+B  Parallel agent / session picker\n  Ctrl+Shift+B  Session picker (direct)\n  Ctrl+L  Clear chat\n  Ctrl+C  Cancel streaming / exit\n  Ctrl+U  Clear input line\n  Ctrl+K  Kill to end of line\n  Ctrl+Y  Yank (paste killed text)\n  Ctrl+A  Start of line\n  Ctrl+E  End of line\n  Ctrl+J  New line (multi-line input)\n  Ctrl+O  Toggle tool/thinking details\n  Ctrl+V  Paste clipboard image\n  Ctrl+D  Exit\n  Alt+B   Word left\n  Alt+F   Word right\n  ↑/↓     Input history (persistent)\n  PgUp/Dn Scroll chat\n  Esc     Dismiss suggestions > deny permission > cancel stream > quit (2x, empty input)\n  Mouse   Scroll chat (Shift+drag to select text)", help)));
                 true
             }
+            "/history" => {
+                self.active_mut().chat_messages.push(ChatMessage::simple(
+                    "system",
+                    "Session history isn't available yet. Use /compress to save this session.",
+                ));
+                true
+            }
             "/permissions" => {
                 self.handle_permissions_command(arg);
                 true
@@ -1131,7 +1197,6 @@ impl App {
                 }
                 true
             }
-            "/history" => true,
             "/init" | "/compress" | "/checkpoint" | "/compact" | "/resume" => {
                 let backend = backend::model_backend_name(&self.active().model);
                 if backend == "codex" {
@@ -1511,7 +1576,8 @@ impl App {
                         }
                         if !self.queued_messages.is_empty() {
                             let next = self.queued_messages.remove(0);
-                            self.dispatch_message(next);
+                            let sid = self.active_session;
+                            self.dispatch_message_for(sid, next, true);
                         }
                     }
                     return;
@@ -2969,7 +3035,7 @@ mod tests {
     }
 
     #[test]
-    fn history_removed_from_commands() {
-        assert!(!COMMANDS.iter().any(|c| c.name == "/history"));
+    fn history_in_commands() {
+        assert!(COMMANDS.iter().any(|c| c.name == "/history"));
     }
 }
