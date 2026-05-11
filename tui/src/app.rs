@@ -361,6 +361,11 @@ pub const COMMANDS: &[CommandDef] = &[
         args: &[],
     },
     CommandDef {
+        name: "/copy",
+        description: "Copy code block",
+        args: &[],
+    },
+    CommandDef {
         name: "/clear",
         description: "Clear chat",
         args: &[],
@@ -1195,6 +1200,47 @@ impl App {
                     self.show_session_picker = true;
                     self.picker_cursor = 0;
                 }
+                true
+            }
+            "/copy" => {
+                let blocks = crate::panels::chat::current_code_blocks();
+                if blocks.is_empty() {
+                    self.active_mut()
+                        .chat_messages
+                        .push(ChatMessage::simple("system", "No code blocks to copy."));
+                    self.mark_chat_changed();
+                    return true;
+                }
+                let idx = if arg.is_empty() {
+                    blocks.len() - 1
+                } else {
+                    match arg.parse::<usize>() {
+                        Ok(n) if n >= 1 && n <= blocks.len() => n - 1,
+                        _ => {
+                            self.active_mut().chat_messages.push(ChatMessage::simple(
+                                "system",
+                                &format!("Invalid block number. Available: 1-{}", blocks.len()),
+                            ));
+                            self.mark_chat_changed();
+                            return true;
+                        }
+                    }
+                };
+                match crate::clipboard::copy_text(&blocks[idx]) {
+                    Ok(()) => {
+                        self.active_mut().chat_messages.push(ChatMessage::simple(
+                            "system",
+                            &format!("Copied code block [{}] to clipboard.", idx + 1),
+                        ));
+                    }
+                    Err(e) => {
+                        self.active_mut().chat_messages.push(ChatMessage::simple(
+                            "system",
+                            &format!("Clipboard error: {}", e),
+                        ));
+                    }
+                }
+                self.mark_chat_changed();
                 true
             }
             "/init" | "/compress" | "/checkpoint" | "/compact" | "/resume" => {
@@ -3037,5 +3083,12 @@ mod tests {
     #[test]
     fn history_in_commands() {
         assert!(COMMANDS.iter().any(|c| c.name == "/history"));
+    }
+
+    #[test]
+    fn copy_in_commands() {
+        let cmd = COMMANDS.iter().find(|c| c.name == "/copy").unwrap();
+        assert_eq!(cmd.description, "Copy code block");
+        assert!(cmd.args.is_empty());
     }
 }

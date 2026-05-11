@@ -10,7 +10,11 @@ use crate::platform;
 use crate::theme;
 
 thread_local! {
-    static LINE_CACHE: RefCell<(SessionId, u64, Vec<Line<'static>>)> = const { RefCell::new((SessionId::MAIN, u64::MAX, Vec::new())) };
+    static LINE_CACHE: RefCell<(SessionId, u64, Vec<Line<'static>>, Vec<String>)> = const { RefCell::new((SessionId::MAIN, u64::MAX, Vec::new(), Vec::new())) };
+}
+
+pub fn current_code_blocks() -> Vec<String> {
+    LINE_CACHE.with(|cache| cache.borrow().3.clone())
 }
 
 pub fn render(frame: &mut Frame, app: &App, area: Rect) {
@@ -267,9 +271,56 @@ fn highlight_verdict(line: &str) -> Line<'static> {
     ])
 }
 
-fn build_message_lines(app: &App) -> Vec<Line<'static>> {
+fn render_markdown_text(
+    text: &str,
+    lines: &mut Vec<Line<'static>>,
+    code_blocks: &mut Vec<String>,
+    current_block: &mut Option<String>,
+) {
+    let mut in_code = false;
+    let mut in_diff = false;
+    for line in text.lines() {
+        let was_in_code = in_code || in_diff;
+        let (mut rendered, new_code, new_diff) = render_markdown_line(line, in_code, in_diff);
+        let is_heading =
+            !in_code && !in_diff && (line.starts_with("# ") || line.starts_with("## "));
+        let code_closed = was_in_code && !new_code && !new_diff;
+        in_code = new_code;
+        in_diff = new_diff;
+
+        if !was_in_code && in_code {
+            *current_block = Some(String::new());
+        } else if was_in_code && in_code {
+            if let Some(buf) = current_block.as_mut() {
+                if !buf.is_empty() {
+                    buf.push('\n');
+                }
+                buf.push_str(line);
+            }
+        } else if code_closed {
+            if let Some(buf) = current_block.take() {
+                code_blocks.push(buf);
+                let n = code_blocks.len();
+                rendered = Line::from(vec![
+                    Span::styled("  ───", theme::muted()),
+                    Span::styled(format!(" [{}]", n), theme::muted()),
+                ]);
+            }
+        }
+
+        lines.push(rendered);
+        if code_closed || is_heading {
+            lines.push(Line::from(""));
+        }
+    }
+}
+
+fn build_message_lines(app: &App) -> (Vec<Line<'static>>, Vec<String>) {
     let session = app.active();
     let mut lines: Vec<Line> = Vec::new();
+    let mut code_blocks: Vec<String> = Vec::new();
+    let mut current_block: Option<String> = None;
+
     for (msg_idx, msg) in session.chat_messages.iter().enumerate() {
         if msg.role == "system" && msg.content.starts_with("Welcome to Deus") {
             render_welcome(&mut lines);
@@ -277,7 +328,6 @@ fn build_message_lines(app: &App) -> Vec<Line<'static>> {
         }
 
         if msg.role == "assistant" && !msg.blocks.is_empty() {
-            // Collect thinking blocks — show only the last one (latest thought)
             let mut last_thinking: Option<&str> = None;
             for block in &msg.blocks {
                 if let MessageBlock::Thinking(text) = block {
@@ -335,23 +385,12 @@ fn build_message_lines(app: &App) -> Vec<Line<'static>> {
                         );
                     }
                     MessageBlock::Text(text) => {
-                        let mut in_code = false;
-                        let mut in_diff = false;
-                        for line in text.lines() {
-                            let was_in_code = in_code || in_diff;
-                            let (rendered, new_code, new_diff) =
-                                render_markdown_line(line, in_code, in_diff);
-                            let is_heading = !in_code
-                                && !in_diff
-                                && (line.starts_with("# ") || line.starts_with("## "));
-                            let code_closed = was_in_code && !new_code && !new_diff;
-                            in_code = new_code;
-                            in_diff = new_diff;
-                            lines.push(rendered);
-                            if code_closed || is_heading {
-                                lines.push(Line::from(""));
-                            }
-                        }
+                        render_markdown_text(
+                            text,
+                            &mut lines,
+                            &mut code_blocks,
+                            &mut current_block,
+                        );
                     }
                 }
             }
@@ -364,28 +403,19 @@ fn build_message_lines(app: &App) -> Vec<Line<'static>> {
                 ]));
             }
         } else {
-            let mut in_code = false;
-            let mut in_diff = false;
-            for line in msg.content.lines() {
-                let was_in_code = in_code || in_diff;
-                let (rendered, new_code, new_diff) = render_markdown_line(line, in_code, in_diff);
-                let is_heading =
-                    !in_code && !in_diff && (line.starts_with("# ") || line.starts_with("## "));
-                let code_closed = was_in_code && !new_code && !new_diff;
-                in_code = new_code;
-                in_diff = new_diff;
-                lines.push(rendered);
-                if code_closed || is_heading {
-                    lines.push(Line::from(""));
-                }
-            }
+            render_markdown_text(
+                &msg.content,
+                &mut lines,
+                &mut code_blocks,
+                &mut current_block,
+            );
         }
         if msg_idx < session.chat_messages.len() - 1 {
             lines.push(Line::from(""));
         }
     }
     lines.push(Line::from(""));
-    lines
+    (lines, code_blocks)
 }
 
 fn render_messages(frame: &mut Frame, app: &App, area: Rect) {
@@ -395,7 +425,9 @@ fn render_messages(frame: &mut Frame, app: &App, area: Rect) {
     let mut lines = LINE_CACHE.with(|cache| {
         let mut cached = cache.borrow_mut();
         if cached.0 != app.active_session || cached.1 != session.chat_version {
-            cached.2 = build_message_lines(app);
+            let (built_lines, blocks) = build_message_lines(app);
+            cached.2 = built_lines;
+            cached.3 = blocks;
             cached.0 = app.active_session;
             cached.1 = session.chat_version;
         }
@@ -906,5 +938,46 @@ mod tests {
         // cursor_y = 0 + 1 + 2 = 3, cursor_x = 0 + 4 = 4
         assert_eq!(cy, 3);
         assert_eq!(cx, 4);
+    }
+
+    #[test]
+    fn code_blocks_collected_from_markdown() {
+        let text = "Hello\n```rust\nfn main() {}\nlet x = 1;\n```\nBye\n```\nplain block\n```";
+        let mut lines = Vec::new();
+        let mut code_blocks = Vec::new();
+        let mut current_block = None;
+        render_markdown_text(text, &mut lines, &mut code_blocks, &mut current_block);
+
+        assert_eq!(code_blocks.len(), 2);
+        assert_eq!(code_blocks[0], "fn main() {}\nlet x = 1;");
+        assert_eq!(code_blocks[1], "plain block");
+    }
+
+    #[test]
+    fn closing_separator_shows_block_index() {
+        let text = "```\ncode\n```";
+        let mut lines = Vec::new();
+        let mut code_blocks = Vec::new();
+        let mut current_block = None;
+        render_markdown_text(text, &mut lines, &mut code_blocks, &mut current_block);
+
+        let closing = &lines[2];
+        let full_text: String = closing
+            .spans
+            .iter()
+            .map(|s| s.content.to_string())
+            .collect();
+        assert!(full_text.contains("[1]"));
+    }
+
+    #[test]
+    fn diff_blocks_not_collected() {
+        let text = "```diff\n+added\n-removed\n```";
+        let mut lines = Vec::new();
+        let mut code_blocks = Vec::new();
+        let mut current_block = None;
+        render_markdown_text(text, &mut lines, &mut code_blocks, &mut current_block);
+
+        assert!(code_blocks.is_empty());
     }
 }

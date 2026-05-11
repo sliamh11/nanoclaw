@@ -55,6 +55,13 @@ pub fn save_image(img: &ClipboardImage) -> io::Result<Attachment> {
     })
 }
 
+pub fn copy_text(text: &str) -> Result<(), String> {
+    arboard::Clipboard::new()
+        .map_err(|e| e.to_string())?
+        .set_text(text.to_string())
+        .map_err(|e| e.to_string())
+}
+
 // PNGs are kept alive during the session so the agent can Read them at any point.
 pub fn cleanup() {
     let _ = std::fs::remove_dir_all(cache_dir());
