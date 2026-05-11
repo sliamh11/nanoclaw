@@ -348,6 +348,21 @@ fn build_message_lines(app: &App) -> (Vec<Line<'static>>, Vec<String>) {
             continue;
         }
 
+        if msg.role == "system" && msg.content.starts_with("\u{203B} recap: ") {
+            let summary = &msg.content["\u{203B} recap: ".len()..];
+            lines.push(Line::from(vec![
+                Span::styled("  \u{203B} ", theme::muted()),
+                Span::styled("recap: ", theme::muted()),
+                Span::styled(
+                    summary.to_string(),
+                    Style::default()
+                        .fg(theme::text_dim_color())
+                        .add_modifier(Modifier::ITALIC),
+                ),
+            ]));
+            continue;
+        }
+
         if msg.role == "assistant" && !msg.blocks.is_empty() {
             let mut last_thinking: Option<&str> = None;
             for block in &msg.blocks {

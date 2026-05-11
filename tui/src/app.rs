@@ -339,11 +339,6 @@ pub const COMMANDS: &[CommandDef] = &[
         args: &[],
     },
     CommandDef {
-        name: "/recap",
-        description: "Session summary",
-        args: &[],
-    },
-    CommandDef {
         name: "/init",
         description: "Init CLAUDE.md",
         args: &[],
@@ -434,6 +429,10 @@ pub struct App {
 
     pub last_activity: Instant,
     pub recap_sent: bool,
+    pub recap_text: Option<String>,
+    pub recap_generating: bool,
+    pub recap_session: Option<SessionId>,
+    pub auto_recap: bool,
     pub last_notification: Instant,
 }
 
@@ -620,6 +619,12 @@ impl App {
 
             last_activity: Instant::now(),
             recap_sent: false,
+            recap_text: None,
+            recap_generating: false,
+            recap_session: None,
+            auto_recap: config::deus::read_key("auto_recap")
+                .map(|v| v != "false")
+                .unwrap_or(true),
             last_notification: Instant::now(),
         };
         app.refresh();
@@ -723,9 +728,7 @@ impl App {
         self.input_history.push(msg.clone());
         self.history_index = None;
 
-        if msg != "/recap" {
-            self.recap_sent = false;
-        }
+        self.recap_sent = false;
 
         let handled = self.handle_command(&msg);
         if handled {
@@ -1295,12 +1298,6 @@ impl App {
                 self.mark_chat_changed();
                 true
             }
-            "/recap" => {
-                let recap_prompt = "Summarize what we've accomplished in this session in 2-3 concise bullet points. Be specific about what was done, not generic.".to_string();
-                self.dispatch_message(recap_prompt);
-                self.recap_sent = true;
-                true
-            }
             "/init" | "/compress" | "/checkpoint" | "/compact" | "/resume" => {
                 let backend = backend::model_backend_name(&self.active().model);
                 if backend == "codex" {
@@ -1450,6 +1447,64 @@ impl App {
         let ids: Vec<SessionId> = self.sessions.keys().copied().collect();
         for id in ids {
             self.poll_session(id);
+        }
+        self.check_idle_recap();
+    }
+
+    fn check_idle_recap(&mut self) {
+        if !self.auto_recap || self.recap_sent || self.recap_generating || self.recap_text.is_some()
+        {
+            return;
+        }
+        let main = match self.sessions.get(&SessionId::MAIN) {
+            Some(s) => s,
+            None => return,
+        };
+        if main.turn_count < 3 || !matches!(main.chat_state, ChatState::Idle) {
+            return;
+        }
+        if self.last_activity.elapsed() <= Duration::from_secs(180) {
+            return;
+        }
+
+        let mut context = String::new();
+        let recent: Vec<&ChatMessage> = main
+            .chat_messages
+            .iter()
+            .filter(|m| m.role == "user" || m.role == "assistant")
+            .collect();
+        let start = recent.len().saturating_sub(20);
+        for msg in &recent[start..] {
+            let prefix = if msg.role == "user" {
+                "User"
+            } else {
+                "Assistant"
+            };
+            let text: String = msg.content.chars().take(500).collect();
+            context.push_str(&format!("{}: {}\n", prefix, text));
+        }
+
+        let recap_prompt = format!(
+            "Here is a conversation transcript:\n\n{}\n\nSummarize what was accomplished in this session in one concise sentence. Focus on concrete actions taken, not generic descriptions. Do not use markdown formatting.",
+            context
+        );
+
+        self.recap_generating = true;
+        if let Some(id) = self.spawn_agent(recap_prompt, None, Some("low".to_string())) {
+            self.recap_session = Some(id);
+        } else {
+            self.recap_generating = false;
+        }
+    }
+
+    pub fn consume_recap_if_ready(&mut self) {
+        if let Some(text) = self.recap_text.take() {
+            let msg = format!("\u{203B} recap: {}", text);
+            if let Some(main) = self.sessions.get_mut(&SessionId::MAIN) {
+                main.chat_messages.push(ChatMessage::simple("system", &msg));
+                main.mark_chat_changed();
+            }
+            self.recap_sent = true;
         }
     }
 
@@ -1635,6 +1690,23 @@ impl App {
                     session.mark_chat_changed();
                     if let Some(ref pb) = self.permission_bridge {
                         pb.cleanup_session(session_id);
+                    }
+                    if self.recap_session == Some(session_id) {
+                        if !session.had_error {
+                            self.recap_text = Some(session.completion_summary());
+                        }
+                        self.recap_generating = false;
+                        self.recap_session = None;
+                        self.sessions.remove(&session_id);
+                        self.session_order.retain(|&sid| sid != session_id);
+                        if self.picker_cursor >= self.session_order.len() && self.picker_cursor > 0
+                        {
+                            self.picker_cursor -= 1;
+                        }
+                        if self.session_order.len() <= 1 {
+                            self.show_session_picker = false;
+                        }
+                        return;
                     }
                     if session_id != SessionId::MAIN {
                         session.session_state = if session.had_error {

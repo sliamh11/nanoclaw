@@ -65,6 +65,7 @@ fn main() -> io::Result<()> {
         if event::poll(Duration::from_millis(50))? {
             let ev = event::read()?;
             app.last_activity = Instant::now();
+            app.consume_recap_if_ready();
             match ev {
                 Event::Paste(ref text) if app.tab == Tab::Chat => {
                     // Bracketed paste with empty payload = clipboard holds an image, not text
