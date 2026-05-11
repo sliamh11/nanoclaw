@@ -19,18 +19,34 @@ fn theme() -> &'static Theme {
     })
 }
 
-pub fn highlight_line(text: &str, lang: &str) -> Option<Vec<Span<'static>>> {
-    let syntax = ss().find_syntax_by_token(lang)?;
-    let mut h = HighlightLines::new(syntax, theme());
-    let regions = h.highlight_line(text, ss()).ok()?;
-    let spans = regions
-        .into_iter()
-        .map(|(style, text)| {
-            let fg = Color::Rgb(style.foreground.r, style.foreground.g, style.foreground.b);
-            Span::styled(text.to_string(), Style::default().fg(fg))
+pub struct BlockHighlighter<'a> {
+    inner: HighlightLines<'a>,
+}
+
+impl<'a> BlockHighlighter<'a> {
+    pub fn new(lang: &str) -> Option<Self> {
+        let syntax = ss().find_syntax_by_token(lang)?;
+        Some(Self {
+            inner: HighlightLines::new(syntax, theme()),
         })
-        .collect();
-    Some(spans)
+    }
+
+    pub fn highlight_line(&mut self, text: &str) -> Option<Vec<Span<'static>>> {
+        let regions = self.inner.highlight_line(text, ss()).ok()?;
+        let spans = regions
+            .into_iter()
+            .map(|(style, text)| {
+                let fg = Color::Rgb(style.foreground.r, style.foreground.g, style.foreground.b);
+                Span::styled(text.to_string(), Style::default().fg(fg))
+            })
+            .collect();
+        Some(spans)
+    }
+}
+
+#[cfg(test)]
+fn highlight_line(text: &str, lang: &str) -> Option<Vec<Span<'static>>> {
+    BlockHighlighter::new(lang)?.highlight_line(text)
 }
 
 #[cfg(test)]

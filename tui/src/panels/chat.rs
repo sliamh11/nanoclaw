@@ -288,7 +288,7 @@ fn render_markdown_text(
 ) {
     let mut in_code = false;
     let mut in_diff = false;
-    let mut current_lang: Option<String> = None;
+    let mut highlighter: Option<crate::highlight::BlockHighlighter> = None;
     for line in text.lines() {
         let was_in_code = in_code || in_diff;
         let (mut rendered, new_code, new_diff) = render_markdown_line(line, in_code, in_diff);
@@ -300,10 +300,12 @@ fn render_markdown_text(
 
         if !was_in_code && in_code {
             *current_block = Some(String::new());
-            current_lang = extract_lang(line);
+            // diff blocks have their own coloring, skip syntax highlighting
+            highlighter =
+                extract_lang(line).and_then(|l| crate::highlight::BlockHighlighter::new(&l));
         } else if was_in_code && in_code {
-            if let Some(ref lang) = current_lang
-                && let Some(spans) = crate::highlight::highlight_line(line, lang)
+            if let Some(ref mut h) = highlighter
+                && let Some(spans) = h.highlight_line(line)
             {
                 let mut highlighted = vec![Span::styled("  │ ", theme::muted())];
                 highlighted.extend(spans);
@@ -316,7 +318,7 @@ fn render_markdown_text(
                 buf.push_str(line);
             }
         } else if code_closed {
-            current_lang = None;
+            highlighter = None;
             if let Some(buf) = current_block.take() {
                 code_blocks.push(buf);
                 let n = code_blocks.len();
@@ -343,21 +345,6 @@ fn build_message_lines(app: &App) -> (Vec<Line<'static>>, Vec<String>) {
     for (msg_idx, msg) in session.chat_messages.iter().enumerate() {
         if msg.role == "system" && msg.content.starts_with("Welcome to Deus") {
             render_welcome(&mut lines);
-            continue;
-        }
-
-        if msg.role == "system" && msg.content.starts_with("\u{203B} recap: ") {
-            let summary = &msg.content["\u{203B} recap: ".len()..];
-            lines.push(Line::from(vec![
-                Span::styled("  \u{203B} ", theme::muted()),
-                Span::styled("recap: ", theme::muted()),
-                Span::styled(
-                    summary.to_string(),
-                    Style::default()
-                        .fg(theme::text_dim_color())
-                        .add_modifier(Modifier::ITALIC),
-                ),
-            ]));
             continue;
         }
 
