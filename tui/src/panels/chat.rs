@@ -2,7 +2,7 @@ use std::cell::RefCell;
 
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
-use unicode_width::UnicodeWidthChar;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::app::{App, COMMANDS, MessageBlock, SessionId, SubagentStatus};
 use crate::bidi;
@@ -14,7 +14,7 @@ thread_local! {
 }
 
 pub fn render(frame: &mut Frame, app: &App, area: Rect) {
-    let input_height = input_panel_height(app, area.width);
+    let input_height = input_panel_height(app, area.width, area.height);
     let layout =
         Layout::vertical([Constraint::Min(0), Constraint::Length(input_height)]).split(area);
 
@@ -308,11 +308,13 @@ fn build_message_lines(app: &App) -> Vec<Line<'static>> {
                 match block {
                     MessageBlock::Thinking(_) => {}
                     MessageBlock::ToolUse { tool, detail, .. } => {
-                        lines.push(Line::from(vec![
-                            Span::styled(" ▸ ", Style::default().fg(theme::FLAME)),
-                            Span::styled(tool.clone(), theme::tool_name()),
-                            Span::styled(format!(" {}", detail), theme::tool_detail()),
-                        ]));
+                        if app.show_tools {
+                            lines.push(Line::from(vec![
+                                Span::styled(" ▸ ", Style::default().fg(theme::FLAME)),
+                                Span::styled(tool.clone(), theme::tool_name()),
+                                Span::styled(format!(" {}", detail), theme::tool_detail()),
+                            ]));
+                        }
                     }
                     MessageBlock::SubagentBlock {
                         subagent_type,
@@ -400,11 +402,95 @@ fn render_messages(frame: &mut Frame, app: &App, area: Rect) {
                 Span::styled(format!(" {} ", spinner), theme::warn()),
                 Span::styled(preview, theme::thinking()),
             ]));
+        } else {
+            lines.push(Line::from(vec![
+                Span::styled(" ◇ ", theme::warn()),
+                Span::styled("working...", theme::thinking()),
+            ]));
         }
     }
 
-    let visible = area.height as usize;
-    let total = lines.len();
+    // Build permission block lines separately so they render as a fixed
+    // widget at the bottom of the messages area, visible regardless of scroll.
+    let perm_lines: Vec<Line> = if let Some(req) = session.pending_permissions.first() {
+        let mut pl: Vec<Line> = Vec::new();
+        pl.push(Line::from(""));
+        let sep = "─".repeat(30);
+        pl.push(Line::from(Span::styled(
+            format!("  {} Permission Required {}", sep, sep),
+            theme::warn(),
+        )));
+        pl.push(Line::from(""));
+        pl.push(Line::from(vec![
+            Span::styled("  Tool: ", theme::dim()),
+            Span::styled(req.tool_name.clone(), theme::tool_name()),
+        ]));
+        if !req.tool_input_preview.is_empty() {
+            for (i, input_line) in req.tool_input_preview.lines().enumerate() {
+                if i >= 20 {
+                    pl.push(Line::from(Span::styled("  │ ...", theme::muted())));
+                    break;
+                }
+                let max_chars = (area.width as usize).saturating_sub(8);
+                let truncated: String = input_line.chars().take(max_chars).collect();
+                let display = if truncated.len() < input_line.len() {
+                    format!("{}…", truncated)
+                } else {
+                    truncated
+                };
+                pl.push(Line::from(vec![
+                    Span::styled("  │ ", theme::muted()),
+                    Span::styled(display, theme::tool_detail()),
+                ]));
+            }
+        }
+        let pending_count = session.pending_permissions.len();
+        if pending_count > 1 {
+            pl.push(Line::from(""));
+            pl.push(Line::from(Span::styled(
+                format!("  ({} more pending)", pending_count - 1),
+                theme::dim(),
+            )));
+        }
+        pl.push(Line::from(""));
+        pl.push(Line::from(vec![
+            Span::styled("  Y", theme::accent_bold()),
+            Span::styled(" allow  ", theme::dim()),
+            Span::styled("N", theme::accent_bold()),
+            Span::styled(" deny  ", theme::dim()),
+            Span::styled("A", theme::accent_bold()),
+            Span::styled(" always  ", theme::dim()),
+            Span::styled("Esc", theme::accent_bold()),
+            Span::styled(" deny", theme::dim()),
+        ]));
+        pl.push(Line::from(""));
+        pl
+    } else {
+        Vec::new()
+    };
+
+    let perm_height = perm_lines.len() as u16;
+    let msg_area = if perm_height > 0 {
+        let chunks =
+            Layout::vertical([Constraint::Min(0), Constraint::Length(perm_height)]).split(area);
+        chunks[0]
+    } else {
+        area
+    };
+
+    let visible = msg_area.height as usize;
+    let content_width = msg_area.width.max(1) as usize;
+    let total: usize = lines
+        .iter()
+        .map(|line| {
+            let w: usize = line
+                .spans
+                .iter()
+                .map(|s| UnicodeWidthStr::width(s.content.as_ref()))
+                .sum();
+            if w == 0 { 1 } else { w.div_ceil(content_width) }
+        })
+        .sum();
     let max_scroll = total.saturating_sub(visible);
     let scroll = if session.scroll_pinned {
         max_scroll
@@ -415,7 +501,19 @@ fn render_messages(frame: &mut Frame, app: &App, area: Rect) {
     let messages = Paragraph::new(lines)
         .wrap(Wrap { trim: false })
         .scroll((scroll as u16, 0));
-    frame.render_widget(messages, area);
+    frame.render_widget(messages, msg_area);
+
+    if perm_height > 0 {
+        let perm_area = Rect {
+            x: area.x,
+            y: area.y + area.height - perm_height,
+            width: area.width,
+            height: perm_height,
+        };
+        let perm_widget = Paragraph::new(perm_lines).wrap(Wrap { trim: false });
+        frame.render_widget(Clear, perm_area);
+        frame.render_widget(perm_widget, perm_area);
+    }
 }
 
 fn ghost_text(app: &App) -> String {
@@ -444,12 +542,44 @@ fn ghost_text(app: &App) -> String {
     String::new()
 }
 
+fn wrap_line_at_width(text: &str, width: usize) -> Vec<String> {
+    let width = width.max(1);
+    let mut result: Vec<String> = Vec::new();
+    let mut current = String::new();
+    let mut col = 0usize;
+
+    for ch in text.chars() {
+        let ch_width = UnicodeWidthChar::width(ch).unwrap_or(0);
+        if col > 0 && col + ch_width > width {
+            result.push(std::mem::take(&mut current));
+            col = 0;
+        }
+        current.push(ch);
+        col += ch_width;
+    }
+    result.push(current);
+    result
+}
+
+fn wrapped_position(text: &str, width: usize) -> (usize, usize) {
+    let segments = wrap_line_at_width(text, width);
+    let row = segments.len().saturating_sub(1);
+    let col: usize = segments
+        .last()
+        .map(|s| {
+            s.chars()
+                .map(|c| UnicodeWidthChar::width(c).unwrap_or(0))
+                .sum()
+        })
+        .unwrap_or(0);
+    (row, col)
+}
+
 struct InputLine {
-    text: String,
     line: Line<'static>,
 }
 
-fn build_input_lines(app: &App) -> (Vec<InputLine>, usize, String) {
+fn build_input_lines(app: &App, _content_width: usize) -> (Vec<InputLine>, usize, String) {
     let ghost = ghost_text(app);
     let cursor_line = app.input[..app.input_cursor].matches('\n').count();
     let cursor_text = app.input[..app.input_cursor]
@@ -464,16 +594,15 @@ fn build_input_lines(app: &App) -> (Vec<InputLine>, usize, String) {
     };
 
     let mut lines = Vec::new();
+    let mut text = String::new();
     for (i, segment) in segments.iter().enumerate() {
         let prefix = if i == 0 { " › " } else { " … " };
-        let mut text = String::from(prefix);
+
         if app.input.is_empty()
             && i == 0
             && matches!(app.active().chat_state, crate::app::ChatState::Idle)
         {
-            text.push_str("Type a message or / for commands...");
             lines.push(InputLine {
-                text,
                 line: Line::from(vec![
                     Span::styled(prefix, theme::accent_bold()),
                     Span::styled("Type a message or / for commands...", theme::muted()),
@@ -493,7 +622,6 @@ fn build_input_lines(app: &App) -> (Vec<InputLine>, usize, String) {
             spans.push(Span::styled(ghost.clone(), theme::dim()));
         }
         lines.push(InputLine {
-            text,
             line: Line::from(spans),
         });
     }
@@ -501,76 +629,81 @@ fn build_input_lines(app: &App) -> (Vec<InputLine>, usize, String) {
     (lines, cursor_line, cursor_text)
 }
 
-fn wrapped_position(text: &str, width: usize) -> (usize, usize) {
-    let width = width.max(1);
-    let mut row = 0usize;
-    let mut col = 0usize;
-
-    for ch in text.chars() {
-        if ch == '\n' {
-            row += 1;
-            col = 0;
-            continue;
-        }
-
-        let ch_width = UnicodeWidthChar::width(ch).unwrap_or(0);
-        if col > 0 && col + ch_width > width {
-            row += 1;
-            col = 0;
-        }
-        col += ch_width;
-    }
-
-    (row, col)
-}
-
-fn wrapped_row_count(text: &str, width: usize) -> usize {
-    wrapped_position(text, width).0 + 1
-}
-
-fn input_panel_height(app: &App, width: u16) -> u16 {
+fn input_panel_height(app: &App, width: u16, available_height: u16) -> u16 {
     let content_width = width.saturating_sub(2).max(1) as usize;
-    let (lines, _, _) = build_input_lines(app);
-    let visual_rows: usize = lines
-        .iter()
-        .map(|line| wrapped_row_count(&line.text, content_width))
-        .sum();
-    (visual_rows as u16 + 2).min(10)
+    let (lines, _, _) = build_input_lines(app, content_width);
+    let visual_rows = lines.len() as u16;
+    let max_input = (available_height * 2 / 3).max(5);
+    (visual_rows + 2).min(max_input)
 }
 
-fn input_cursor_position(app: &App, area: Rect) -> (u16, u16) {
+fn input_cursor_position(app: &App, area: Rect, scroll: u16) -> (u16, u16) {
     let content_width = area.width.saturating_sub(2).max(1) as usize;
-    let (lines, cursor_line, cursor_text) = build_input_lines(app);
+    let (_, cursor_line, cursor_text) = build_input_lines(app, content_width);
+
+    let prefix = if cursor_line == 0 { " › " } else { " … " };
+    let cursor_display = format!("{}{}", prefix, cursor_text);
+    let (cursor_row, cursor_col) = wrapped_position(&cursor_display, content_width);
+
+    let segments: Vec<&str> = if app.input.is_empty() {
+        vec![""]
+    } else {
+        app.input.split('\n').collect()
+    };
     let mut row_offset = 0usize;
-
-    for (idx, line) in lines.iter().enumerate() {
-        if idx < cursor_line {
-            row_offset += wrapped_row_count(&line.text, content_width);
-            continue;
+    for (i, segment) in segments.iter().enumerate() {
+        if i >= cursor_line {
+            break;
         }
-
-        if idx == cursor_line {
-            let prefix = if idx == 0 { " › " } else { " … " };
-            let cursor_display = format!("{}{}", prefix, cursor_text);
-            let (cursor_row, cursor_col) = wrapped_position(&cursor_display, content_width);
-            return (
-                area.x + 1 + cursor_col as u16,
-                area.y + 1 + (row_offset + cursor_row) as u16,
-            );
-        }
+        let p = if i == 0 { " › " } else { " … " };
+        let full = format!("{}{}", p, segment);
+        row_offset += wrap_line_at_width(&full, content_width).len();
     }
 
-    (area.x + 1, area.y + 1)
+    let absolute_row = (row_offset + cursor_row) as u16;
+    (
+        area.x + 1 + cursor_col as u16,
+        area.y + 1 + absolute_row.saturating_sub(scroll),
+    )
 }
 
 fn render_input(frame: &mut Frame, app: &App, area: Rect) {
-    let (lines, _, _) = build_input_lines(app);
+    let content_width = area.width.saturating_sub(2).max(1) as usize;
+    let (lines, cursor_line, cursor_text) = build_input_lines(app, content_width);
 
     let cwd = platform::display_path(&platform::current_dir());
     let title = format!(" {} ", cwd);
 
+    let visible_rows = area.height.saturating_sub(2);
+
+    let prefix = if cursor_line == 0 { " › " } else { " … " };
+    let cursor_display = format!("{}{}", prefix, cursor_text);
+    let (cursor_wrap_row, _) = wrapped_position(&cursor_display, content_width);
+
+    let segments: Vec<&str> = if app.input.is_empty() {
+        vec![""]
+    } else {
+        app.input.split('\n').collect()
+    };
+    let mut cursor_absolute_row = 0u16;
+    for (i, segment) in segments.iter().enumerate() {
+        if i >= cursor_line {
+            break;
+        }
+        let p = if i == 0 { " › " } else { " … " };
+        let full = format!("{}{}", p, segment);
+        cursor_absolute_row += wrap_line_at_width(&full, content_width).len() as u16;
+    }
+    cursor_absolute_row += cursor_wrap_row as u16;
+
+    let scroll = if cursor_absolute_row >= visible_rows {
+        cursor_absolute_row - visible_rows + 1
+    } else {
+        0
+    };
+
     let text_lines: Vec<Line> = lines.into_iter().map(|line| line.line).collect();
-    let input = Paragraph::new(text_lines).wrap(Wrap { trim: false }).block(
+    let input = Paragraph::new(text_lines).scroll((scroll, 0)).block(
         Block::default()
             .borders(Borders::ALL)
             .title(title)
@@ -579,7 +712,7 @@ fn render_input(frame: &mut Frame, app: &App, area: Rect) {
     );
     frame.render_widget(input, area);
 
-    let (cursor_x, cursor_y) = input_cursor_position(app, area);
+    let (cursor_x, cursor_y) = input_cursor_position(app, area, scroll);
     frame.set_cursor_position((cursor_x, cursor_y));
 }
 
@@ -700,13 +833,13 @@ mod tests {
     use crate::app::{App, ChatState};
 
     #[test]
-    fn long_input_expands_the_panel_height() {
+    fn multiline_input_expands_the_panel_height() {
         let mut app = App::new();
         app.active_mut().chat_state = ChatState::Idle;
-        app.input = "abcdefghijklmnopqrstuvwxyz".to_string();
+        app.input = "line1\nline2\nline3".to_string();
         app.input_cursor = app.input.len();
 
-        assert!(input_panel_height(&app, 16) > 3);
+        assert!(input_panel_height(&app, 40, 24) > 3);
     }
 
     #[test]
@@ -724,9 +857,38 @@ mod tests {
                 width: 16,
                 height: 5,
             },
+            0,
         );
 
         assert_eq!(cursor_x, 2);
         assert!(cursor_y > 1);
+    }
+
+    #[test]
+    fn cursor_aligns_with_charwrap_when_text_has_spaces() {
+        let mut app = App::new();
+        app.active_mut().chat_state = ChatState::Idle;
+        app.input = "hello world this is a longer line".to_string();
+        app.input_cursor = app.input.len();
+
+        let (cx, cy) = input_cursor_position(
+            &app,
+            Rect {
+                x: 0,
+                y: 0,
+                width: 16,
+                height: 6,
+            },
+            0,
+        );
+
+        // Content width = 16 - 2 (borders) = 14
+        // Char-wrap of " › hello world this is a longer line" at width 14:
+        //   row 0: " › hello world" (14)
+        //   row 1: " this is a lon" (14)
+        //   row 2: "ger line"       (8)
+        // cursor_y = 0 + 1 + 2 = 3, cursor_x = 0 + 1 + 8 = 9
+        assert_eq!(cy, 3);
+        assert_eq!(cx, 9);
     }
 }

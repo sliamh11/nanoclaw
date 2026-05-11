@@ -123,7 +123,8 @@ fn main() -> io::Result<()> {
                         continue;
                     }
 
-                    if app.tab == Tab::Chat && app.has_pending_permission() {
+                    if app.tab == Tab::Chat && app.has_pending_permission() && app.input.is_empty()
+                    {
                         match key.code {
                             KeyCode::Char('y') | KeyCode::Char('Y') => {
                                 app.approve_first_pending();
@@ -308,6 +309,8 @@ fn main() -> io::Result<()> {
                                 app.tab = Tab::Chat;
                                 app.cursor = 0;
                             }
+                            KeyCode::Tab => app.next_panel(),
+                            KeyCode::BackTab => app.prev_panel(),
                             KeyCode::Up | KeyCode::Char('k') => app.prev_item(),
                             KeyCode::Down | KeyCode::Char('j') => app.next_item(),
                             KeyCode::Char(' ') | KeyCode::Enter => app.toggle_item(),
