@@ -15,7 +15,11 @@ import os from 'os';
 import path from 'path';
 
 import { DATA_DIR, GROUPS_DIR, HOME_DIR, CONFIG_DIR } from './config.js';
-import { resolveGroupFolderPath, resolveGroupIpcPath } from './group-folder.js';
+import {
+  resolveGroupFolderPath,
+  resolveGroupIpcPath,
+  assertValidGroupFolder,
+} from './group-folder.js';
 import { logger } from './logger.js';
 import { getProjectById } from './db.js';
 import { detectAuthMode } from './credential-proxy.js';
@@ -337,21 +341,44 @@ export function buildVolumeMounts(
     readonly: true,
   });
 
-  // Auto-mount the memory vault if configured.
-  // The vault stores session logs, atoms, and checkpoints — agents need read-write
-  // access for /compress, /resume, and /preserve skills.
-  // Mounted at /workspace/vault/ (standard path referenced by container skills).
+  // Vault mount: control group gets full rw at /workspace/vault; non-control
+  // groups get a private rw subdir + shared ro root (skills use /workspace/vault/).
   const vaultPath = resolveVaultPath();
   if (vaultPath && fs.existsSync(vaultPath)) {
-    mounts.push({
-      hostPath: vaultPath,
-      containerPath: '/workspace/vault',
-      readonly: false,
-    });
-    logger.info(
-      { group: group.name, vaultPath },
-      'Vault mounted at /workspace/vault',
-    );
+    if (isControlGroup) {
+      mounts.push({
+        hostPath: vaultPath,
+        containerPath: '/workspace/vault',
+        readonly: false,
+      });
+      logger.info(
+        { group: group.name, vaultPath },
+        'Vault mounted at /workspace/vault (control, rw)',
+      );
+    } else {
+      assertValidGroupFolder(group.folder);
+      const groupVaultDir = path.join(vaultPath, 'groups', group.folder);
+      // Defence-in-depth: assertValidGroupFolder blocks traversal, verify after join
+      const rel = path.relative(vaultPath, groupVaultDir);
+      if (rel.startsWith('..') || path.isAbsolute(rel)) {
+        throw new Error(`Vault group path escapes base: ${groupVaultDir}`);
+      }
+      fs.mkdirSync(groupVaultDir, { recursive: true });
+      mounts.push({
+        hostPath: groupVaultDir,
+        containerPath: '/workspace/vault/group',
+        readonly: false,
+      });
+      mounts.push({
+        hostPath: vaultPath,
+        containerPath: '/workspace/vault/shared',
+        readonly: true,
+      });
+      logger.info(
+        { group: group.name, vaultPath, groupVaultDir },
+        'Vault mounted: group rw + shared ro',
+      );
+    }
   }
 
   // Additional mounts validated against external allowlist (tamper-proof from containers)

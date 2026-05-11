@@ -37,6 +37,8 @@ vi.mock('./group-folder.js', async () => {
     resolveGroupIpcPath: vi.fn((folder: string) =>
       p.default.join(tmpBase, 'deus-data', 'ipc', folder),
     ),
+    assertValidGroupFolder: vi.fn(),
+    isValidGroupFolder: vi.fn(() => true),
   };
 });
 
@@ -531,7 +533,7 @@ describe('buildVolumeMounts: OAuth mode', () => {
 // ── Vault mount ─────────────────────────────────────────────────────────
 
 describe('buildVolumeMounts: vault', () => {
-  it('mounts vault when DEUS_VAULT_PATH env var is set and path exists', () => {
+  it('control group gets full rw vault mount', () => {
     const originalEnv = process.env.DEUS_VAULT_PATH;
     process.env.DEUS_VAULT_PATH = path.join(HOME_BASE, 'vault');
     mockExistsSync.mockImplementation((p) => {
@@ -539,13 +541,50 @@ describe('buildVolumeMounts: vault', () => {
       return false;
     });
 
-    const group = makeGroup();
-    const mounts = buildVolumeMounts(group, false);
+    const group = makeGroup({ isControlGroup: true });
+    const mounts = buildVolumeMounts(group, true);
     const vaultMount = findMount(mounts, '/workspace/vault');
     expect(vaultMount).toBeDefined();
     expect(vaultMount!.readonly).toBe(false);
+    expect(vaultMount!.hostPath).toBe(path.resolve(HOME_BASE, 'vault'));
 
-    // Cleanup
+    if (originalEnv !== undefined) {
+      process.env.DEUS_VAULT_PATH = originalEnv;
+    } else {
+      delete process.env.DEUS_VAULT_PATH;
+    }
+  });
+
+  it('non-control group gets per-group rw + shared ro vault mounts', () => {
+    const originalEnv = process.env.DEUS_VAULT_PATH;
+    process.env.DEUS_VAULT_PATH = path.join(HOME_BASE, 'vault');
+    mockExistsSync.mockImplementation((p) => {
+      if (String(p).includes('vault')) return true;
+      return false;
+    });
+
+    const group = makeGroup({ folder: 'custom-group' });
+    const mounts = buildVolumeMounts(group, false);
+
+    const groupMount = findMount(mounts, '/workspace/vault/group');
+    expect(groupMount).toBeDefined();
+    expect(groupMount!.readonly).toBe(false);
+    expect(groupMount!.hostPath).toBe(
+      path.resolve(HOME_BASE, 'vault', 'groups', 'custom-group'),
+    );
+
+    const sharedMount = findMount(mounts, '/workspace/vault/shared');
+    expect(sharedMount).toBeDefined();
+    expect(sharedMount!.readonly).toBe(true);
+    expect(sharedMount!.hostPath).toBe(path.resolve(HOME_BASE, 'vault'));
+
+    expect(groupMount!.readonly).not.toBe(sharedMount!.readonly);
+
+    expect(mockMkdirSync).toHaveBeenCalledWith(
+      path.resolve(HOME_BASE, 'vault', 'groups', 'custom-group'),
+      { recursive: true },
+    );
+
     if (originalEnv !== undefined) {
       process.env.DEUS_VAULT_PATH = originalEnv;
     } else {
@@ -560,11 +599,10 @@ describe('buildVolumeMounts: vault', () => {
 
     const group = makeGroup();
     const mounts = buildVolumeMounts(group, false);
-    const vaultMount = findMount(mounts, '/workspace/vault');
-    expect(vaultMount).toBeDefined();
-    // Should expand ~ to HOME_DIR
-    expect(vaultMount!.hostPath).toContain(HOME_BASE);
-    expect(vaultMount!.hostPath).toContain('my-vault');
+    const groupMount = findMount(mounts, '/workspace/vault/group');
+    expect(groupMount).toBeDefined();
+    expect(groupMount!.hostPath).toContain(HOME_BASE);
+    expect(groupMount!.hostPath).toContain('my-vault');
 
     if (originalEnv !== undefined) {
       process.env.DEUS_VAULT_PATH = originalEnv;
@@ -588,8 +626,8 @@ describe('buildVolumeMounts: vault', () => {
 
     const group = makeGroup();
     const mounts = buildVolumeMounts(group, false);
-    const vaultMount = findMount(mounts, '/workspace/vault');
-    expect(vaultMount).toBeDefined();
+    const groupMount = findMount(mounts, '/workspace/vault/group');
+    expect(groupMount).toBeDefined();
 
     if (originalEnv !== undefined) {
       process.env.DEUS_VAULT_PATH = originalEnv;
