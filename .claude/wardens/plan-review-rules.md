@@ -120,3 +120,38 @@ Common traps:
 **Check:** Does the plan identify which design pattern(s) apply (Strategy, Observer, Mediator, Factory, etc.) and justify the choice? Does it specify data structures with Big-O rationale where relevant (e.g., HashMap for O(1) lookup vs Vec scan)?
 **Rule:** Every non-trivial plan must name the design pattern(s) it uses and why they fit. Data structure choices must be justified when algorithmic complexity matters. Generic, modular designs are the default — new features should plug in without modifying or risking existing logic. If no standard pattern applies, the plan must state why and describe the custom approach.
 **Cite:** vault CLAUDE.md `design: pattern-driven | modular-generic`
+
+## task-granularity
+**Severity:** warning
+**Applies when:** Plan has implementation steps or task breakdown.
+**Check:** Is each step a single action (2-5 minutes of work)? Can each step be independently verified?
+**Rule:** Plans should decompose into bite-sized tasks — each step should be one action with a clear verification. "Implement the feature" is not a step. "Write the failing test for X" is.
+**Cite:** Superpowers writing-plans skill; "Each step is one action (2-5 minutes)"
+
+## verification-strategy
+**Severity:** warning
+**Applies when:** Plan describes any implementation work.
+**Check:** Does the plan specify HOW each change will be verified? Is there a test strategy (not just "run tests")?
+**Rule:** Every plan must state what commands prove it works. "Tests pass" is insufficient — specify which tests, what they cover, and what's NOT covered.
+**Cite:** Superpowers verification-before-completion; debugging-rules.md
+
+## file-map-first
+**Severity:** informational
+**Applies when:** Plan touches 3+ files or creates new files.
+**Check:** Does the plan start with a file map showing which files are created/modified and why?
+**Rule:** Before task breakdown, list the files involved and each file's responsibility. This catches decomposition errors early.
+**Cite:** Superpowers writing-plans "File Structure" section
+
+## retrieval-sweep-gate
+**Severity:** blocking
+**Applies when:** Plan changes memory retrieval thresholds, scoring functions, embedding parameters, fallback mechanisms, or abstain logic under `scripts/`, `src/memory/`, `src/retrieval/`, `evolution/`, or other retrieval-related paths.
+**Check:** Does the plan include `deus sweep` benchmark output (recall, MRR, abstain_accuracy) showing the impact? Was the sweep run BEFORE the PR, not after merge?
+**Rule:** Retrieval pipeline changes must include sweep evidence in the PR description. Ship-then-disable cycles waste two PR reviews and risk leaving harmful defaults in production. The tool already exists — use it.
+**Cite:** RETRO-2026-05-11-01; atom-fallback PR #350→#351 reversal; entity-coverage same-session reversal
+
+## api-surface-verification
+**Severity:** blocking
+**Applies when:** Plan calls, wraps, or extends existing functions, methods, or module APIs.
+**Check:** For each function the plan references, has the actual signature been read and verified? Do the parameter names, types, and return types match what the plan assumes?
+**Rule:** Plans must verify the API surface they depend on by reading the source. Wrong method signatures, dead parameters, and phantom APIs are the #1 cause of multi-round plan-reviewer cycles. Read the function, then write the plan — not the reverse.
+**Cite:** RETRO-2026-05-11-02; Phase 5-6 postmortem (6 rounds caused by RuntimeRegistry.resolve() wrong signature, GroupQueue dead parameter)

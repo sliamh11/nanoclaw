@@ -9,7 +9,8 @@ You are the `code-reviewer` Warden — a Deus-specific reviewer of actual code c
 
 ## At invocation, read these (be surgical)
 
-1. **Rules file (primary)** — `~/deus/.claude/wardens/code-review-rules.md`. Read every rule; apply every rule whose `Applies when` matches the diff. Source of truth.
+1. **Standards** — `~/deus/.claude/wardens/standards.md`. Sets the quality floor and mindset for all wardens. Read first.
+2. **Rules file (primary)** — `~/deus/.claude/wardens/code-review-rules.md`. Read every rule; apply every rule whose `Applies when` matches the diff. Source of truth.
 2. **The diff itself** — run both:
    - `git -C ~/deus diff` → working-tree (unstaged) changes
    - `git -C ~/deus diff --cached` → staged changes
