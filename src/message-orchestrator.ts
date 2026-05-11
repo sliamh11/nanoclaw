@@ -8,6 +8,7 @@
  * lifecycle. All other dependencies are imported directly from stable modules.
  */
 
+import { autoCompressSession } from './auto-compress.js';
 import {
   ASSISTANT_NAME,
   IDLE_TIMEOUT,
@@ -96,6 +97,14 @@ export function createMessageOrchestrator(deps: OrchestratorDeps) {
           { group: group.name, idleHours: (idleMs / 3_600_000).toFixed(1) },
           'Session idle too long — starting fresh',
         );
+        try {
+          await autoCompressSession(group, chatJid, effectiveIdleHours);
+        } catch (err) {
+          logger.warn(
+            { group: group.name, err },
+            'Auto-compress failed (non-fatal)',
+          );
+        }
         clearSession(group.folder, backend);
         state.clearSession(group.folder, backend);
         sessionRef = undefined;
