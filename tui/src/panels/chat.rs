@@ -271,6 +271,15 @@ fn highlight_verdict(line: &str) -> Line<'static> {
     ])
 }
 
+fn extract_lang(fence_line: &str) -> Option<String> {
+    let lang = fence_line.trim_start_matches('`').trim();
+    if lang.is_empty() || lang == "diff" {
+        None
+    } else {
+        Some(lang.to_string())
+    }
+}
+
 fn render_markdown_text(
     text: &str,
     lines: &mut Vec<Line<'static>>,
@@ -279,6 +288,7 @@ fn render_markdown_text(
 ) {
     let mut in_code = false;
     let mut in_diff = false;
+    let mut current_lang: Option<String> = None;
     for line in text.lines() {
         let was_in_code = in_code || in_diff;
         let (mut rendered, new_code, new_diff) = render_markdown_line(line, in_code, in_diff);
@@ -290,7 +300,15 @@ fn render_markdown_text(
 
         if !was_in_code && in_code {
             *current_block = Some(String::new());
+            current_lang = extract_lang(line);
         } else if was_in_code && in_code {
+            if let Some(ref lang) = current_lang
+                && let Some(spans) = crate::highlight::highlight_line(line, lang)
+            {
+                let mut highlighted = vec![Span::styled("  │ ", theme::muted())];
+                highlighted.extend(spans);
+                rendered = Line::from(highlighted);
+            }
             if let Some(buf) = current_block.as_mut() {
                 if !buf.is_empty() {
                     buf.push('\n');
@@ -298,6 +316,7 @@ fn render_markdown_text(
                 buf.push_str(line);
             }
         } else if code_closed {
+            current_lang = None;
             if let Some(buf) = current_block.take() {
                 code_blocks.push(buf);
                 let n = code_blocks.len();
@@ -324,6 +343,21 @@ fn build_message_lines(app: &App) -> (Vec<Line<'static>>, Vec<String>) {
     for (msg_idx, msg) in session.chat_messages.iter().enumerate() {
         if msg.role == "system" && msg.content.starts_with("Welcome to Deus") {
             render_welcome(&mut lines);
+            continue;
+        }
+
+        if msg.role == "system" && msg.content.starts_with("\u{203B} recap: ") {
+            let summary = &msg.content["\u{203B} recap: ".len()..];
+            lines.push(Line::from(vec![
+                Span::styled("  \u{203B} ", theme::muted()),
+                Span::styled("recap: ", theme::muted()),
+                Span::styled(
+                    summary.to_string(),
+                    Style::default()
+                        .fg(theme::text_dim_color())
+                        .add_modifier(Modifier::ITALIC),
+                ),
+            ]));
             continue;
         }
 
@@ -1006,5 +1040,39 @@ mod tests {
         render_markdown_text(text, &mut lines, &mut code_blocks, &mut current_block);
 
         assert!(code_blocks.is_empty());
+    }
+
+    #[test]
+    fn rust_code_block_uses_syntax_highlighting() {
+        let text = "```rust\nfn main() {}\n```";
+        let mut lines = Vec::new();
+        let mut code_blocks = Vec::new();
+        let mut current_block = None;
+        render_markdown_text(text, &mut lines, &mut code_blocks, &mut current_block);
+
+        let code_line = &lines[1];
+        assert!(
+            code_line.spans.len() > 1,
+            "expected multiple spans from syntax highlighting, got {}",
+            code_line.spans.len()
+        );
+        let prefix: String = code_line.spans[0].content.to_string();
+        assert_eq!(prefix, "  │ ");
+    }
+
+    #[test]
+    fn unknown_lang_code_block_falls_back_to_single_style() {
+        let text = "```madeuplang9999\nsome code here\n```";
+        let mut lines = Vec::new();
+        let mut code_blocks = Vec::new();
+        let mut current_block = None;
+        render_markdown_text(text, &mut lines, &mut code_blocks, &mut current_block);
+
+        let code_line = &lines[1];
+        assert_eq!(
+            code_line.spans.len(),
+            1,
+            "unknown language should fall back to single-span rendering"
+        );
     }
 }
