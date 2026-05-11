@@ -418,6 +418,11 @@ pub struct App {
     pub auto_compact_threshold: f64,
     pub pending_attachments: Vec<crate::clipboard::Attachment>,
     pub clear_pending: bool,
+
+    pub reverse_search_mode: bool,
+    pub reverse_search_query: String,
+    pub reverse_search_match_index: usize,
+    pub reverse_search_saved_input: String,
 }
 
 // StreamChunk and parsing delegated to backend trait — see backend/mod.rs
@@ -466,6 +471,26 @@ impl App {
     /// within the 500 ms double-tap window.
     pub fn esc_pending_active(&self) -> bool {
         matches!(self.esc_pending, Some(t) if t.elapsed().as_millis() < 500)
+    }
+
+    pub fn find_reverse_match(&self) -> Option<&str> {
+        let query = &self.reverse_search_query;
+        if query.is_empty() {
+            return None;
+        }
+        self.input_history
+            .iter()
+            .rev()
+            .filter(|entry| entry.contains(query.as_str()))
+            .nth(self.reverse_search_match_index)
+            .map(|s| s.as_str())
+    }
+
+    pub fn exit_reverse_search(&mut self) {
+        self.reverse_search_mode = false;
+        self.reverse_search_query.clear();
+        self.reverse_search_match_index = 0;
+        self.reverse_search_saved_input.clear();
     }
 
     /// Non-Chat panel order used for Tab / Shift+Tab cycling.
@@ -575,6 +600,11 @@ impl App {
                 .unwrap_or(0.75),
             pending_attachments: Vec::new(),
             clear_pending: false,
+
+            reverse_search_mode: false,
+            reverse_search_query: String::new(),
+            reverse_search_match_index: 0,
+            reverse_search_saved_input: String::new(),
         };
         app.refresh();
         app.load_history();
@@ -1143,7 +1173,7 @@ impl App {
                     .map(|c| format!("  {:16} {}", c.name, c.description))
                     .collect::<Vec<_>>()
                     .join("\n");
-                self.active_mut().chat_messages.push(ChatMessage::simple("system", &format!("Available commands:\n\n{}\n\nKeyboard shortcuts:\n  Ctrl+G  Open $EDITOR for long prompts\n  Ctrl+B  Parallel agent / session picker\n  Ctrl+Shift+B  Session picker (direct)\n  Ctrl+L  Clear chat\n  Ctrl+C  Cancel streaming / exit\n  Ctrl+U  Clear input line\n  Ctrl+K  Kill to end of line\n  Ctrl+Y  Yank (paste killed text)\n  Ctrl+A  Start of line\n  Ctrl+E  End of line\n  Ctrl+J  New line (multi-line input)\n  Ctrl+O  Toggle tool/thinking details\n  Ctrl+V  Paste clipboard image\n  Ctrl+D  Exit\n  Alt+B   Word left\n  Alt+F   Word right\n  ↑/↓     Input history (persistent)\n  PgUp/Dn Scroll chat\n  Esc     Dismiss suggestions > deny permission > cancel stream > quit (2x, empty input)\n  Mouse   Scroll chat (Shift+drag to select text)", help)));
+                self.active_mut().chat_messages.push(ChatMessage::simple("system", &format!("Available commands:\n\n{}\n\nKeyboard shortcuts:\n  Ctrl+G  Open $EDITOR for long prompts\n  Ctrl+B  Parallel agent / session picker\n  Ctrl+Shift+B  Session picker (direct)\n  Ctrl+L  Clear chat\n  Ctrl+C  Cancel streaming / exit\n  Ctrl+U  Clear input line\n  Ctrl+K  Kill to end of line\n  Ctrl+Y  Yank (paste killed text)\n  Ctrl+A  Start of line\n  Ctrl+E  End of line\n  Ctrl+J  New line (multi-line input)\n  Ctrl+O  Toggle tool/thinking details\n  Ctrl+V  Paste clipboard image\n  Ctrl+R  Reverse history search\n  Ctrl+D  Exit\n  Alt+B   Word left\n  Alt+F   Word right\n  ↑/↓     Input history (persistent)\n  PgUp/Dn Scroll chat\n  Esc     Dismiss suggestions > deny permission > cancel stream > quit (2x, empty input)\n  Mouse   Scroll chat (Shift+drag to select text)", help)));
                 true
             }
             "/history" => {
@@ -3090,5 +3120,33 @@ mod tests {
         let cmd = COMMANDS.iter().find(|c| c.name == "/copy").unwrap();
         assert_eq!(cmd.description, "Copy code block");
         assert!(cmd.args.is_empty());
+    }
+
+    #[test]
+    fn find_reverse_match_returns_matching_entries() {
+        let mut app = App::new();
+        app.input_history = vec![
+            "hello world".to_string(),
+            "cargo build".to_string(),
+            "cargo test".to_string(),
+            "git status".to_string(),
+        ];
+
+        app.reverse_search_query = "cargo".to_string();
+        app.reverse_search_match_index = 0;
+        assert_eq!(app.find_reverse_match(), Some("cargo test"));
+
+        app.reverse_search_match_index = 1;
+        assert_eq!(app.find_reverse_match(), Some("cargo build"));
+
+        app.reverse_search_match_index = 2;
+        assert_eq!(app.find_reverse_match(), None);
+
+        app.reverse_search_query = "nonexistent".to_string();
+        app.reverse_search_match_index = 0;
+        assert_eq!(app.find_reverse_match(), None);
+
+        app.reverse_search_query.clear();
+        assert_eq!(app.find_reverse_match(), None);
     }
 }

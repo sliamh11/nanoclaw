@@ -123,6 +123,65 @@ fn main() -> io::Result<()> {
                         continue;
                     }
 
+                    if app.reverse_search_mode {
+                        let mut consumed = true;
+                        match key.code {
+                            KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                                app.reverse_search_match_index += 1;
+                                if app.find_reverse_match().is_none() {
+                                    app.reverse_search_match_index =
+                                        app.reverse_search_match_index.saturating_sub(1);
+                                }
+                                if let Some(m) = app.find_reverse_match() {
+                                    app.input = m.to_string();
+                                    app.input_cursor = app.input.len();
+                                }
+                            }
+                            KeyCode::Enter => {
+                                if let Some(m) = app.find_reverse_match() {
+                                    app.input = m.to_string();
+                                    app.input_cursor = app.input.len();
+                                }
+                                app.exit_reverse_search();
+                            }
+                            KeyCode::Esc => {
+                                app.input = app.reverse_search_saved_input.clone();
+                                app.input_cursor = app.input.len();
+                                app.exit_reverse_search();
+                            }
+                            KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                                app.reverse_search_query.push(c);
+                                app.reverse_search_match_index = 0;
+                                if let Some(m) = app.find_reverse_match() {
+                                    app.input = m.to_string();
+                                    app.input_cursor = app.input.len();
+                                }
+                            }
+                            KeyCode::Backspace => {
+                                app.reverse_search_query.pop();
+                                app.reverse_search_match_index = 0;
+                                if let Some(m) = app.find_reverse_match() {
+                                    app.input = m.to_string();
+                                    app.input_cursor = app.input.len();
+                                } else if app.reverse_search_query.is_empty() {
+                                    app.input = app.reverse_search_saved_input.clone();
+                                    app.input_cursor = app.input.len();
+                                }
+                            }
+                            _ => {
+                                if let Some(m) = app.find_reverse_match() {
+                                    app.input = m.to_string();
+                                    app.input_cursor = app.input.len();
+                                }
+                                app.exit_reverse_search();
+                                consumed = false;
+                            }
+                        }
+                        if consumed {
+                            continue;
+                        }
+                    }
+
                     if app.tab == Tab::Chat && app.has_pending_permission() && app.input.is_empty()
                     {
                         match key.code {
@@ -221,6 +280,17 @@ fn main() -> io::Result<()> {
                                 }
                                 KeyCode::Char('v') => {
                                     app.attach_clipboard_image();
+                                }
+                                KeyCode::Char('r')
+                                    if !matches!(
+                                        app.active().chat_state,
+                                        crate::app::ChatState::Streaming
+                                    ) =>
+                                {
+                                    app.reverse_search_mode = true;
+                                    app.reverse_search_query.clear();
+                                    app.reverse_search_match_index = 0;
+                                    app.reverse_search_saved_input = app.input.clone();
                                 }
                                 KeyCode::Char('j') => app.input_newline(),
                                 _ => {}

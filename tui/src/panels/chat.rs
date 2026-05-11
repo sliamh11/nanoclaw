@@ -716,6 +716,33 @@ fn input_cursor_position(app: &App, area: Rect, scroll: u16) -> (u16, u16) {
 }
 
 fn render_input(frame: &mut Frame, app: &App, area: Rect) {
+    if app.reverse_search_mode {
+        let cwd = platform::display_path(&platform::current_dir());
+        let title = format!(" {} ", cwd);
+
+        let found = app.find_reverse_match().map(|s| s.to_string());
+
+        let line = Line::from(vec![
+            Span::styled("(reverse-i-search) '", theme::dim()),
+            Span::styled(app.reverse_search_query.clone(), theme::accent()),
+            Span::styled("': ", theme::dim()),
+            match &found {
+                Some(text) => Span::raw(text.clone()),
+                None => Span::styled("no match", theme::dim()),
+            },
+        ]);
+
+        let input = Paragraph::new(line).block(
+            Block::default()
+                .borders(Borders::TOP)
+                .title(title)
+                .title_style(theme::dim())
+                .border_style(theme::accent()),
+        );
+        frame.render_widget(input, area);
+        return;
+    }
+
     let content_width = area.width.max(1) as usize;
     let (lines, cursor_line, cursor_text) = build_input_lines(app, content_width);
 
