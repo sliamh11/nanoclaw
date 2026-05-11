@@ -4,6 +4,7 @@ mod bidi;
 mod clipboard;
 mod config;
 mod logo;
+mod notify;
 mod panels;
 mod permission_bridge;
 mod platform;
