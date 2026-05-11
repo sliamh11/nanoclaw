@@ -128,13 +128,15 @@ fn main() -> io::Result<()> {
                         match key.code {
                             KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                                 app.reverse_search_match_index += 1;
-                                if app.find_reverse_match().is_none() {
-                                    app.reverse_search_match_index =
-                                        app.reverse_search_match_index.saturating_sub(1);
-                                }
-                                if let Some(m) = app.find_reverse_match() {
-                                    app.input = m.to_string();
-                                    app.input_cursor = app.input.len();
+                                match app.find_reverse_match() {
+                                    Some(m) => {
+                                        app.input = m.to_string();
+                                        app.input_cursor = app.input.len();
+                                    }
+                                    None => {
+                                        app.reverse_search_match_index =
+                                            app.reverse_search_match_index.saturating_sub(1);
+                                    }
                                 }
                             }
                             KeyCode::Enter => {
