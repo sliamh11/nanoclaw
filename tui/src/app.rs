@@ -336,6 +336,11 @@ pub const COMMANDS: &[CommandDef] = &[
         args: &[],
     },
     CommandDef {
+        name: "/recap",
+        description: "Session summary",
+        args: &[],
+    },
+    CommandDef {
         name: "/init",
         description: "Init CLAUDE.md",
         args: &[],
@@ -423,6 +428,9 @@ pub struct App {
     pub reverse_search_query: String,
     pub reverse_search_match_index: usize,
     pub reverse_search_saved_input: String,
+
+    pub last_activity: Instant,
+    pub recap_sent: bool,
 }
 
 // StreamChunk and parsing delegated to backend trait — see backend/mod.rs
@@ -605,6 +613,9 @@ impl App {
             reverse_search_query: String::new(),
             reverse_search_match_index: 0,
             reverse_search_saved_input: String::new(),
+
+            last_activity: Instant::now(),
+            recap_sent: false,
         };
         app.refresh();
         app.load_history();
@@ -705,6 +716,10 @@ impl App {
 
         self.input_history.push(msg.clone());
         self.history_index = None;
+
+        if msg != "/recap" {
+            self.recap_sent = false;
+        }
 
         let handled = self.handle_command(&msg);
         if handled {
@@ -1271,6 +1286,12 @@ impl App {
                     }
                 }
                 self.mark_chat_changed();
+                true
+            }
+            "/recap" => {
+                let recap_prompt = "Summarize what we've accomplished in this session in 2-3 concise bullet points. Be specific about what was done, not generic.".to_string();
+                self.dispatch_message(recap_prompt);
+                self.recap_sent = true;
                 true
             }
             "/init" | "/compress" | "/checkpoint" | "/compact" | "/resume" => {
