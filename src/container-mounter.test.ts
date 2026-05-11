@@ -546,7 +546,7 @@ describe('buildVolumeMounts: vault', () => {
     const vaultMount = findMount(mounts, '/workspace/vault');
     expect(vaultMount).toBeDefined();
     expect(vaultMount!.readonly).toBe(false);
-    expect(vaultMount!.hostPath).toBe(path.join(HOME_BASE, 'vault'));
+    expect(vaultMount!.hostPath).toBe(path.resolve(HOME_BASE, 'vault'));
 
     if (originalEnv !== undefined) {
       process.env.DEUS_VAULT_PATH = originalEnv;
@@ -570,18 +570,18 @@ describe('buildVolumeMounts: vault', () => {
     expect(groupMount).toBeDefined();
     expect(groupMount!.readonly).toBe(false);
     expect(groupMount!.hostPath).toBe(
-      path.join(HOME_BASE, 'vault', 'groups', 'custom-group'),
+      path.resolve(HOME_BASE, 'vault', 'groups', 'custom-group'),
     );
 
     const sharedMount = findMount(mounts, '/workspace/vault/shared');
     expect(sharedMount).toBeDefined();
     expect(sharedMount!.readonly).toBe(true);
-    expect(sharedMount!.hostPath).toBe(path.join(HOME_BASE, 'vault'));
+    expect(sharedMount!.hostPath).toBe(path.resolve(HOME_BASE, 'vault'));
 
     expect(groupMount!.readonly).not.toBe(sharedMount!.readonly);
 
     expect(mockMkdirSync).toHaveBeenCalledWith(
-      path.join(HOME_BASE, 'vault', 'groups', 'custom-group'),
+      path.resolve(HOME_BASE, 'vault', 'groups', 'custom-group'),
       { recursive: true },
     );
 
