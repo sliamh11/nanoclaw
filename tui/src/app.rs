@@ -186,6 +186,7 @@ pub struct Session {
     pub run_mode: backend::RunMode,
     pub pending_permissions: Vec<permission_bridge::PermissionRequest>,
     pub compact_triggered: bool,
+    pub context_alert_shown: bool,
 }
 
 impl Session {
@@ -220,6 +221,7 @@ impl Session {
             run_mode: backend::RunMode::default(),
             pending_permissions: Vec::new(),
             compact_triggered: false,
+            context_alert_shown: false,
         }
     }
 
@@ -271,6 +273,7 @@ pub use crate::backend::{
     backend_labels, model_backend_name as model_backend, model_display, model_ids,
     models_for_backend,
 };
+use crate::notify;
 
 pub const EFFORT_LEVELS: &[&str] = &["low", "medium", "high", "xhigh", "max"];
 
@@ -431,6 +434,7 @@ pub struct App {
 
     pub last_activity: Instant,
     pub recap_sent: bool,
+    pub last_notification: Instant,
 }
 
 // StreamChunk and parsing delegated to backend trait — see backend/mod.rs
@@ -616,6 +620,7 @@ impl App {
 
             last_activity: Instant::now(),
             recap_sent: false,
+            last_notification: Instant::now(),
         };
         app.refresh();
         app.load_history();
@@ -709,6 +714,7 @@ impl App {
     }
 
     pub fn send_message(&mut self) {
+        self.last_activity = Instant::now();
         let msg = self.input.trim().to_string();
         if msg.is_empty() && self.pending_attachments.is_empty() {
             return;
@@ -1015,6 +1021,7 @@ impl App {
             run_mode: backend::RunMode::Ephemeral,
             pending_permissions: Vec::new(),
             compact_triggered: false,
+            context_alert_shown: false,
         };
 
         self.sessions.insert(id, session);
@@ -1579,6 +1586,19 @@ impl App {
                     let session = self.sessions.get_mut(&session_id).unwrap();
                     session.cost_usd = cost_usd;
                     session.token_count = (input_tokens + output_tokens) as u32;
+                    if !session.context_alert_shown {
+                        let ctx = backend::model_context_tokens(&session.model);
+                        let tokens = session.token_count as u64;
+                        let pct = (tokens as f64 / ctx as f64 * 100.0) as u32;
+                        if pct >= 70 {
+                            session.context_alert_shown = true;
+                            session.chat_messages.push(ChatMessage::simple(
+                                "system",
+                                "Context at 70% -- consider using /compact to free space.",
+                            ));
+                            session.mark_chat_changed();
+                        }
+                    }
                 }
                 ChunkKind::PermissionDenials(denials) => {
                     let denied_list: Vec<String> = denials
@@ -1625,7 +1645,8 @@ impl App {
                         session.trim_transcript();
                         let label = session.label.clone();
                         let summary = session.completion_summary();
-                        let prefix = if session.had_error {
+                        let had_error = session.had_error;
+                        let prefix = if had_error {
                             "Agent failed"
                         } else {
                             "Agent completed"
@@ -1636,6 +1657,15 @@ impl App {
                                 &format!("[{}: {}] {}", prefix, label, summary),
                             ));
                             main.mark_chat_changed();
+                        }
+                        if self.last_notification.elapsed() > Duration::from_secs(10) {
+                            let notif_body = if had_error {
+                                "Agent failed".to_string()
+                            } else {
+                                format!("Agent completed: {}", label)
+                            };
+                            notify::send("Deus", &notif_body);
+                            self.last_notification = Instant::now();
                         }
                         eprint!("\x07");
                         if self.active_session == session_id {
@@ -1652,6 +1682,12 @@ impl App {
                         }
                     }
                     if session_id == self.active_session {
+                        if self.last_activity.elapsed() > Duration::from_secs(5)
+                            && self.last_notification.elapsed() > Duration::from_secs(10)
+                        {
+                            notify::send("Deus", "Turn complete");
+                            self.last_notification = Instant::now();
+                        }
                         if let Some(session) = self.sessions.get(&session_id)
                             && !session.compact_triggered
                         {
@@ -1860,6 +1896,7 @@ impl App {
     }
 
     pub fn input_char(&mut self, c: char) {
+        self.last_activity = Instant::now();
         self.input.insert(self.input_cursor, c);
         self.input_cursor += c.len_utf8();
         self.update_suggestions();
@@ -1867,6 +1904,7 @@ impl App {
     }
 
     pub fn input_backspace(&mut self) {
+        self.last_activity = Instant::now();
         if self.input_cursor > 0 {
             let prev = self.input[..self.input_cursor]
                 .char_indices()
@@ -2070,6 +2108,7 @@ impl App {
     }
 
     pub fn input_newline(&mut self) {
+        self.last_activity = Instant::now();
         self.input.insert(self.input_cursor, '\n');
         self.input_cursor += 1;
     }
@@ -3169,5 +3208,83 @@ mod tests {
 
         app.reverse_search_query.clear();
         assert_eq!(app.find_reverse_match(), None);
+    }
+
+    #[test]
+    fn context_alert_fires_at_70_percent() {
+        let mut app = App::new();
+        let session = app.active_mut();
+        session.model = "sonnet".to_string(); // 200K context
+        session
+            .chat_messages
+            .push(ChatMessage::simple("assistant", "response"));
+        let (tx, rx) = std::sync::mpsc::channel();
+        session.stream_rx = Some(rx);
+        tx.send(backend::StreamChunk {
+            kind: ChunkKind::CostUpdate {
+                cost_usd: 0.03,
+                input_tokens: 140_000,
+                output_tokens: 0,
+            },
+        })
+        .unwrap();
+        app.poll_response();
+
+        let session = app.active();
+        assert!(session.context_alert_shown);
+        let has_alert = session
+            .chat_messages
+            .iter()
+            .any(|m| m.content.contains("Context at 70%"));
+        assert!(has_alert);
+    }
+
+    #[test]
+    fn context_alert_does_not_repeat() {
+        let mut app = App::new();
+        let session = app.active_mut();
+        session.model = "sonnet".to_string();
+        session.context_alert_shown = true;
+        session
+            .chat_messages
+            .push(ChatMessage::simple("assistant", "response"));
+        let (tx, rx) = std::sync::mpsc::channel();
+        session.stream_rx = Some(rx);
+        tx.send(backend::StreamChunk {
+            kind: ChunkKind::CostUpdate {
+                cost_usd: 0.04,
+                input_tokens: 160_000,
+                output_tokens: 0,
+            },
+        })
+        .unwrap();
+        let before_count = app.active().chat_messages.len();
+        app.poll_response();
+        let after_count = app.active().chat_messages.len();
+        assert_eq!(before_count, after_count);
+    }
+
+    #[test]
+    fn context_alert_does_not_fire_below_70_percent() {
+        let mut app = App::new();
+        let session = app.active_mut();
+        session.model = "sonnet".to_string(); // 200K context
+        session
+            .chat_messages
+            .push(ChatMessage::simple("assistant", "response"));
+        let (tx, rx) = std::sync::mpsc::channel();
+        session.stream_rx = Some(rx);
+        tx.send(backend::StreamChunk {
+            kind: ChunkKind::CostUpdate {
+                cost_usd: 0.02,
+                input_tokens: 120_000,
+                output_tokens: 0,
+            },
+        })
+        .unwrap();
+        app.poll_response();
+
+        let session = app.active();
+        assert!(!session.context_alert_shown);
     }
 }
