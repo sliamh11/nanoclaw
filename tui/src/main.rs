@@ -3,6 +3,7 @@ mod backend;
 mod bidi;
 mod clipboard;
 mod config;
+mod highlight;
 mod logo;
 mod notify;
 mod panels;

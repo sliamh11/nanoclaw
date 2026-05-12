@@ -14,6 +14,7 @@ unicode-bidi = "0.3"
 unicode-width = "0.1"
 arboard = "3"
 image = { version = "0.25", default-features = false, features = ["png"] }
+syntect = { version = "5.2", default-features = false, features = ["default-syntaxes", "default-themes", "parsing", "regex-fancy"] }
 
 [profile.release]
 opt-level = "z"
