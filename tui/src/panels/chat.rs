@@ -30,6 +30,67 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
     }
 }
 
+fn parse_inline_markdown(text: &str) -> Vec<Span<'static>> {
+    let bytes = text.as_bytes();
+    let len = bytes.len();
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    let mut pos = 0;
+    let mut plain_start = 0;
+
+    while pos < len {
+        if pos + 1 < len && bytes[pos] == b'*' && bytes[pos + 1] == b'*' {
+            if let Some(end) = text[pos + 2..].find("**") {
+                if pos > plain_start {
+                    spans.push(Span::raw(text[plain_start..pos].to_string()));
+                }
+                spans.push(Span::styled(
+                    text[pos + 2..pos + 2 + end].to_string(),
+                    theme::bold(),
+                ));
+                pos = pos + 2 + end + 2;
+                plain_start = pos;
+                continue;
+            }
+        }
+        if bytes[pos] == b'`' {
+            if let Some(end) = text[pos + 1..].find('`') {
+                if pos > plain_start {
+                    spans.push(Span::raw(text[plain_start..pos].to_string()));
+                }
+                spans.push(Span::styled(
+                    text[pos + 1..pos + 1 + end].to_string(),
+                    theme::code(),
+                ));
+                pos = pos + 1 + end + 1;
+                plain_start = pos;
+                continue;
+            }
+        }
+        if bytes[pos] == b'[' {
+            if let Some(bracket_end) = text[pos + 1..].find("](") {
+                let label_end = pos + 1 + bracket_end;
+                if let Some(paren_end) = text[label_end + 2..].find(')') {
+                    if pos > plain_start {
+                        spans.push(Span::raw(text[plain_start..pos].to_string()));
+                    }
+                    let label = &text[pos + 1..label_end];
+                    let url = &text[label_end + 2..label_end + 2 + paren_end];
+                    spans.push(Span::styled(label.to_string(), theme::link_text()));
+                    spans.push(Span::styled(format!(" ({})", url), theme::link_url()));
+                    pos = label_end + 2 + paren_end + 1;
+                    plain_start = pos;
+                    continue;
+                }
+            }
+        }
+        pos += 1;
+    }
+    if plain_start < len {
+        spans.push(Span::raw(text[plain_start..].to_string()));
+    }
+    spans
+}
+
 fn render_markdown_line(
     text: &str,
     in_code_block: bool,
@@ -96,46 +157,13 @@ fn render_markdown_line(
         );
     }
 
-    if text.contains("**") {
-        let mut spans: Vec<Span<'static>> = vec![Span::raw("  ")];
-        let mut remaining = text.to_string();
-        while let Some(start) = remaining.find("**") {
-            if start > 0 {
-                spans.push(Span::raw(remaining[..start].to_string()));
-            }
-            remaining = remaining[start + 2..].to_string();
-            if let Some(end) = remaining.find("**") {
-                spans.push(Span::styled(remaining[..end].to_string(), theme::bold()));
-                remaining = remaining[end + 2..].to_string();
-            } else {
-                spans.push(Span::raw("**".to_string()));
-            }
+    if text.contains("**") || text.contains('`') || text.contains("](") {
+        let spans = parse_inline_markdown(&text);
+        if spans.len() > 1 {
+            let mut result = vec![Span::raw("  ".to_string())];
+            result.extend(spans);
+            return (Line::from(result), code_block, diff);
         }
-        if !remaining.is_empty() {
-            spans.push(Span::raw(remaining));
-        }
-        return (Line::from(spans), code_block, diff);
-    }
-
-    if text.contains('`') {
-        let mut spans: Vec<Span<'static>> = vec![Span::raw("  ")];
-        let mut remaining = text.to_string();
-        while let Some(start) = remaining.find('`') {
-            if start > 0 {
-                spans.push(Span::raw(remaining[..start].to_string()));
-            }
-            remaining = remaining[start + 1..].to_string();
-            if let Some(end) = remaining.find('`') {
-                spans.push(Span::styled(remaining[..end].to_string(), theme::code()));
-                remaining = remaining[end + 1..].to_string();
-            } else {
-                spans.push(Span::raw("`".to_string()));
-            }
-        }
-        if !remaining.is_empty() {
-            spans.push(Span::raw(remaining));
-        }
-        return (Line::from(spans), code_block, diff);
     }
 
     if let Some(stripped) = text.strip_prefix("## ") {
@@ -197,35 +225,6 @@ fn render_markdown_line(
             code_block,
             diff,
         );
-    }
-
-    if text.contains("](") {
-        let mut spans: Vec<Span<'static>> = vec![Span::raw("  ")];
-        let mut remaining = text.to_string();
-        while let Some(bracket_start) = remaining.find('[') {
-            if bracket_start > 0 {
-                spans.push(Span::raw(remaining[..bracket_start].to_string()));
-            }
-            remaining = remaining[bracket_start + 1..].to_string();
-            if let Some(bracket_end) = remaining.find("](") {
-                let link_label = remaining[..bracket_end].to_string();
-                remaining = remaining[bracket_end + 2..].to_string();
-                if let Some(paren_end) = remaining.find(')') {
-                    let url = remaining[..paren_end].to_string();
-                    spans.push(Span::styled(link_label, theme::link_text()));
-                    spans.push(Span::styled(format!(" ({})", url), theme::link_url()));
-                    remaining = remaining[paren_end + 1..].to_string();
-                } else {
-                    spans.push(Span::raw(format!("[{}](", link_label)));
-                }
-            } else {
-                spans.push(Span::raw("[".to_string()));
-            }
-        }
-        if !remaining.is_empty() {
-            spans.push(Span::raw(remaining));
-        }
-        return (Line::from(spans), code_block, diff);
     }
 
     (Line::from(format!("  {}", text)), code_block, diff)
@@ -1386,5 +1385,22 @@ mod tests {
             .flat_map(|l| l.spans.iter().map(|s| s.content.to_string()))
             .collect();
         assert!(all_text.contains("val"));
+    }
+
+    #[test]
+    fn inline_parser_handles_mixed_bold_and_code() {
+        let spans = parse_inline_markdown("use **bold** and `code` together");
+        let texts: Vec<String> = spans.iter().map(|s| s.content.to_string()).collect();
+        assert!(texts.contains(&"bold".to_string()));
+        assert!(texts.contains(&"code".to_string()));
+        assert!(spans.len() >= 4);
+    }
+
+    #[test]
+    fn inline_parser_handles_link_with_bold() {
+        let spans = parse_inline_markdown("**important** [link](url) text");
+        let texts: Vec<String> = spans.iter().map(|s| s.content.to_string()).collect();
+        assert!(texts.contains(&"important".to_string()));
+        assert!(texts.contains(&"link".to_string()));
     }
 }
