@@ -106,16 +106,18 @@ CONFIDENCE_PRIOR: dict[str, float] = {
     "fact": 0.70,
     "decision": 0.70,
     "constraint": 0.65,
+    "methodology": 0.65,
     "preference": 0.55,
     "belief": 0.40,
 }
 
 CATEGORY_SECTIONS: dict[str, tuple[str, str]] = {
-    "constraint": ("Active Constraints", "Enforce these — they are verified rules or limits."),
-    "decision":   ("Prior Decisions", "Decisions already made — follow unless explicitly revisited."),
-    "fact":       ("Known Facts", "Established facts with strong corroboration."),
-    "preference": ("Preferences", "User preferences — respect unless overridden."),
-    "belief":     ("Working Beliefs", "Consider but don't assert — these may evolve."),
+    "constraint":  ("Active Constraints", "Enforce these — they are verified rules or limits."),
+    "decision":    ("Prior Decisions", "Decisions already made — follow unless explicitly revisited."),
+    "fact":        ("Known Facts", "Established facts with strong corroboration."),
+    "preference":  ("Preferences", "User preferences — respect unless overridden."),
+    "belief":      ("Working Beliefs", "Consider but don't assert — these may evolve."),
+    "methodology": ("Working Methodology", "Process rules — how to approach work."),
 }
 
 _client: genai.Client | None = None
@@ -1577,6 +1579,7 @@ def extract_atoms(content: str) -> list[dict]:
         "Categories:\n"
         "- preference: user likes/dislikes, style choices (ttl: 365 days)\n"
         "- constraint: hard rules, always/never requirements (ttl: 365 days)\n"
+        "- methodology: how to work — process patterns, execution strategy, quality gates (ttl: 365 days)\n"
         "- belief: opinions, worldview, tentative inferences (ttl: 90 days)\n"
         "- fact: identity info, context, environment details (no ttl)\n"
         "- decision: architectural or tool choices that affect future work (no ttl)\n\n"
@@ -2668,7 +2671,8 @@ def cmd_export(output_path: str, privacy_levels: list[str] | None = None):
 
 def write_atom_file(atom: dict, source_path: str, today: str,
                     source_excerpt: str = "", domain: str = "general",
-                    privacy: str = "internal") -> Path:
+                    privacy: str = "internal", kind: str = "knowledge",
+                    triggers: list[str] | None = None) -> Path:
     """Write an atom to the vault Atoms/ directory and return its path."""
     VAULT_ATOMS.mkdir(parents=True, exist_ok=True)
     cat = atom["category"]
@@ -2688,10 +2692,12 @@ def write_atom_file(atom: dict, source_path: str, today: str,
         truncated = source_excerpt[:2000]
         indented = "\n".join("  " + line for line in truncated.splitlines())
         excerpt_lines = f"source_excerpt: |\n{indented}\n"
+    triggers_line = f"triggers: {json.dumps(triggers)}\n" if triggers is not None else ""
     path.write_text(
         f"---\ntype: atom\ncategory: {cat}\ntags: []\n"
         f"confidence: {conf:.2f}\ncorroborations: 1\ndomain: {domain}\nprivacy: {privacy}\n"
         f"source: {source_path}\ncreated_at: {today}\nupdated_at: {today}\n{ttl_line}\n"
+        f"kind: {kind}\n{triggers_line}"
         f"{excerpt_lines}---\n"
         f"{atom['text']}\n"
     )

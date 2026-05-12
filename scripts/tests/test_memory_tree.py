@@ -1630,3 +1630,207 @@ class TestConvexBlend:
         )
         assert result_on["results"][0]["score"] >= result_off["results"][0]["score"], \
             f"Blend should never penalize: on={result_on['results'][0]['score']:.3f} off={result_off['results'][0]['score']:.3f}"
+
+
+# ── Benchmark Tiered ────────────────────────────────────────────────────────
+
+
+class TestBenchmarkTiered:
+    """Tests for the tiered atom system benchmark function."""
+
+    def _make_dataset(self):
+        """Minimal dataset with one entry per role."""
+        return [
+            {
+                "query": "commit these changes to the branch",
+                "expected_path": "auto-memory/feedback_one_concern.md",
+                "tag": "methodology",
+                "tier1_should_cover": True,
+            },
+            {
+                "query": "deploy to production",
+                "expected_path": "auto-memory/feedback_security_audit.md",
+                "tag": "methodology",
+                "tier1_should_cover": True,
+            },
+            {
+                "query": "shani omer household",
+                "expected_path": "Persona/life/household.md",
+                "expected_paths": ["Persona/life/household.md"],
+                "tag": "knowledge",
+                "tier1_should_cover": False,
+            },
+            {
+                "query": "watch movies with roommates",
+                "expected_path": "Persona/taste/movies.md",
+                "expected_paths": ["Persona/taste/movies.md"],
+                "tag": "knowledge",
+                "tier1_should_cover": False,
+            },
+            {
+                "query": "how to cook a chocolate souffle",
+                "abstain": True,
+                "tag": "abstain",
+                "tier1_should_cover": False,
+            },
+        ]
+
+    def test_benchmark_tiered_returns_expected_keys(self, tmp_db, fake_vault, stub_embed):
+        mt.build_tree(fake_vault, tmp_db)
+        dataset = self._make_dataset()
+        standards = {
+            "auto-memory/feedback_one_concern.md",
+            "auto-memory/feedback_security_audit.md",
+        }
+        report = mt.benchmark_tiered(tmp_db, dataset, standards, k=3)
+
+        expected_keys = {
+            "tier1_coverage",
+            "tier2_recall",
+            "combined_recall",
+            "tier1_token_cost",
+            "tier2_token_cost_avg",
+            "baseline_recall",
+        }
+        assert expected_keys <= set(report.keys()), \
+            f"Missing keys: {expected_keys - set(report.keys())}"
+        # Additional informational keys should be present too.
+        assert "n" in report
+        assert "n_methodology" in report
+        assert "n_knowledge" in report
+        assert "n_abstain" in report
+        assert "abstain_accuracy" in report
+
+    def test_tier1_coverage_with_standards(self, tmp_db, fake_vault, stub_embed):
+        """tier1_coverage is 1.0 when all methodology paths are in standards_paths.
+
+        This is a pure set-membership check — no DB rows needed for the
+        methodology atoms themselves.
+        """
+        mt.build_tree(fake_vault, tmp_db)
+        dataset = self._make_dataset()
+        # All methodology expected_paths are in standards_paths.
+        standards = {
+            "auto-memory/feedback_one_concern.md",
+            "auto-memory/feedback_security_audit.md",
+        }
+        report = mt.benchmark_tiered(tmp_db, dataset, standards, k=3)
+        assert report["tier1_coverage"] == 1.0, \
+            f"Expected tier1_coverage=1.0 when all methodology paths in standards, got {report['tier1_coverage']}"
+
+    def test_tier1_coverage_partial(self, tmp_db, fake_vault, stub_embed):
+        """tier1_coverage is 0.5 when only half of methodology paths are in standards."""
+        mt.build_tree(fake_vault, tmp_db)
+        dataset = self._make_dataset()
+        # Only one of two methodology expected_paths is in standards.
+        standards = {"auto-memory/feedback_one_concern.md"}
+        report = mt.benchmark_tiered(tmp_db, dataset, standards, k=3)
+        assert report["tier1_coverage"] == 0.5
+
+    def test_empty_dataset_returns_error(self, tmp_db):
+        report = mt.benchmark_tiered(tmp_db, [], set())
+        assert "error" in report
+
+
+# ── Atom Kind (tiered atom system) ───────────────────────────────────────────
+
+class TestAtomKind:
+    def test_upsert_node_stores_atom_kind(self, tmp_db):
+        mt.upsert_node(
+            tmp_db,
+            node_id="ak1",
+            path="atoms/standard-test.md",
+            title="Standard Atom",
+            description="A standard-tier atom for testing",
+            level=0,
+            node_type="atom",
+            embedding=None,
+            content_hash_val="h_ak1",
+            atom_kind="standard",
+        )
+        row = tmp_db.execute(
+            "SELECT atom_kind FROM nodes WHERE id = 'ak1'"
+        ).fetchone()
+        assert row is not None
+        assert row[0] == "standard"
+
+    def test_retrieve_excludes_standard_atoms(self, tmp_db, stub_embed):
+        mt.upsert_node(
+            tmp_db,
+            node_id="ek_std",
+            path="atoms/std.md",
+            title="Standard Node",
+            description="standard tier atom about cooking preferences",
+            level=0,
+            node_type="atom",
+            embedding=stub_embed("standard tier atom about cooking preferences"),
+            content_hash_val="h_ek_std",
+            atom_kind="standard",
+        )
+        mt.upsert_node(
+            tmp_db,
+            node_id="ek_know",
+            path="atoms/know.md",
+            title="Knowledge Node",
+            description="knowledge tier atom about cooking preferences",
+            level=0,
+            node_type="atom",
+            embedding=stub_embed("knowledge tier atom about cooking preferences"),
+            content_hash_val="h_ek_know",
+            atom_kind="knowledge",
+        )
+        result = mt.retrieve(
+            tmp_db, "cooking preferences", k=10,
+            use_abstain=False, use_fts=False, use_approach_angles=False,
+            exclude_kinds={"standard"},
+        )
+        returned_ids = {r["id"] for r in result["results"]}
+        assert "ek_know" in returned_ids
+        assert "ek_std" not in returned_ids
+
+    def test_parse_frontmatter_maps_kind_to_atom_kind(self):
+        fm = mt.parse_frontmatter(
+            "---\nid: xyz\nkind: standard\ndescription: test\n---\n"
+        )
+        assert "atom_kind" in fm
+        assert fm["atom_kind"] == "standard"
+        assert "kind" not in fm
+
+
+class TestStandardsPack:
+    """Tests for scripts/standards_pack.py."""
+
+    def test_load_standards_empty_dir(self, tmp_path: Path):
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+        import standards_pack as sp
+
+        result = sp.load_standards(tmp_path)
+        assert result == ""
+
+    def test_load_standards_finds_standard_atoms(self, tmp_path: Path):
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+        import standards_pack as sp
+
+        (tmp_path / "atom1.md").write_text(
+            "---\nname: Rule One\ndescription: Do thing one\nkind: standard\n---\nBody text.\n"
+        )
+        (tmp_path / "atom2.md").write_text(
+            "---\nname: Rule Two\ndescription: Do thing two\nkind: knowledge\n---\nBody text.\n"
+        )
+        result = sp.load_standards(tmp_path, token_budget=800)
+        assert "Rule One" in result
+        assert "Rule Two" not in result
+        assert "Working Standards" in result
+
+    def test_load_standards_respects_token_budget(self, tmp_path: Path):
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+        import standards_pack as sp
+
+        for i in range(20):
+            (tmp_path / f"atom{i:02d}.md").write_text(
+                f"---\nname: Rule {i}\ndescription: {'word ' * 50}\nkind: standard\n---\n"
+            )
+        result = sp.load_standards(tmp_path, token_budget=100)
+        assert result != ""
+        lines = [l for l in result.split("\n") if l.startswith("- ")]
+        assert len(lines) < 20

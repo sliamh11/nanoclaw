@@ -559,7 +559,7 @@ def parse_frontmatter(content: str) -> dict[str, Any]:
     fm = m.group(1)
     out: dict[str, Any] = {}
 
-    for scalar in ("id", "name", "description", "summary", "alias_of", "title", "type", "orphaned_at"):
+    for scalar in ("id", "name", "description", "summary", "alias_of", "title", "type", "orphaned_at", "kind"):
         sm = re.search(
             rf"^{scalar}:\s*>?\s*\n?\s*(.+?)(?=\n\S|\n---|\Z)",
             fm,
@@ -568,6 +568,9 @@ def parse_frontmatter(content: str) -> dict[str, Any]:
         if sm:
             val = re.sub(r"\n\s+", " ", sm.group(1)).strip().strip('"').strip("'")
             out[scalar] = val
+
+    if "kind" in out:
+        out["atom_kind"] = out.pop("kind")
 
     # Existing vault files use `summary:`; treat as fallback description so we
     # don't duplicate prose.
@@ -641,6 +644,11 @@ def open_db(db_path: Path = None) -> sqlite3.Connection:
         )
     """)
     db.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_nodes_path ON nodes(path) WHERE orphaned_at IS NULL")
+    try:
+        db.execute("ALTER TABLE nodes ADD COLUMN atom_kind TEXT DEFAULT 'knowledge'")
+    except sqlite3.OperationalError as e:
+        if "duplicate column" not in str(e).lower():
+            raise
     db.execute("""
         CREATE TABLE IF NOT EXISTS edges (
             src_id     TEXT NOT NULL,
@@ -740,6 +748,7 @@ def upsert_node(
     embedding: list[float] | None,
     content_hash_val: str,
     body_text: str | None = None,
+    atom_kind: str = "knowledge",
 ) -> None:
     """Insert or update a node + its embedding + FTS5 index. Soft-deletes
     prior versions by path if the ID has changed."""
@@ -759,8 +768,8 @@ def upsert_node(
     )
     db.execute(
         """
-        INSERT INTO nodes (id, path, title, description, level, type, updated_at, content_hash)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO nodes (id, path, title, description, level, type, updated_at, content_hash, atom_kind)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
             path = excluded.path,
             title = excluded.title,
@@ -769,10 +778,11 @@ def upsert_node(
             type = excluded.type,
             updated_at = excluded.updated_at,
             content_hash = excluded.content_hash,
+            atom_kind = excluded.atom_kind,
             orphaned_at = NULL,
             orphan_reason = NULL
         """,
-        (node_id, path, title, description, level, node_type, now, content_hash_val),
+        (node_id, path, title, description, level, node_type, now, content_hash_val, atom_kind),
     )
     if embedding is not None and sqlite_vec is not None:
         rowid = _rowid_for(node_id)
@@ -992,6 +1002,7 @@ def build_tree(
             embedding=vec,
             content_hash_val=ch,
             body_text=_body_from_content(entry["content"]),
+            atom_kind=fm.get("atom_kind", "knowledge"),
         )
         counts["nodes"] += 1
 
@@ -1161,6 +1172,7 @@ def discover_node(vault: Path, rel_path: str, db: sqlite3.Connection) -> str:
         embedding=vec,
         content_hash_val=ch,
         body_text=_body_from_content(content),
+        atom_kind=fm.get("atom_kind", "knowledge"),
     )
     for kind, key in (("child", "children"), ("see_also", "see_also")):
         for tgt_path in fm.get(key, []):
@@ -1196,6 +1208,7 @@ def retrieve(
     content_cap: float = COVERAGE_CONTENT_CAP,
     use_coherence_gate: bool = DEFAULT_USE_COHERENCE_GATE,
     min_entity_overlap: int = DEFAULT_MIN_ENTITY_OVERLAP,
+    exclude_kinds: set[str] | None = None,
 ) -> dict[str, Any]:
     """4-phase retrieval: flat cosine → FTS5 BM25 → graph expansion → abstain.
 
@@ -1209,12 +1222,14 @@ def retrieve(
 
     # Phase 1: flat cosine over all active nodes.
     all_nodes = db.execute(
-        "SELECT id, path, title FROM nodes WHERE orphaned_at IS NULL"
+        "SELECT id, path, title, atom_kind FROM nodes WHERE orphaned_at IS NULL"
     ).fetchall()
     node_lookup: dict[str, tuple[str, str]] = {}  # nid → (path, title)
     cosine_scores: dict[str, float] = {}
     scored: list[tuple[str, str, str, float, str]] = []
-    for (nid, npath, ntitle) in all_nodes:
+    for (nid, npath, ntitle, nkind) in all_nodes:
+        if exclude_kinds and nkind in exclude_kinds:
+            continue
         node_lookup[nid] = (npath, ntitle)
         rowid = _rowid_for(nid)
         erow = db.execute(
@@ -1289,7 +1304,9 @@ def retrieve(
             fused_ids = _rrf_fuse(vec_ranked, fts_hits, k_rrf=rrf_k, top=k * 2)
             reordered: list[tuple[str, str, str, float, str]] = []
             for nid in fused_ids:
-                npath, ntitle = node_lookup.get(nid, ("?", "?"))
+                if nid not in node_lookup:
+                    continue
+                npath, ntitle = node_lookup[nid]
                 cs = cosine_scores.get(nid, 0.0)
                 route = "rrf" if nid in dict(fts_hits) else "flat"
                 reordered.append((nid, npath, ntitle, cs, route))
@@ -1817,6 +1834,7 @@ def reindex_external(
             embedding=vec,
             content_hash_val=ch,
             body_text=_body_from_content(content),
+            atom_kind=fm.get("atom_kind", "knowledge"),
         )
         counts["indexed"] += 1
 
@@ -2076,6 +2094,7 @@ def calibrate_sweep(
     *,
     k: int = 5,
     min_recall: float = 0.70,
+    exclude_kinds: set[str] | None = None,
 ) -> dict[str, Any]:
     """Grid search for optimal thresholds using Pareto selection.
 
@@ -2116,7 +2135,8 @@ def calibrate_sweep(
             r = benchmark(db, dataset, k=k, abstain_threshold=abstain_t,
                           gap_threshold=gap_t, use_fts=True,
                           coverage_threshold=cov_t, content_cap=cap_t,
-                          use_coherence_gate=True, min_entity_overlap=eo_t)
+                          use_coherence_gate=True, min_entity_overlap=eo_t,
+                          exclude_kinds=exclude_kinds)
 
             results.append({
                 "abstain_threshold": abstain_t,
@@ -2177,6 +2197,7 @@ def benchmark(
     content_cap: float = COVERAGE_CONTENT_CAP,
     use_coherence_gate: bool = DEFAULT_USE_COHERENCE_GATE,
     min_entity_overlap: int = DEFAULT_MIN_ENTITY_OVERLAP,
+    exclude_kinds: set[str] | None = None,
 ) -> dict[str, Any]:
     """Run dataset queries, compute recall@k, MRR@k, per-tag breakdown, latency.
 
@@ -2224,6 +2245,7 @@ def benchmark(
             content_cap=content_cap,
             use_coherence_gate=use_coherence_gate,
             min_entity_overlap=min_entity_overlap,
+            exclude_kinds=exclude_kinds,
         )
         latencies.append(_time.monotonic() - t0)
 
@@ -2323,6 +2345,158 @@ def benchmark_ablation(
             use_coherence_gate=use_cg,
         )
     return out
+
+
+def benchmark_tiered(
+    db: sqlite3.Connection,
+    dataset: list[dict[str, Any]],
+    standards_paths: set[str],
+    *,
+    k: int = 5,
+    low_threshold: float = DEFAULT_LOW_THRESHOLD,
+    abstain_threshold: float = DEFAULT_ABSTAIN_THRESHOLD,
+    gap_threshold: float = DEFAULT_SCORE_GAP_THRESHOLD,
+) -> dict[str, Any]:
+    """Supplementary coverage metric for the tiered atom system.
+
+    For each query in dataset:
+    - If tier1_should_cover is True: check if expected_path is in standards_paths
+      (pure set membership — no retrieval needed).
+    - If tag == "abstain": run retrieve() and check abstain accuracy.
+    - Otherwise (knowledge queries): run retrieve() with
+      ``exclude_kinds={"standard"}`` so standard-kind atoms are excluded at the
+      retrieval level, simulating tier-2-only retrieval.
+
+    Also computes baseline_recall: recall over ALL non-abstain queries with no
+    exclusion (the current system). Methodology probes whose expected_path may
+    not exist in the DB will naturally miss — that's the point: it quantifies
+    the gap the standards pack fills.
+
+    Returns dict with:
+    - tier1_coverage: fraction of methodology queries covered by standards pack
+    - tier2_recall: recall on knowledge queries with exclude_kinds={"standard"}
+    - combined_recall: weighted combination (tier1 hits + tier2 hits) / total
+    - tier1_token_cost: token_estimate of the standards pack text (from DB descriptions)
+    - tier2_token_cost_avg: average token cost per knowledge retrieval
+    - baseline_recall: recall on ALL non-abstain queries with no exclusion
+    """
+    n = len(dataset)
+    if n == 0:
+        return {"error": "empty dataset"}
+
+    # Separate by role.
+    methodology_items = [d for d in dataset if d.get("tier1_should_cover")]
+    knowledge_items = [
+        d for d in dataset
+        if not d.get("tier1_should_cover")
+        and d.get("tag") != "abstain"
+        and not d.get("abstain")
+    ]
+    abstain_items = [
+        d for d in dataset
+        if d.get("tag") == "abstain" or d.get("abstain")
+    ]
+
+    # Tier 1: pure set-membership coverage.
+    tier1_hits = 0
+    for item in methodology_items:
+        ep = item.get("expected_path", "")
+        if ep and ep in standards_paths:
+            tier1_hits += 1
+    tier1_coverage = tier1_hits / len(methodology_items) if methodology_items else 0.0
+
+    # Tier 1 token cost: sum token_estimate of descriptions for all standards paths.
+    tier1_token_cost = 0
+    for sp in standards_paths:
+        row = db.execute(
+            "SELECT description FROM nodes WHERE path = ? AND orphaned_at IS NULL",
+            (sp,),
+        ).fetchone()
+        if row and row[0]:
+            tier1_token_cost += token_estimate(row[0])
+
+    # Tier 2: knowledge recall with standard atoms excluded at retrieval level.
+    tier2_hits = 0
+    tier2_costs: list[int] = []
+    for item in knowledge_items:
+        expected = item.get("expected_paths") or (
+            [item["expected_path"]] if item.get("expected_path") else []
+        )
+        result = retrieve(
+            db, item["query"], k=k,
+            low_threshold=low_threshold,
+            abstain_threshold=abstain_threshold,
+            gap_threshold=gap_threshold,
+            exclude_kinds={"standard"},
+        )
+        returned_paths = [r["path"] for r in result["results"]]
+        if any(p in returned_paths for p in expected):
+            tier2_hits += 1
+        # Token cost of returned results.
+        cost = sum(
+            token_estimate(r.get("title", "") + " " + r.get("path", ""))
+            for r in result["results"]
+        )
+        tier2_costs.append(cost)
+    tier2_recall = tier2_hits / len(knowledge_items) if knowledge_items else 0.0
+    tier2_token_cost_avg = sum(tier2_costs) / len(tier2_costs) if tier2_costs else 0
+
+    # Abstain accuracy.
+    abstain_correct = 0
+    for item in abstain_items:
+        result = retrieve(
+            db, item["query"], k=k,
+            low_threshold=low_threshold,
+            abstain_threshold=abstain_threshold,
+            gap_threshold=gap_threshold,
+        )
+        if result["fell_back"]:
+            abstain_correct += 1
+    abstain_accuracy = abstain_correct / len(abstain_items) if abstain_items else None
+
+    # Baseline recall: all non-abstain queries, no exclusion.
+    baseline_hits = 0
+    baseline_total = 0
+    for item in dataset:
+        if item.get("tag") == "abstain" or item.get("abstain"):
+            continue
+        baseline_total += 1
+        expected = item.get("expected_paths") or (
+            [item["expected_path"]] if item.get("expected_path") else []
+        )
+        result = retrieve(
+            db, item["query"], k=k,
+            low_threshold=low_threshold,
+            abstain_threshold=abstain_threshold,
+            gap_threshold=gap_threshold,
+        )
+        returned_paths = [r["path"] for r in result["results"]]
+        if any(p in returned_paths for p in expected):
+            baseline_hits += 1
+    baseline_recall = baseline_hits / baseline_total if baseline_total else 0.0
+
+    # Combined recall: weighted average of tier1 coverage and tier2 recall.
+    n_method = len(methodology_items)
+    n_knowledge = len(knowledge_items)
+    n_combined = n_method + n_knowledge
+    if n_combined > 0:
+        combined_recall = (tier1_hits + tier2_hits) / n_combined
+    else:
+        combined_recall = 0.0
+
+    return {
+        "tier1_coverage": round(tier1_coverage, 3),
+        "tier2_recall": round(tier2_recall, 3),
+        "combined_recall": round(combined_recall, 3),
+        "tier1_token_cost": tier1_token_cost,
+        "tier2_token_cost_avg": round(tier2_token_cost_avg, 1),
+        "baseline_recall": round(baseline_recall, 3),
+        "abstain_accuracy": round(abstain_accuracy, 3) if abstain_accuracy is not None else None,
+        "n": n,
+        "n_methodology": n_method,
+        "n_knowledge": n_knowledge,
+        "n_abstain": len(abstain_items),
+    }
 
 
 def benchmark_loo(
@@ -2675,6 +2849,17 @@ def main(argv: list[str] | None = None) -> int:
     p_bench.add_argument("--loo", action="store_true", help="Leave-one-out CV (honest generalization estimate)")
     p_bench.add_argument("--no-fts", action="store_true", help="Disable FTS5 hybrid search")
 
+    p_bench_t = sub.add_parser("benchmark-tiered", help="Run tiered coverage benchmark")
+    p_bench_t.add_argument("dataset_jsonl", help="Path to JSONL methodology-probes dataset")
+    p_bench_t.add_argument(
+        "standards_file",
+        help="Text file listing standards-pack paths, one per line",
+    )
+    p_bench_t.add_argument("-k", type=int, default=5)
+    p_bench_t.add_argument("--json", action="store_true")
+    p_bench_t.add_argument("--low", type=float, default=DEFAULT_LOW_THRESHOLD)
+    p_bench_t.add_argument("--abstain", type=float, default=DEFAULT_ABSTAIN_THRESHOLD)
+
     args = parser.parse_args(argv)
     db = open_db()
     vault = resolve_vault_path()
@@ -2873,6 +3058,32 @@ def main(argv: list[str] | None = None) -> int:
         else:
             report = benchmark(db, data, k=args.k, low_threshold=args.low, abstain_threshold=args.abstain, use_fts=not args.no_fts)
         print(json.dumps(report, indent=2))
+        return 0
+
+    if args.cmd == "benchmark-tiered":
+        data = [json.loads(l) for l in Path(args.dataset_jsonl).read_text().splitlines() if l.strip()]
+        standards = {
+            line.strip()
+            for line in Path(args.standards_file).read_text().splitlines()
+            if line.strip() and not line.strip().startswith("#")
+        }
+        report = benchmark_tiered(
+            db, data, standards,
+            k=args.k,
+            low_threshold=args.low,
+            abstain_threshold=args.abstain,
+        )
+        if args.json:
+            print(json.dumps(report, indent=2))
+        else:
+            print(f"tier1_coverage={report['tier1_coverage']:.3f}  "
+                  f"tier2_recall={report['tier2_recall']:.3f}  "
+                  f"combined={report['combined_recall']:.3f}  "
+                  f"baseline={report['baseline_recall']:.3f}")
+            print(f"tier1_tokens={report['tier1_token_cost']}  "
+                  f"tier2_tokens_avg={report['tier2_token_cost_avg']:.1f}")
+            if report['abstain_accuracy'] is not None:
+                print(f"abstain_accuracy={report['abstain_accuracy']:.3f}")
         return 0
 
     return 1
