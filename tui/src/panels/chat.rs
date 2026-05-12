@@ -517,21 +517,68 @@ fn build_message_lines(app: &App) -> (Vec<Line<'static>>, Vec<String>) {
     (lines, code_blocks)
 }
 
+fn highlight_search_matches(lines: Vec<Line<'static>>, query: &str) -> Vec<Line<'static>> {
+    let query_lower = query.to_lowercase();
+    lines
+        .into_iter()
+        .map(|line| {
+            let full_text: String = line.spans.iter().map(|s| s.content.to_string()).collect();
+            let lower = full_text.to_lowercase();
+            if !lower.contains(&query_lower) {
+                return line;
+            }
+            let mut result_spans: Vec<Span<'static>> = Vec::new();
+            let mut pos = 0usize;
+            for (match_start, matched) in lower.match_indices(&query_lower) {
+                let match_end = match_start + matched.len();
+                if match_start > pos {
+                    let end = match_start.min(full_text.len());
+                    result_spans.push(Span::raw(full_text[pos..end].to_string()));
+                }
+                let ft_end = match_end.min(full_text.len());
+                if match_start < full_text.len() {
+                    result_spans.push(Span::styled(
+                        full_text[match_start..ft_end].to_string(),
+                        Style::default()
+                            .bg(Color::Yellow)
+                            .fg(Color::Black)
+                            .add_modifier(Modifier::BOLD),
+                    ));
+                }
+                pos = ft_end;
+            }
+            if pos < full_text.len() {
+                result_spans.push(Span::raw(full_text[pos..].to_string()));
+            }
+            Line::from(result_spans)
+        })
+        .collect()
+}
+
 fn render_messages(frame: &mut Frame, app: &App, area: Rect) {
     let session = app.active();
     let is_streaming = matches!(session.chat_state, crate::app::ChatState::Streaming);
 
-    let mut lines = LINE_CACHE.with(|cache| {
-        let mut cached = cache.borrow_mut();
-        if cached.0 != app.active_session || cached.1 != session.chat_version {
-            let (built_lines, blocks) = build_message_lines(app);
-            cached.2 = built_lines;
-            cached.3 = blocks;
-            cached.0 = app.active_session;
-            cached.1 = session.chat_version;
+    let mut lines = if app.output_search_mode {
+        let (built_lines, _) = build_message_lines(app);
+        if !app.output_search_query.is_empty() {
+            highlight_search_matches(built_lines, &app.output_search_query)
+        } else {
+            built_lines
         }
-        cached.2.clone()
-    });
+    } else {
+        LINE_CACHE.with(|cache| {
+            let mut cached = cache.borrow_mut();
+            if cached.0 != app.active_session || cached.1 != session.chat_version {
+                let (built_lines, blocks) = build_message_lines(app);
+                cached.2 = built_lines;
+                cached.3 = blocks;
+                cached.0 = app.active_session;
+                cached.1 = session.chat_version;
+            }
+            cached.2.clone()
+        })
+    };
 
     if is_streaming {
         let has_text = session
@@ -660,6 +707,35 @@ fn render_messages(frame: &mut Frame, app: &App, area: Rect) {
         let perm_widget = Paragraph::new(perm_lines).wrap(Wrap { trim: false });
         frame.render_widget(Clear, perm_area);
         frame.render_widget(perm_widget, perm_area);
+    }
+
+    if app.output_search_mode {
+        let match_info = if app.output_search_matches.is_empty() {
+            if app.output_search_query.is_empty() {
+                String::new()
+            } else {
+                " (no matches)".to_string()
+            }
+        } else {
+            format!(
+                " ({}/{})",
+                app.output_search_current + 1,
+                app.output_search_matches.len()
+            )
+        };
+        let bar = Line::from(vec![
+            Span::styled(" Search: ", theme::accent()),
+            Span::raw(app.output_search_query.clone()),
+            Span::styled(match_info, theme::dim()),
+        ]);
+        let bar_area = Rect {
+            x: area.x,
+            y: area.y + area.height.saturating_sub(1),
+            width: area.width,
+            height: 1,
+        };
+        frame.render_widget(Clear, bar_area);
+        frame.render_widget(Paragraph::new(bar), bar_area);
     }
 }
 

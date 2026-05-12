@@ -452,6 +452,11 @@ pub struct App {
 
     pub file_suggestions: Vec<FileSuggestion>,
     pub file_at_position: Option<usize>,
+
+    pub output_search_mode: bool,
+    pub output_search_query: String,
+    pub output_search_matches: Vec<(usize, usize)>,
+    pub output_search_current: usize,
 }
 
 // StreamChunk and parsing delegated to backend trait — see backend/mod.rs
@@ -520,6 +525,66 @@ impl App {
         self.reverse_search_query.clear();
         self.reverse_search_match_index = 0;
         self.reverse_search_saved_input.clear();
+    }
+
+    pub fn enter_output_search(&mut self) {
+        if self.reverse_search_mode {
+            self.exit_reverse_search();
+        }
+        self.output_search_mode = true;
+        self.output_search_query.clear();
+        self.output_search_matches.clear();
+        self.output_search_current = 0;
+    }
+
+    pub fn exit_output_search(&mut self) {
+        self.output_search_mode = false;
+        self.output_search_query.clear();
+        self.output_search_matches.clear();
+        self.output_search_current = 0;
+        self.mark_chat_changed();
+    }
+
+    pub fn update_output_search(&mut self) {
+        self.output_search_matches.clear();
+        self.output_search_current = 0;
+        let query = self.output_search_query.to_lowercase();
+        if query.is_empty() {
+            return;
+        }
+        let mut matches: Vec<(usize, usize)> = Vec::new();
+        for (msg_idx, msg) in self.active().chat_messages.iter().enumerate() {
+            let text_content: String = msg
+                .blocks
+                .iter()
+                .filter_map(|b| match b {
+                    MessageBlock::Text(t) => Some(t.as_str()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            let lower = text_content.to_lowercase();
+            for (offset, _) in lower.match_indices(&query) {
+                matches.push((msg_idx, offset));
+            }
+        }
+        self.output_search_matches = matches;
+    }
+
+    pub fn next_search_match(&mut self) {
+        if !self.output_search_matches.is_empty() {
+            self.output_search_current =
+                (self.output_search_current + 1) % self.output_search_matches.len();
+            self.mark_chat_changed();
+        }
+    }
+
+    pub fn prev_search_match(&mut self) {
+        if !self.output_search_matches.is_empty() {
+            let total = self.output_search_matches.len();
+            self.output_search_current = (self.output_search_current + total - 1) % total;
+            self.mark_chat_changed();
+        }
     }
 
     /// Non-Chat panel order used for Tab / Shift+Tab cycling.
@@ -651,6 +716,11 @@ impl App {
 
             file_suggestions: Vec::new(),
             file_at_position: None,
+
+            output_search_mode: false,
+            output_search_query: String::new(),
+            output_search_matches: Vec::new(),
+            output_search_current: 0,
         };
         app.refresh();
         app.load_history();
@@ -3711,5 +3781,48 @@ mod tests {
         app.input_cursor = 6;
         app.update_suggestions();
         assert!(app.file_suggestions.is_empty());
+    }
+
+    #[test]
+    fn output_search_finds_matches() {
+        let mut app = App::new();
+        app.active_mut()
+            .chat_messages
+            .push(ChatMessage::simple("user", "hello world"));
+        app.active_mut()
+            .chat_messages
+            .push(ChatMessage::simple("assistant", "Hello back"));
+        app.output_search_query = "hello".to_string();
+        app.update_output_search();
+        assert_eq!(app.output_search_matches.len(), 2);
+    }
+
+    #[test]
+    fn output_search_n_wraps() {
+        let mut app = App::new();
+        app.active_mut()
+            .chat_messages
+            .push(ChatMessage::simple("user", "test test"));
+        app.output_search_query = "test".to_string();
+        app.update_output_search();
+        assert_eq!(app.output_search_matches.len(), 2);
+        assert_eq!(app.output_search_current, 0);
+        app.next_search_match();
+        assert_eq!(app.output_search_current, 1);
+        app.next_search_match();
+        assert_eq!(app.output_search_current, 0);
+    }
+
+    #[test]
+    fn output_search_mutual_exclusion() {
+        let mut app = App::new();
+        app.reverse_search_mode = true;
+        app.reverse_search_query = "old query".to_string();
+        app.enter_output_search();
+        assert!(!app.reverse_search_mode);
+        assert!(app.reverse_search_query.is_empty());
+        assert!(app.output_search_mode);
+        app.exit_output_search();
+        assert!(!app.output_search_mode);
     }
 }

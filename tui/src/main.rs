@@ -141,6 +141,31 @@ fn main() -> io::Result<()> {
                         continue;
                     }
 
+                    if app.output_search_mode {
+                        match key.code {
+                            KeyCode::Esc => app.exit_output_search(),
+                            KeyCode::Char('n')
+                                if !key.modifiers.contains(KeyModifiers::CONTROL) =>
+                            {
+                                app.next_search_match();
+                            }
+                            KeyCode::Char('N') => app.prev_search_match(),
+                            KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                                app.output_search_query.push(c);
+                                app.update_output_search();
+                                app.mark_chat_changed();
+                            }
+                            KeyCode::Backspace => {
+                                app.output_search_query.pop();
+                                app.update_output_search();
+                                app.mark_chat_changed();
+                            }
+                            KeyCode::Enter => app.exit_output_search(),
+                            _ => {}
+                        }
+                        continue;
+                    }
+
                     if app.reverse_search_mode {
                         let mut consumed = true;
                         match key.code {
@@ -307,10 +332,16 @@ fn main() -> io::Result<()> {
                                         crate::app::ChatState::Streaming
                                     ) =>
                                 {
+                                    if app.output_search_mode {
+                                        app.exit_output_search();
+                                    }
                                     app.reverse_search_mode = true;
                                     app.reverse_search_query.clear();
                                     app.reverse_search_match_index = 0;
                                     app.reverse_search_saved_input = app.input.clone();
+                                }
+                                KeyCode::Char('f') => {
+                                    app.enter_output_search();
                                 }
                                 KeyCode::Char('j') => app.input_newline(),
                                 _ => {}
