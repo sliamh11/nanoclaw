@@ -262,6 +262,12 @@ impl Session {
     }
 }
 
+#[derive(Clone)]
+pub struct FileSuggestion {
+    pub path: String,
+    pub is_dir: bool,
+}
+
 pub struct CommandDef {
     pub name: &'static str,
     pub description: &'static str,
@@ -443,6 +449,9 @@ pub struct App {
     pub show_rewind_picker: bool,
     pub rewind_cursor: usize,
     pub rewind_targets: Vec<usize>,
+
+    pub file_suggestions: Vec<FileSuggestion>,
+    pub file_at_position: Option<usize>,
 }
 
 // StreamChunk and parsing delegated to backend trait — see backend/mod.rs
@@ -639,6 +648,9 @@ impl App {
             show_rewind_picker: false,
             rewind_cursor: 0,
             rewind_targets: Vec::new(),
+
+            file_suggestions: Vec::new(),
+            file_at_position: None,
         };
         app.refresh();
         app.load_history();
@@ -1850,77 +1862,147 @@ impl App {
 
     pub fn update_suggestions(&mut self) {
         self.arg_suggestions.clear();
+        self.file_suggestions.clear();
+        self.file_at_position = None;
 
-        if !self.input.starts_with('/') {
-            self.suggestions.clear();
-            self.suggestion_cursor = 0;
-            return;
-        }
+        if self.input.starts_with('/') {
+            if let Some(space_idx) = self.input.find(' ') {
+                let cmd_part = &self.input[..space_idx];
+                let arg_part = &self.input[space_idx + 1..];
 
-        if let Some(space_idx) = self.input.find(' ') {
-            let cmd_part = &self.input[..space_idx];
-            let arg_part = &self.input[space_idx + 1..];
-
-            if let Some(cmd) = COMMANDS.iter().find(|c| c.name == cmd_part) {
-                if cmd.name == "/model" {
-                    if arg_part.is_empty() {
-                        self.arg_suggestions = backend_labels();
-                    } else if arg_part == "claude" || arg_part.starts_with("claude ") {
-                        self.arg_suggestions = models_for_backend("claude");
-                    } else if arg_part == "codex" || arg_part.starts_with("codex ") {
-                        self.arg_suggestions = models_for_backend("codex");
-                    } else {
-                        let mut all: Vec<String> = Vec::new();
-                        for b in backend::all_backends() {
-                            for m in b.models() {
-                                let label = format!("{} ({})", m.display, m.context);
-                                if m.id.starts_with(arg_part)
-                                    || m.display
-                                        .to_lowercase()
-                                        .starts_with(&arg_part.to_lowercase())
-                                {
-                                    all.push(label);
+                if let Some(cmd) = COMMANDS.iter().find(|c| c.name == cmd_part) {
+                    if cmd.name == "/model" {
+                        if arg_part.is_empty() {
+                            self.arg_suggestions = backend_labels();
+                        } else if arg_part == "claude" || arg_part.starts_with("claude ") {
+                            self.arg_suggestions = models_for_backend("claude");
+                        } else if arg_part == "codex" || arg_part.starts_with("codex ") {
+                            self.arg_suggestions = models_for_backend("codex");
+                        } else {
+                            let mut all: Vec<String> = Vec::new();
+                            for b in backend::all_backends() {
+                                for m in b.models() {
+                                    let label = format!("{} ({})", m.display, m.context);
+                                    if m.id.starts_with(arg_part)
+                                        || m.display
+                                            .to_lowercase()
+                                            .starts_with(&arg_part.to_lowercase())
+                                    {
+                                        all.push(label);
+                                    }
                                 }
                             }
+                            self.arg_suggestions = all;
                         }
-                        self.arg_suggestions = all;
+                    } else if !cmd.args.is_empty() {
+                        self.arg_suggestions = cmd
+                            .args
+                            .iter()
+                            .filter(|a| a.starts_with(arg_part))
+                            .map(|a| a.to_string())
+                            .collect();
                     }
-                } else if !cmd.args.is_empty() {
-                    self.arg_suggestions = cmd
-                        .args
-                        .iter()
-                        .filter(|a| a.starts_with(arg_part))
-                        .map(|a| a.to_string())
-                        .collect();
+                    if self.suggestion_cursor >= self.arg_suggestions.len() {
+                        self.suggestion_cursor = 0;
+                    }
                 }
-                if self.suggestion_cursor >= self.arg_suggestions.len() {
+                self.suggestions.clear();
+            } else {
+                let prefix = &self.input;
+                self.suggestions = COMMANDS
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, cmd)| cmd.name.starts_with(prefix))
+                    .map(|(i, _)| i)
+                    .collect();
+                if self.suggestion_cursor >= self.suggestions.len() {
                     self.suggestion_cursor = 0;
                 }
+                return;
             }
+        } else {
             self.suggestions.clear();
-            return;
+            self.suggestion_cursor = 0;
         }
 
-        let prefix = &self.input;
-        self.suggestions = COMMANDS
-            .iter()
-            .enumerate()
-            .filter(|(_, cmd)| cmd.name.starts_with(prefix))
-            .map(|(i, _)| i)
-            .collect();
-        if self.suggestion_cursor >= self.suggestions.len() {
+        self.update_file_suggestions();
+    }
+
+    fn update_file_suggestions(&mut self) {
+        let input_before_cursor = &self.input[..self.input_cursor];
+        let at_pos = match input_before_cursor.rfind('@') {
+            Some(pos) => pos,
+            None => return,
+        };
+        if at_pos > 0 {
+            let before_at = input_before_cursor.as_bytes()[at_pos - 1];
+            if before_at != b' ' && before_at != b'\t' {
+                return;
+            }
+        }
+        let partial = &input_before_cursor[at_pos + 1..];
+        if partial.starts_with('/') {
+            return;
+        }
+        if std::path::Path::new(partial)
+            .components()
+            .any(|c| matches!(c, std::path::Component::ParentDir))
+        {
+            return;
+        }
+        let (dir, prefix) = if let Some(slash_pos) = partial.rfind('/') {
+            (&partial[..=slash_pos], &partial[slash_pos + 1..])
+        } else {
+            ("", partial)
+        };
+        let scan_path = if dir.is_empty() {
+            std::path::PathBuf::from(".")
+        } else {
+            std::path::PathBuf::from(dir)
+        };
+        let entries = match std::fs::read_dir(&scan_path) {
+            Ok(rd) => rd,
+            Err(_) => return,
+        };
+        let mut results: Vec<FileSuggestion> = Vec::new();
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.starts_with('.') {
+                continue;
+            }
+            if !prefix.is_empty() && !name.starts_with(prefix) {
+                continue;
+            }
+            let is_dir = entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false);
+            let path = if is_dir {
+                format!("{}{}/", dir, name)
+            } else {
+                format!("{}{}", dir, name)
+            };
+            results.push(FileSuggestion { path, is_dir });
+            if results.len() >= 20 {
+                break;
+            }
+        }
+        results.sort_by(|a, b| a.path.cmp(&b.path));
+        if !results.is_empty() {
+            self.file_suggestions = results;
+            self.file_at_position = Some(at_pos);
             self.suggestion_cursor = 0;
         }
     }
 
     pub fn has_suggestions(&self) -> bool {
-        (!self.suggestions.is_empty() || !self.arg_suggestions.is_empty())
-            && self.input.starts_with('/')
+        !self.file_suggestions.is_empty()
+            || ((!self.suggestions.is_empty() || !self.arg_suggestions.is_empty())
+                && self.input.starts_with('/'))
     }
 
     pub fn dismiss_suggestions(&mut self) {
         self.suggestions.clear();
         self.arg_suggestions.clear();
+        self.file_suggestions.clear();
+        self.file_at_position = None;
         self.suggestion_cursor = 0;
     }
 
@@ -1941,6 +2023,9 @@ impl App {
     }
 
     pub fn suggestion_is_exact_match(&self) -> bool {
+        if !self.file_suggestions.is_empty() {
+            return false;
+        }
         if !self.arg_suggestions.is_empty() {
             if let Some(arg) = self.arg_suggestions.get(self.suggestion_cursor)
                 && let Some(space_idx) = self.input.find(' ')
@@ -1959,6 +2044,22 @@ impl App {
     }
 
     pub fn accept_suggestion(&mut self) {
+        if !self.file_suggestions.is_empty() {
+            if let Some(entry) = self.file_suggestions.get(self.suggestion_cursor).cloned() {
+                if let Some(at_pos) = self.file_at_position {
+                    let after_cursor = self.input[self.input_cursor..].to_string();
+                    self.input =
+                        format!("{}@{}{}", &self.input[..at_pos], entry.path, after_cursor);
+                    self.input_cursor = at_pos + 1 + entry.path.len();
+                }
+                self.file_suggestions.clear();
+                self.file_at_position = None;
+                if entry.is_dir {
+                    self.update_file_suggestions();
+                }
+            }
+            return;
+        }
         if !self.arg_suggestions.is_empty() {
             if let Some(arg) = self.arg_suggestions.get(self.suggestion_cursor) {
                 let space_idx = self.input.find(' ').unwrap_or(self.input.len());
@@ -2003,7 +2104,9 @@ impl App {
     }
 
     fn suggestion_count(&self) -> usize {
-        if !self.arg_suggestions.is_empty() {
+        if !self.file_suggestions.is_empty() {
+            self.file_suggestions.len()
+        } else if !self.arg_suggestions.is_empty() {
             self.arg_suggestions.len()
         } else {
             self.suggestions.len()
@@ -3520,5 +3623,93 @@ mod tests {
             app.active().run_mode,
             backend::RunMode::Normal { session_id: None }
         );
+    }
+
+    #[test]
+    fn file_suggestions_from_at_sign() {
+        let mut app = App::new();
+        app.input = "@src/".to_string();
+        app.input_cursor = 5;
+        app.update_suggestions();
+        assert!(app.has_suggestions());
+        assert!(!app.file_suggestions.is_empty());
+        assert_eq!(app.file_at_position, Some(0));
+    }
+
+    #[test]
+    fn file_suggestions_mid_sentence() {
+        let mut app = App::new();
+        app.input = "summarize @src/".to_string();
+        app.input_cursor = 15;
+        app.update_suggestions();
+        assert!(app.has_suggestions());
+        assert_eq!(app.file_at_position, Some(10));
+    }
+
+    #[test]
+    fn file_suggestions_in_slash_command() {
+        let mut app = App::new();
+        app.input = "/agent summarize @src/".to_string();
+        app.input_cursor = 21;
+        app.update_suggestions();
+        assert!(!app.file_suggestions.is_empty());
+    }
+
+    #[test]
+    fn suggestion_count_includes_file_suggestions() {
+        let mut app = App::new();
+        app.input = "@src/".to_string();
+        app.input_cursor = 5;
+        app.update_suggestions();
+        let count = app.file_suggestions.len();
+        assert!(count > 0);
+        assert_eq!(app.suggestion_count(), count);
+    }
+
+    #[test]
+    fn dismiss_clears_file_suggestions() {
+        let mut app = App::new();
+        app.file_suggestions = vec![FileSuggestion {
+            path: "test.rs".to_string(),
+            is_dir: false,
+        }];
+        app.file_at_position = Some(0);
+        app.dismiss_suggestions();
+        assert!(app.file_suggestions.is_empty());
+        assert!(app.file_at_position.is_none());
+    }
+
+    #[test]
+    fn accept_file_suggestion_replaces_at_partial() {
+        let mut app = App::new();
+        app.input = "check @sr".to_string();
+        app.input_cursor = 9;
+        app.file_suggestions = vec![FileSuggestion {
+            path: "src/".to_string(),
+            is_dir: true,
+        }];
+        app.file_at_position = Some(6);
+        app.suggestion_cursor = 0;
+        app.accept_suggestion();
+        assert_eq!(app.input, "check @src/");
+        assert_eq!(app.input_cursor, 11);
+    }
+
+    #[test]
+    fn file_suggestions_reject_path_traversal() {
+        let mut app = App::new();
+        app.input = "@../".to_string();
+        app.input_cursor = 4;
+        app.update_suggestions();
+        assert!(app.file_suggestions.is_empty());
+    }
+
+    #[test]
+    fn file_suggestions_reject_absolute_paths() {
+        let mut app = App::new();
+        app.input = "@/etc/".to_string();
+        app.input_cursor = 6;
+        app.update_suggestions();
+        assert!(app.file_suggestions.is_empty());
     }
 }

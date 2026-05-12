@@ -830,7 +830,37 @@ fn render_input(frame: &mut Frame, app: &App, area: Rect) {
 fn render_suggestions(frame: &mut Frame, app: &App, input_area: Rect) {
     let max_visible: usize = 8;
 
-    let (items, title) = if !app.arg_suggestions.is_empty() {
+    let (items, title) = if !app.file_suggestions.is_empty() {
+        let total = app.file_suggestions.len();
+        let visible = total.min(max_visible);
+        let scroll_offset = if app.suggestion_cursor >= visible {
+            app.suggestion_cursor - visible + 1
+        } else {
+            0
+        };
+        let items: Vec<Line> = app
+            .file_suggestions
+            .iter()
+            .enumerate()
+            .skip(scroll_offset)
+            .take(visible)
+            .map(|(i, entry)| {
+                let style = if i == app.suggestion_cursor {
+                    theme::accent_bold().add_modifier(Modifier::REVERSED)
+                } else {
+                    Style::default()
+                };
+                let icon = if entry.is_dir { "d" } else { "f" };
+                Line::styled(format!(" {} {}", icon, entry.path), style)
+            })
+            .collect();
+        let title = if total > visible {
+            format!(" Files ({}/{}) ", app.suggestion_cursor + 1, total)
+        } else {
+            " Files ".to_string()
+        };
+        (items, title)
+    } else if !app.arg_suggestions.is_empty() {
         let total = app.arg_suggestions.len();
         let visible = total.min(max_visible);
         let scroll_offset = if app.suggestion_cursor >= visible {
