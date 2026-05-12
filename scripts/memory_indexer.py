@@ -106,16 +106,18 @@ CONFIDENCE_PRIOR: dict[str, float] = {
     "fact": 0.70,
     "decision": 0.70,
     "constraint": 0.65,
+    "methodology": 0.65,
     "preference": 0.55,
     "belief": 0.40,
 }
 
 CATEGORY_SECTIONS: dict[str, tuple[str, str]] = {
-    "constraint": ("Active Constraints", "Enforce these — they are verified rules or limits."),
-    "decision":   ("Prior Decisions", "Decisions already made — follow unless explicitly revisited."),
-    "fact":       ("Known Facts", "Established facts with strong corroboration."),
-    "preference": ("Preferences", "User preferences — respect unless overridden."),
-    "belief":     ("Working Beliefs", "Consider but don't assert — these may evolve."),
+    "constraint":  ("Active Constraints", "Enforce these — they are verified rules or limits."),
+    "decision":    ("Prior Decisions", "Decisions already made — follow unless explicitly revisited."),
+    "fact":        ("Known Facts", "Established facts with strong corroboration."),
+    "preference":  ("Preferences", "User preferences — respect unless overridden."),
+    "belief":      ("Working Beliefs", "Consider but don't assert — these may evolve."),
+    "methodology": ("Working Methodology", "Process rules — how to approach work."),
 }
 
 _client: genai.Client | None = None
@@ -236,6 +238,7 @@ def open_db() -> sqlite3.Connection:
         ("expired_reason", "TEXT DEFAULT NULL"),
         ("domain", "TEXT DEFAULT 'general'"),
         ("category", "TEXT DEFAULT NULL"),
+        ("promoted_at", "TEXT DEFAULT NULL"),
     ]:
         try:
             # safe: col + definition come from the literal tuple-list above.
@@ -1577,6 +1580,7 @@ def extract_atoms(content: str) -> list[dict]:
         "Categories:\n"
         "- preference: user likes/dislikes, style choices (ttl: 365 days)\n"
         "- constraint: hard rules, always/never requirements (ttl: 365 days)\n"
+        "- methodology: how to work — process patterns, execution strategy, quality gates (ttl: 365 days)\n"
         "- belief: opinions, worldview, tentative inferences (ttl: 90 days)\n"
         "- fact: identity info, context, environment details (no ttl)\n"
         "- decision: architectural or tool choices that affect future work (no ttl)\n\n"
@@ -2668,7 +2672,8 @@ def cmd_export(output_path: str, privacy_levels: list[str] | None = None):
 
 def write_atom_file(atom: dict, source_path: str, today: str,
                     source_excerpt: str = "", domain: str = "general",
-                    privacy: str = "internal") -> Path:
+                    privacy: str = "internal", kind: str = "knowledge",
+                    triggers: list[str] | None = None) -> Path:
     """Write an atom to the vault Atoms/ directory and return its path."""
     VAULT_ATOMS.mkdir(parents=True, exist_ok=True)
     cat = atom["category"]
@@ -2688,14 +2693,114 @@ def write_atom_file(atom: dict, source_path: str, today: str,
         truncated = source_excerpt[:2000]
         indented = "\n".join("  " + line for line in truncated.splitlines())
         excerpt_lines = f"source_excerpt: |\n{indented}\n"
+    triggers_line = f"triggers: {json.dumps(triggers)}\n" if triggers is not None else ""
     path.write_text(
         f"---\ntype: atom\ncategory: {cat}\ntags: []\n"
         f"confidence: {conf:.2f}\ncorroborations: 1\ndomain: {domain}\nprivacy: {privacy}\n"
         f"source: {source_path}\ncreated_at: {today}\nupdated_at: {today}\n{ttl_line}\n"
+        f"kind: {kind}\n{triggers_line}"
         f"{excerpt_lines}---\n"
         f"{atom['text']}\n"
     )
     return path
+
+
+EMBED_BODY_WORDS = 200
+
+
+def _enriched_embedding_input(chunk: str, source_chunk: str | None) -> str:
+    if not source_chunk or len(source_chunk) < 100:
+        return chunk
+    body_words = source_chunk.split()[:EMBED_BODY_WORDS]
+    return f"{chunk} — {' '.join(body_words)}"
+
+
+def reenrich_embeddings(db: sqlite3.Connection) -> dict:
+    """Re-embed atoms using chunk + source_chunk enrichment."""
+    rows = db.execute(
+        """SELECT id, chunk, source_chunk FROM entries
+           WHERE type = 'atom' AND orphaned_at IS NULL
+             AND source_chunk IS NOT NULL AND length(source_chunk) > 100"""
+    ).fetchall()
+
+    enriched = 0
+    skipped = 0
+    for i, (entry_id, chunk, source_chunk) in enumerate(rows):
+        enriched_input = _enriched_embedding_input(chunk, source_chunk)
+        try:
+            vec = embed(enriched_input)
+            db.execute("DELETE FROM embeddings WHERE rowid = ?", (entry_id,))
+            db.execute(
+                "INSERT INTO embeddings(rowid, embedding) VALUES (?, ?)",
+                (entry_id, serialize(vec)),
+            )
+            enriched += 1
+        except Exception as exc:
+            print(f"  WARN: embed failed for entry {entry_id}: {exc}", file=sys.stderr)
+            skipped += 1
+        if (i + 1) % 50 == 0:
+            print(f"  Progress: {i + 1}/{len(rows)}")
+            db.commit()
+
+    db.commit()
+    return {"enriched": enriched, "skipped": skipped, "total": len(rows)}
+
+
+def promote_atoms(
+    db: sqlite3.Connection,
+    auto_mem_dir: Path,
+    min_corroborations: int = 3,
+    min_confidence: float = 0.6,
+) -> list[str]:
+    """Write high-quality atoms as auto-memory .md files for tree indexing."""
+    auto_mem_dir.mkdir(parents=True, exist_ok=True)
+    from datetime import timezone as _tz
+    now = datetime.now(_tz.utc).strftime("%Y-%m-%d")
+
+    rows = db.execute(
+        """SELECT id, chunk, source_chunk, category, confidence, corroborations
+           FROM entries
+           WHERE type = 'atom' AND orphaned_at IS NULL
+             AND promoted_at IS NULL
+             AND corroborations >= ? AND confidence >= ?""",
+        (min_corroborations, min_confidence),
+    ).fetchall()
+
+    promoted: list[str] = []
+    for entry_id, chunk, source_chunk, category, confidence, corroborations in rows:
+        cat = category or "fact"
+        slug = slugify(chunk)
+        filename = f"promoted-{cat}-{slug}.md"
+        filepath = auto_mem_dir / filename
+
+        body = chunk
+        if source_chunk and len(source_chunk) > 100:
+            body_words = source_chunk.split()[:300]
+            body = f"{chunk}\n\n**Context (from {corroborations} sessions):**\n{' '.join(body_words)}"
+
+        content = (
+            f"---\n"
+            f"name: {chunk[:80]}\n"
+            f"description: {chunk}\n"
+            f"type: promoted-atom\n"
+            f"category: {cat}\n"
+            f"kind: knowledge\n"
+            f"tags: [corroborated]\n"
+            f"confidence: {confidence:.2f}\n"
+            f"corroborations: {corroborations}\n"
+            f"---\n"
+            f"{body}\n"
+        )
+
+        filepath.write_text(content, encoding="utf-8")
+        db.execute(
+            "UPDATE entries SET promoted_at = ? WHERE id = ?",
+            (now, entry_id),
+        )
+        promoted.append(str(filepath))
+
+    db.commit()
+    return promoted
 
 
 def cmd_extract(session_path: str, no_contradict: bool = False):
@@ -3424,6 +3529,10 @@ def main():
                        help="Dismiss conflict #ID as false positive")
     group.add_argument("--export", metavar="PATH",
                        help="Export atoms filtered by --privacy to standalone markdown")
+    group.add_argument("--reenrich", action="store_true",
+                       help="Re-embed atoms with enriched input (chunk + source_chunk context)")
+    group.add_argument("--promote", action="store_true",
+                       help="Promote high-corroboration atoms to auto-memory for tree indexing")
     parser.add_argument("--no-extract", action="store_true",
                         help="Skip atom extraction when using --add (useful for CI/benchmarks)")
     parser.add_argument("--top", type=int, default=3, help="Number of results for --query")
@@ -3515,6 +3624,25 @@ def main():
     if args.export:
         ap = _parse_allowed_privacy_arg(args.allowed_privacy)
         cmd_export(args.export, privacy_levels=ap or ([args.privacy] if args.privacy else None))
+        return
+    if args.reenrich:
+        db = open_db()
+        print("Re-enriching atom embeddings with source_chunk context...")
+        stats = reenrich_embeddings(db)
+        print(f"Done: enriched={stats['enriched']}, skipped={stats['skipped']}, total={stats['total']}")
+        db.close()
+        return
+    if args.promote:
+        db = open_db()
+        auto_mem = Path(os.environ.get(
+            "DEUS_AUTO_MEMORY_DIR",
+            os.path.expanduser("~/.claude/projects/-Users-liam10play-deus/memory"),
+        ))
+        promoted = promote_atoms(db, auto_mem)
+        print(f"Promoted {len(promoted)} atoms to {auto_mem}")
+        for p in promoted:
+            print(f"  {p}")
+        db.close()
         return
 
     _client = genai.Client(api_key=load_api_key())

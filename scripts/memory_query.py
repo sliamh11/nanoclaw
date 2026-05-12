@@ -138,6 +138,7 @@ def recall(
     abstain_threshold: float | None = None,
     source: str = "unknown",
     concepts: list[str] | None = None,
+    exclude_kinds: set[str] | None = None,
 ) -> dict:
     """Retrieve memory context for a query.
 
@@ -153,7 +154,8 @@ def recall(
 
     db = mt.open_db()
     try:
-        raw = mt.retrieve(db, query, k=k, abstain_threshold=threshold, concepts=concepts)
+        _excl = exclude_kinds if exclude_kinds is not None else frozenset({"standard"})
+        raw = mt.retrieve(db, query, k=k, abstain_threshold=threshold, concepts=concepts, exclude_kinds=_excl)
     finally:
         db.close()
 
