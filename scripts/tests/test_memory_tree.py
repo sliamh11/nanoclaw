@@ -891,6 +891,140 @@ class TestScoreGapAbstain:
         assert result["results"][0]["path"] == "auto-memory/spike.md"
 
 
+# ── Coherence gate ──────────────────────────────────────────────────────────
+
+class TestCoherenceGate:
+    """Verify coherence rescue signals prevent false gap-abstains."""
+
+    @pytest.fixture
+    def coherent_db(self, tmp_db):
+        """Two nodes with shared entities + near-identical embeddings (small gap)."""
+        base = [0.5] * mt.EMBED_DIM
+        vec_a = list(base); vec_a[0] = 0.502
+        vec_b = list(base); vec_b[0] = 0.501
+        mt.upsert_node(
+            tmp_db, node_id="coh_a", path="auto-memory/python_django.md",
+            title="Python Django framework", description="Python Django web framework setup",
+            level=0, node_type="feedback", embedding=vec_a, content_hash_val="coh_a_h",
+        )
+        mt.upsert_node(
+            tmp_db, node_id="coh_b", path="auto-memory/python_flask.md",
+            title="Python Flask framework", description="Python Flask web framework setup",
+            level=0, node_type="feedback", embedding=vec_b, content_hash_val="coh_b_h",
+        )
+        mt._upsert_entities(tmp_db, "coh_a", "Python Django framework", "Python Django web framework setup")
+        mt._upsert_entities(tmp_db, "coh_b", "Python Flask framework", "Python Flask web framework setup")
+        tmp_db.commit()
+        return tmp_db
+
+    def test_coherence_entities_rescue(self, coherent_db):
+        """Top-2 share entities (python, framework) → rescued from gap abstain."""
+        query_vec = [0.5] * mt.EMBED_DIM
+        query_vec[0] = 0.503
+        result = mt.retrieve(
+            coherent_db, "python web", k=5, query_vec=query_vec,
+            abstain_threshold=0.01, low_threshold=0.55,
+            gap_threshold=0.99, use_coherence_gate=True, min_entity_overlap=2,
+            use_fts=False,
+        )
+        assert result["fell_back"] is False
+        trace = " ".join(result["trace"])
+        assert "coherence:entities=" in trace
+        assert "rescued" in trace
+
+    def test_coherence_allows_genuine_abstain(self, tmp_db):
+        """Two unrelated nodes (no shared entities, no edges) → genuine abstain."""
+        base = [0.5] * mt.EMBED_DIM
+        vec_a = list(base); vec_a[0] = 0.502
+        vec_b = list(base); vec_b[0] = 0.501
+        mt.upsert_node(
+            tmp_db, node_id="inc_a", path="auto-memory/cooking_recipes.md",
+            title="Cooking recipes collection", description="Italian cooking recipes and techniques",
+            level=0, node_type="feedback", embedding=vec_a, content_hash_val="inc_a_h",
+        )
+        mt.upsert_node(
+            tmp_db, node_id="inc_b", path="auto-memory/git_workflow.md",
+            title="Git branching workflow", description="Git branching strategy and merge policies",
+            level=0, node_type="feedback", embedding=vec_b, content_hash_val="inc_b_h",
+        )
+        mt._upsert_entities(tmp_db, "inc_a", "Cooking recipes collection", "Italian cooking recipes and techniques")
+        mt._upsert_entities(tmp_db, "inc_b", "Git branching workflow", "Git branching strategy and merge policies")
+        tmp_db.commit()
+        query_vec = [0.5] * mt.EMBED_DIM
+        query_vec[0] = 0.503
+        result = mt.retrieve(
+            tmp_db, "random unrelated", k=5, query_vec=query_vec,
+            abstain_threshold=0.01, low_threshold=0.55,
+            gap_threshold=0.99, use_coherence_gate=True, min_entity_overlap=2,
+        )
+        assert result["fell_back"] is True
+        trace = " ".join(result["trace"])
+        assert "coherence:none" in trace
+
+    def test_coherence_edge_rescue(self, tmp_db):
+        """Two nodes linked by edge but no entity overlap → rescued."""
+        base = [0.5] * mt.EMBED_DIM
+        vec_a = list(base); vec_a[0] = 0.502
+        vec_b = list(base); vec_b[0] = 0.501
+        mt.upsert_node(
+            tmp_db, node_id="edge_a", path="auto-memory/edge_a.md",
+            title="Xylophone percussion", description="Xylophone percussion instruments wooden",
+            level=0, node_type="feedback", embedding=vec_a, content_hash_val="edge_a_h",
+        )
+        mt.upsert_node(
+            tmp_db, node_id="edge_b", path="auto-memory/edge_b.md",
+            title="Astronomy telescope", description="Astronomy telescope observation celestial",
+            level=0, node_type="feedback", embedding=vec_b, content_hash_val="edge_b_h",
+        )
+        mt._upsert_entities(tmp_db, "edge_a", "Xylophone percussion", "Xylophone percussion instruments wooden")
+        mt._upsert_entities(tmp_db, "edge_b", "Astronomy telescope", "Astronomy telescope observation celestial")
+        mt.upsert_edge(tmp_db, src="edge_a", dst="edge_b", kind="see_also")
+        tmp_db.commit()
+        query_vec = [0.5] * mt.EMBED_DIM
+        query_vec[0] = 0.503
+        result = mt.retrieve(
+            tmp_db, "edge test", k=5, query_vec=query_vec,
+            abstain_threshold=0.01, low_threshold=0.55,
+            gap_threshold=0.99, use_coherence_gate=True, min_entity_overlap=2,
+        )
+        assert result["fell_back"] is False
+        trace = " ".join(result["trace"])
+        assert "coherence:edge" in trace
+
+    def test_rrf_agreement_rescue(self, tmp_db):
+        """BM25 and vector agree on top-1 → rescued via RRF agreement."""
+        spike_vec = [0.0] * mt.EMBED_DIM
+        spike_vec[0] = 1.0
+        noise_vec = [0.0] * mt.EMBED_DIM
+        noise_vec[1] = 1.0
+        mt.upsert_node(
+            tmp_db, node_id="rrf_spike", path="auto-memory/deus_models.md",
+            title="Deus models", description="Models and providers used by deus system",
+            level=0, node_type="feedback", embedding=spike_vec, content_hash_val="rrf_spike_h",
+            body_text="Models and providers used by deus system",
+        )
+        mt.upsert_node(
+            tmp_db, node_id="rrf_noise", path="auto-memory/deus_config.md",
+            title="Deus config", description="Configuration and settings for deus",
+            level=0, node_type="feedback", embedding=noise_vec, content_hash_val="rrf_noise_h",
+            body_text="Configuration and settings for deus",
+        )
+        mt._upsert_entities(tmp_db, "rrf_spike", "Deus models", "Models and providers used by deus system")
+        mt._upsert_entities(tmp_db, "rrf_noise", "Deus config", "Configuration and settings for deus")
+        tmp_db.commit()
+        query_vec = list(spike_vec)
+        query_vec[0] = 0.99
+        query_vec[1] = 0.98
+        result = mt.retrieve(
+            tmp_db, "deus models", k=5, query_vec=query_vec,
+            abstain_threshold=0.01, low_threshold=0.55,
+            gap_threshold=0.99, use_coherence_gate=False, use_fts=True,
+        )
+        assert result["fell_back"] is False
+        trace = " ".join(result["trace"])
+        assert "rrf_agree:keep" in trace
+
+
 # ── FTS5 helpers ─────────────────────────────────────────────────────────────
 
 class TestFTSHelpers:
