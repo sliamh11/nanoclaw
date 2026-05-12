@@ -38,49 +38,51 @@ fn parse_inline_markdown(text: &str) -> Vec<Span<'static>> {
     let mut plain_start = 0;
 
     while pos < len {
-        if pos + 1 < len && bytes[pos] == b'*' && bytes[pos + 1] == b'*' {
-            if let Some(end) = text[pos + 2..].find("**") {
+        if pos + 1 < len
+            && bytes[pos] == b'*'
+            && bytes[pos + 1] == b'*'
+            && let Some(end) = text[pos + 2..].find("**")
+        {
+            if pos > plain_start {
+                spans.push(Span::raw(text[plain_start..pos].to_string()));
+            }
+            spans.push(Span::styled(
+                text[pos + 2..pos + 2 + end].to_string(),
+                theme::bold(),
+            ));
+            pos = pos + 2 + end + 2;
+            plain_start = pos;
+            continue;
+        }
+        if bytes[pos] == b'`'
+            && let Some(end) = text[pos + 1..].find('`')
+        {
+            if pos > plain_start {
+                spans.push(Span::raw(text[plain_start..pos].to_string()));
+            }
+            spans.push(Span::styled(
+                text[pos + 1..pos + 1 + end].to_string(),
+                theme::code(),
+            ));
+            pos = pos + 1 + end + 1;
+            plain_start = pos;
+            continue;
+        }
+        if bytes[pos] == b'['
+            && let Some(bracket_end) = text[pos + 1..].find("](")
+        {
+            let label_end = pos + 1 + bracket_end;
+            if let Some(paren_end) = text[label_end + 2..].find(')') {
                 if pos > plain_start {
                     spans.push(Span::raw(text[plain_start..pos].to_string()));
                 }
-                spans.push(Span::styled(
-                    text[pos + 2..pos + 2 + end].to_string(),
-                    theme::bold(),
-                ));
-                pos = pos + 2 + end + 2;
+                let label = &text[pos + 1..label_end];
+                let url = &text[label_end + 2..label_end + 2 + paren_end];
+                spans.push(Span::styled(label.to_string(), theme::link_text()));
+                spans.push(Span::styled(format!(" ({})", url), theme::link_url()));
+                pos = label_end + 2 + paren_end + 1;
                 plain_start = pos;
                 continue;
-            }
-        }
-        if bytes[pos] == b'`' {
-            if let Some(end) = text[pos + 1..].find('`') {
-                if pos > plain_start {
-                    spans.push(Span::raw(text[plain_start..pos].to_string()));
-                }
-                spans.push(Span::styled(
-                    text[pos + 1..pos + 1 + end].to_string(),
-                    theme::code(),
-                ));
-                pos = pos + 1 + end + 1;
-                plain_start = pos;
-                continue;
-            }
-        }
-        if bytes[pos] == b'[' {
-            if let Some(bracket_end) = text[pos + 1..].find("](") {
-                let label_end = pos + 1 + bracket_end;
-                if let Some(paren_end) = text[label_end + 2..].find(')') {
-                    if pos > plain_start {
-                        spans.push(Span::raw(text[plain_start..pos].to_string()));
-                    }
-                    let label = &text[pos + 1..label_end];
-                    let url = &text[label_end + 2..label_end + 2 + paren_end];
-                    spans.push(Span::styled(label.to_string(), theme::link_text()));
-                    spans.push(Span::styled(format!(" ({})", url), theme::link_url()));
-                    pos = label_end + 2 + paren_end + 1;
-                    plain_start = pos;
-                    continue;
-                }
             }
         }
         pos += 1;
