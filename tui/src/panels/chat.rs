@@ -343,6 +343,75 @@ fn extract_lang(fence_line: &str) -> Option<String> {
     }
 }
 
+fn flush_table(table_buffer: &mut Vec<String>, lines: &mut Vec<Line<'static>>) {
+    if table_buffer.is_empty() {
+        return;
+    }
+    let separator_idx = table_buffer
+        .iter()
+        .position(|row| row.contains("---") || row.contains("==="));
+    let rows: Vec<Vec<String>> = table_buffer
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| Some(*i) != separator_idx)
+        .map(|(_, row)| {
+            row.trim_matches('|')
+                .split('|')
+                .map(|cell| cell.trim().to_string())
+                .collect()
+        })
+        .collect();
+    let col_count = rows.iter().map(|r| r.len()).max().unwrap_or(0);
+    let mut col_widths = vec![0usize; col_count];
+    for row in &rows {
+        for (j, cell) in row.iter().enumerate() {
+            if j < col_count {
+                col_widths[j] = col_widths[j].max(cell.len());
+            }
+        }
+    }
+    for (i, row) in rows.iter().enumerate() {
+        let mut spans: Vec<Span<'static>> = vec![Span::raw("  ")];
+        for (j, cell) in row.iter().enumerate() {
+            let width = col_widths.get(j).copied().unwrap_or(cell.len());
+            if j > 0 {
+                spans.push(Span::styled(" │ ", theme::muted()));
+            }
+            spans.push(Span::raw(format!("{:<width$}", cell, width = width)));
+        }
+        let style = if i == 0 {
+            theme::bold()
+        } else {
+            Style::default()
+        };
+        lines.push(Line::from(
+            spans
+                .into_iter()
+                .map(|s| {
+                    if i == 0 && s.style == Style::default() {
+                        Span::styled(s.content, style)
+                    } else {
+                        s
+                    }
+                })
+                .collect::<Vec<_>>(),
+        ));
+        if i == 0 {
+            let sep: String = col_widths
+                .iter()
+                .map(|w| "─".repeat(*w))
+                .collect::<Vec<_>>()
+                .join("─┼─");
+            lines.push(Line::from(Span::styled(
+                format!("  {}", sep),
+                theme::muted(),
+            )));
+        }
+    }
+    lines.push(Line::from(""));
+    table_buffer.clear();
+}
+
 fn render_markdown_text(
     text: &str,
     lines: &mut Vec<Line<'static>>,
@@ -352,7 +421,16 @@ fn render_markdown_text(
     let mut in_code = false;
     let mut in_diff = false;
     let mut highlighter: Option<crate::highlight::BlockHighlighter> = None;
+    let mut table_buffer: Vec<String> = Vec::new();
     for line in text.lines() {
+        if !in_code && !in_diff && line.starts_with('|') {
+            table_buffer.push(line.to_string());
+            continue;
+        }
+        if !table_buffer.is_empty() {
+            flush_table(&mut table_buffer, lines);
+        }
+
         let was_in_code = in_code || in_diff;
         let (mut rendered, new_code, new_diff) = render_markdown_line(line, in_code, in_diff);
         let is_heading =
@@ -363,7 +441,6 @@ fn render_markdown_text(
 
         if !was_in_code && in_code {
             *current_block = Some(String::new());
-            // diff blocks have their own coloring, skip syntax highlighting
             highlighter =
                 extract_lang(line).and_then(|l| crate::highlight::BlockHighlighter::new(&l));
         } else if was_in_code && in_code {
@@ -397,6 +474,7 @@ fn render_markdown_text(
             lines.push(Line::from(""));
         }
     }
+    flush_table(&mut table_buffer, lines);
 }
 
 fn build_message_lines(app: &App) -> (Vec<Line<'static>>, Vec<String>) {
@@ -1270,5 +1348,43 @@ mod tests {
         let text: String = line.spans.iter().map(|s| s.content.to_string()).collect();
         assert!(text.contains("docs"));
         assert!(text.contains("example.com"));
+    }
+
+    #[test]
+    fn table_renders_with_aligned_columns() {
+        let text = "| Name | Age |\n|---|---|\n| Alice | 30 |\n| Bob | 25 |";
+        let mut lines = Vec::new();
+        let mut code_blocks = Vec::new();
+        let mut current_block = None;
+        render_markdown_text(text, &mut lines, &mut code_blocks, &mut current_block);
+        assert!(lines.len() >= 4);
+        let header: String = lines[0]
+            .spans
+            .iter()
+            .map(|s| s.content.to_string())
+            .collect();
+        assert!(header.contains("Name"));
+        assert!(header.contains("Age"));
+        let sep: String = lines[1]
+            .spans
+            .iter()
+            .map(|s| s.content.to_string())
+            .collect();
+        assert!(sep.contains("─"));
+    }
+
+    #[test]
+    fn table_flush_at_message_end() {
+        let text = "| Col1 |\n|---|\n| val |";
+        let mut lines = Vec::new();
+        let mut code_blocks = Vec::new();
+        let mut current_block = None;
+        render_markdown_text(text, &mut lines, &mut code_blocks, &mut current_block);
+        assert!(!lines.is_empty());
+        let all_text: String = lines
+            .iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.content.to_string()))
+            .collect();
+        assert!(all_text.contains("val"));
     }
 }
