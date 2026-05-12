@@ -153,6 +153,40 @@ fn render_markdown_line(
         );
     }
 
+    if text.starts_with('>') {
+        let depth = text.chars().take_while(|&c| c == '>').count().min(3);
+        let rest = text[depth..].trim_start();
+        let bar = "│ ".repeat(depth);
+        return (
+            Line::from(vec![
+                Span::raw("  "),
+                Span::styled(bar, theme::blockquote()),
+                Span::raw(rest.to_string()),
+            ]),
+            code_block,
+            diff,
+        );
+    }
+
+    if let Some(dot_pos) = text.find('.')
+        && dot_pos > 0
+        && dot_pos <= 3
+        && text[..dot_pos].chars().all(|c| c.is_ascii_digit())
+        && text.get(dot_pos + 1..dot_pos + 2) == Some(" ")
+    {
+        let number = &text[..=dot_pos];
+        let rest = &text[dot_pos + 2..];
+        return (
+            Line::from(vec![
+                Span::raw("  "),
+                Span::styled(format!("{} ", number), theme::bullet()),
+                Span::raw(rest.to_string()),
+            ]),
+            code_block,
+            diff,
+        );
+    }
+
     if text.starts_with("- ") || text.starts_with("* ") {
         return (
             Line::from(vec![
@@ -163,6 +197,35 @@ fn render_markdown_line(
             code_block,
             diff,
         );
+    }
+
+    if text.contains("](") {
+        let mut spans: Vec<Span<'static>> = vec![Span::raw("  ")];
+        let mut remaining = text.to_string();
+        while let Some(bracket_start) = remaining.find('[') {
+            if bracket_start > 0 {
+                spans.push(Span::raw(remaining[..bracket_start].to_string()));
+            }
+            remaining = remaining[bracket_start + 1..].to_string();
+            if let Some(bracket_end) = remaining.find("](") {
+                let link_label = remaining[..bracket_end].to_string();
+                remaining = remaining[bracket_end + 2..].to_string();
+                if let Some(paren_end) = remaining.find(')') {
+                    let url = remaining[..paren_end].to_string();
+                    spans.push(Span::styled(link_label, theme::link_text()));
+                    spans.push(Span::styled(format!(" ({})", url), theme::link_url()));
+                    remaining = remaining[paren_end + 1..].to_string();
+                } else {
+                    spans.push(Span::raw(format!("[{}](", link_label)));
+                }
+            } else {
+                spans.push(Span::raw("[".to_string()));
+            }
+        }
+        if !remaining.is_empty() {
+            spans.push(Span::raw(remaining));
+        }
+        return (Line::from(spans), code_block, diff);
     }
 
     (Line::from(format!("  {}", text)), code_block, diff)
@@ -1076,5 +1139,30 @@ mod tests {
             1,
             "unknown language should fall back to single-span rendering"
         );
+    }
+
+    #[test]
+    fn blockquote_renders_with_bar() {
+        let (line, _, _) = render_markdown_line("> quoted text", false, false);
+        let text: String = line.spans.iter().map(|s| s.content.to_string()).collect();
+        assert!(text.contains("│"));
+        assert!(text.contains("quoted text"));
+    }
+
+    #[test]
+    fn numbered_list_renders_with_number() {
+        let (line, _, _) = render_markdown_line("1. first item", false, false);
+        let text: String = line.spans.iter().map(|s| s.content.to_string()).collect();
+        assert!(text.contains("1."));
+        assert!(text.contains("first item"));
+    }
+
+    #[test]
+    fn link_renders_text_and_url() {
+        let (line, _, _) =
+            render_markdown_line("See [docs](https://example.com) here", false, false);
+        let text: String = line.spans.iter().map(|s| s.content.to_string()).collect();
+        assert!(text.contains("docs"));
+        assert!(text.contains("example.com"));
     }
 }

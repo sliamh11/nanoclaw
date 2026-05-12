@@ -216,6 +216,18 @@ pub fn bullet() -> Style {
     Style::default().fg(accent_color())
 }
 
+pub fn blockquote() -> Style {
+    Style::default().fg(accent_color())
+}
+
+pub fn link_text() -> Style {
+    Style::default().add_modifier(Modifier::UNDERLINED)
+}
+
+pub fn link_url() -> Style {
+    Style::default().fg(text_dim_color())
+}
+
 pub fn diff_add() -> Style {
     Style::default().fg(good_color())
 }
