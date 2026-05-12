@@ -39,6 +39,10 @@ pub fn render(frame: &mut Frame, app: &App) {
     if app.show_session_picker {
         render_session_picker(frame, app, area);
     }
+
+    if app.show_rewind_picker {
+        render_rewind_picker(frame, app, area);
+    }
 }
 
 fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
@@ -263,6 +267,52 @@ fn render_session_picker(frame: &mut Frame, app: &App, area: Rect) {
     let block = Block::default()
         .borders(Borders::ALL)
         .title(" Sessions — ↑↓ enter d:dismiss esc ")
+        .border_style(theme::accent());
+    let picker = Paragraph::new(lines).block(block);
+    frame.render_widget(picker, popup);
+}
+
+fn render_rewind_picker(frame: &mut Frame, app: &App, area: Rect) {
+    let target_count = app.rewind_targets.len();
+    let height = (target_count as u16 + 4).min(area.height.saturating_sub(4));
+    let width = 70u16.min(area.width.saturating_sub(4));
+    let x = (area.width.saturating_sub(width)) / 2;
+    let y = (area.height.saturating_sub(height)) / 2;
+    let popup = Rect::new(x, y, width, height);
+
+    frame.render_widget(Clear, popup);
+
+    let session = app.active();
+    let inner_width = width.saturating_sub(4) as usize;
+    let mut lines: Vec<Line> = Vec::new();
+    for (i, &msg_idx) in app.rewind_targets.iter().enumerate() {
+        let is_selected = i == app.rewind_cursor;
+        let msg = match session.chat_messages.get(msg_idx) {
+            Some(m) => m,
+            None => continue,
+        };
+        let preview: String = msg
+            .content
+            .chars()
+            .take(inner_width.saturating_sub(4))
+            .map(|c| if c == '\n' { ' ' } else { c })
+            .collect();
+
+        let style = if is_selected {
+            Style::default().bg(theme::accent_color()).fg(Color::Black)
+        } else {
+            Style::default()
+        };
+
+        lines.push(Line::from(vec![
+            Span::styled(if is_selected { "> " } else { "  " }, style),
+            Span::styled(preview, style),
+        ]));
+    }
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" Rewind — ↑↓ enter esc ")
         .border_style(theme::accent());
     let picker = Paragraph::new(lines).block(block);
     frame.render_widget(picker, popup);

@@ -369,6 +369,11 @@ pub const COMMANDS: &[CommandDef] = &[
         args: &[],
     },
     CommandDef {
+        name: "/rewind",
+        description: "Rewind to message",
+        args: &[],
+    },
+    CommandDef {
         name: "/clear",
         description: "Clear chat",
         args: &[],
@@ -434,6 +439,10 @@ pub struct App {
     pub recap_session: Option<SessionId>,
     pub auto_recap: bool,
     pub last_notification: Instant,
+
+    pub show_rewind_picker: bool,
+    pub rewind_cursor: usize,
+    pub rewind_targets: Vec<usize>,
 }
 
 // StreamChunk and parsing delegated to backend trait — see backend/mod.rs
@@ -626,6 +635,10 @@ impl App {
                 .map(|v| v != "false")
                 .unwrap_or(true),
             last_notification: Instant::now(),
+
+            show_rewind_picker: false,
+            rewind_cursor: 0,
+            rewind_targets: Vec::new(),
         };
         app.refresh();
         app.load_history();
@@ -1296,6 +1309,36 @@ impl App {
                     }
                 }
                 self.mark_chat_changed();
+                true
+            }
+            "/rewind" => {
+                if matches!(self.active().chat_state, ChatState::Streaming) {
+                    self.active_mut().chat_messages.push(ChatMessage::simple(
+                        "system",
+                        "Cannot rewind while streaming. Cancel first with Ctrl+C.",
+                    ));
+                    self.mark_chat_changed();
+                    return true;
+                }
+                let targets: Vec<usize> = self
+                    .active()
+                    .chat_messages
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, m)| m.role == "user")
+                    .map(|(i, _)| i)
+                    .collect();
+                if targets.is_empty() {
+                    self.active_mut().chat_messages.push(ChatMessage::simple(
+                        "system",
+                        "No user messages to rewind to.",
+                    ));
+                    self.mark_chat_changed();
+                    return true;
+                }
+                self.rewind_targets = targets;
+                self.rewind_cursor = 0;
+                self.show_rewind_picker = true;
                 true
             }
             "/init" | "/compress" | "/checkpoint" | "/compact" | "/resume" => {
@@ -2287,6 +2330,51 @@ impl App {
                 self.show_session_picker = false;
             }
         }
+    }
+
+    pub(crate) fn rewind_next(&mut self) {
+        if self.rewind_cursor + 1 < self.rewind_targets.len() {
+            self.rewind_cursor += 1;
+        }
+    }
+
+    pub(crate) fn rewind_prev(&mut self) {
+        if self.rewind_cursor > 0 {
+            self.rewind_cursor -= 1;
+        }
+    }
+
+    pub(crate) fn rewind_select(&mut self) {
+        let Some(&msg_idx) = self.rewind_targets.get(self.rewind_cursor) else {
+            return;
+        };
+        self.cancel_response();
+        let session = self.active_mut();
+        let preview: String = session
+            .chat_messages
+            .get(msg_idx)
+            .map(|m| {
+                let s: String = m.content.chars().take(80).collect();
+                if m.content.len() > 80 {
+                    format!("{}...", s)
+                } else {
+                    s
+                }
+            })
+            .unwrap_or_default();
+        session.chat_messages.truncate(msg_idx + 1);
+        session.turn_count = 0;
+        session.run_mode = backend::RunMode::Normal { session_id: None };
+        session.chat_messages.push(ChatMessage::simple(
+            "system",
+            &format!(
+                "Rewound to: {}. Next message starts a fresh session.",
+                preview
+            ),
+        ));
+        session.mark_chat_changed();
+        self.show_rewind_picker = false;
+        self.rewind_targets.clear();
     }
 
     pub fn background_session_count(&self) -> usize {
@@ -3358,5 +3446,79 @@ mod tests {
 
         let session = app.active();
         assert!(!session.context_alert_shown);
+    }
+
+    #[test]
+    fn rewind_truncates_to_selected_message() {
+        let mut app = App::new();
+        app.active_mut()
+            .chat_messages
+            .push(ChatMessage::simple("user", "first question"));
+        app.active_mut()
+            .chat_messages
+            .push(ChatMessage::simple("assistant", "first answer"));
+        app.active_mut()
+            .chat_messages
+            .push(ChatMessage::simple("user", "second question"));
+        app.active_mut()
+            .chat_messages
+            .push(ChatMessage::simple("assistant", "second answer"));
+        app.active_mut().turn_count = 2;
+
+        app.handle_command("/rewind");
+        assert!(app.show_rewind_picker);
+        assert_eq!(app.rewind_targets.len(), 2);
+        assert_eq!(app.rewind_targets[0], 1);
+        assert_eq!(app.rewind_targets[1], 3);
+
+        app.rewind_cursor = 0;
+        app.rewind_select();
+
+        assert!(!app.show_rewind_picker);
+        let msgs = &app.active().chat_messages;
+        assert_eq!(msgs.len(), 3);
+        assert_eq!(msgs[0].role, "system");
+        assert!(msgs[0].content.contains("Welcome"));
+        assert_eq!(msgs[1].role, "user");
+        assert_eq!(msgs[1].content, "first question");
+        assert_eq!(msgs[2].role, "system");
+        assert!(msgs[2].content.contains("Rewound to"));
+        assert_eq!(app.active().turn_count, 0);
+    }
+
+    #[test]
+    fn rewind_blocked_while_streaming() {
+        let mut app = App::new();
+        app.active_mut()
+            .chat_messages
+            .push(ChatMessage::simple("user", "hello"));
+        app.active_mut().chat_state = ChatState::Streaming;
+
+        app.handle_command("/rewind");
+        assert!(!app.show_rewind_picker);
+        let last = app.active().chat_messages.last().unwrap();
+        assert!(last.content.contains("Cannot rewind while streaming"));
+    }
+
+    #[test]
+    fn rewind_resets_session_run_mode() {
+        let mut app = App::new();
+        app.active_mut()
+            .chat_messages
+            .push(ChatMessage::simple("user", "test message"));
+        app.active_mut()
+            .chat_messages
+            .push(ChatMessage::simple("assistant", "response"));
+        app.active_mut().run_mode = backend::RunMode::Normal {
+            session_id: Some("sess-123".to_string()),
+        };
+
+        app.handle_command("/rewind");
+        app.rewind_select();
+
+        assert_eq!(
+            app.active().run_mode,
+            backend::RunMode::Normal { session_id: None }
+        );
     }
 }
