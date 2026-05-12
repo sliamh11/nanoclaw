@@ -487,7 +487,7 @@ class TestRetrieveAblation:
             "description: Films Liam enjoys — crime, thrillers.\nlevel: 2\n---\n"
         )
         # Stub embed: predictable scores.
-        def stub_embed(text):
+        def stub_embed(text, mode=None):
             v = [0.0] * mt.EMBED_DIM
             for i, c in enumerate(text[:mt.EMBED_DIM]):
                 v[i] = (ord(c) % 17) / 17.0
@@ -546,7 +546,7 @@ class TestCheckTreeEdges:
         return v
 
     def test_missing_root_node_flagged(self, tmp_db, vault_no_root, monkeypatch):
-        def stub_embed(text):
+        def stub_embed(text, mode=None):
             return [(ord(c) % 17) / 17.0 for c in text[:mt.EMBED_DIM]] + [0.0] * (mt.EMBED_DIM - len(text[:mt.EMBED_DIM]))
         monkeypatch.setattr(mt, "embed_text", stub_embed)
         mt.build_tree(vault_no_root, tmp_db)
@@ -651,7 +651,7 @@ class TestHookEdges:
 
 # ── TestDiscoverNode — auto-discovery path ────────────────────────────────────
 
-def _stub_embed(text):
+def _stub_embed(text, mode=None):
     """Deterministic embedding stub — same shape as embed_text."""
     v = [0.0] * mt.EMBED_DIM
     for i, c in enumerate(text[:mt.EMBED_DIM]):

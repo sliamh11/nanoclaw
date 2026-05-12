@@ -106,7 +106,7 @@ def _atom_fallback(query: str, k: int) -> str | None:
             mi_db.close()
             return None
 
-        q_vec = mi.embed(query)
+        q_vec = mi.embed(query, mode=mi._embed_mode().QUERY)
         rows = mi_db.execute(
             """SELECT e.tldr, v.distance
                FROM embeddings v JOIN entries e ON e.id = v.rowid

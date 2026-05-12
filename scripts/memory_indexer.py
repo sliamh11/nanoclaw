@@ -133,14 +133,29 @@ def load_api_key() -> str:
         sys.exit(1)
 
 
-def embed(text: str) -> list[float]:
+_EmbedMode = None
+
+
+def _embed_mode():
+    global _EmbedMode
+    if _EmbedMode is None:
+        from evolution.providers.embeddings import EmbedMode
+        _EmbedMode = EmbedMode
+    return _EmbedMode
+
+
+def embed(text: str, mode=None) -> list[float]:
     from evolution.providers.embeddings import embed as _provider_embed
-    return _provider_embed(text)
+    if mode is None:
+        mode = _embed_mode().RAW
+    return _provider_embed(text, mode=mode)
 
 
-def embed_batch(texts: list[str]) -> list[list[float]]:
+def embed_batch(texts: list[str], mode=None) -> list[list[float]]:
     from evolution.providers.embeddings import embed_batch as _provider_embed_batch
-    return _provider_embed_batch(texts)
+    if mode is None:
+        mode = _embed_mode().RAW
+    return _provider_embed_batch(texts, mode=mode)
 
 
 def serialize(vec: list[float]) -> bytes:
@@ -571,9 +586,10 @@ def _write_chunks_batched(
     if not flat:
         return 0
 
+    _EM = _embed_mode()
     texts = [ch["chunk"] for _, ch in flat]
     try:
-        vecs = embed_batch(texts)
+        vecs = embed_batch(texts, mode=_EM.DOCUMENT)
     except Exception as exc:
         # If the provider doesn't support true batching (or it failed),
         # fall back to sequential embeds so the caller still makes progress.
@@ -581,7 +597,7 @@ def _write_chunks_batched(
             f"  WARN: batch embed failed ({exc}); falling back to sequential",
             file=sys.stderr,
         )
-        vecs = [embed(t) for t in texts]
+        vecs = [embed(t, mode=_EM.DOCUMENT) for t in texts]
 
     indexed = 0
     for (path, chunk), vec in zip(flat, vecs):
@@ -1117,7 +1133,7 @@ def cmd_query(query: str, top: int = 3, recency_boost: bool = False,
     # Exhaustive mode: widen the search
     effective_top = 20 if resolved_intent == "exhaustive" else top
 
-    q_vec = embed(query)
+    q_vec = embed(query, mode=_embed_mode().QUERY)
 
     # Build query with optional --as-of filter
     where_clauses = [
@@ -2728,7 +2744,7 @@ def reenrich_embeddings(db: sqlite3.Connection) -> dict:
     for i, (entry_id, chunk, source_chunk) in enumerate(rows):
         enriched_input = _enriched_embedding_input(chunk, source_chunk)
         try:
-            vec = embed(enriched_input)
+            vec = embed(enriched_input, mode=_embed_mode().DOCUMENT)
             db.execute("DELETE FROM embeddings WHERE rowid = ?", (entry_id,))
             db.execute(
                 "INSERT INTO embeddings(rowid, embedding) VALUES (?, ?)",
@@ -2856,7 +2872,7 @@ def cmd_extract(session_path: str, no_contradict: bool = False):
 
         # 2. Embedding similarity check
         try:
-            vec = embed(atom["text"])
+            vec = embed(atom["text"], mode=_embed_mode().DOCUMENT)
         except Exception as e:
             print(f"  WARN: embed failed, skipping atom: {e}", file=sys.stderr)
             continue
@@ -3019,7 +3035,7 @@ def cmd_rebuild():
                 ).fetchone()
                 if existing:
                     continue
-                vec = embed(body)
+                vec = embed(body, mode=_embed_mode().DOCUMENT)
                 conf = float(fm.get("confidence", 0.5))
                 corr = int(fm.get("corroborations", 1))
                 date_str = fm.get("created_at", "")

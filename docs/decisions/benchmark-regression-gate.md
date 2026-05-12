@@ -49,6 +49,7 @@ During the investigation, six retrieval improvement levers were smoke-tested and
 | Approach | Result | Why it failed |
 |----------|--------|---------------|
 | Task prefixes (embeddinggemma) | Rankings degraded in 3/3 queries | Prefixed queries live in different vector subspace than non-prefixed documents |
+| Symmetric task prefixes (embeddinggemma) | recall -0.133 (0.743→0.610), abstain +0.318 | Re-embedded both sides (QUERY+DOCUMENT). Model becomes more conservative: better abstain but worse fuzzy recall. Vocab-mismatch -0.265, ambiguous -0.500. Infrastructure kept behind DEUS_EMBED_PREFIX=0 (2026-05-13) |
 | Body-text enrichment for vault nodes | Scores dropped in 4/5 queries | Longer input dilutes the description signal for embeddinggemma |
 | nomic-embed-text model swap | 69.3% vs 78.9% embeddinggemma | Worse on this specific short-description corpus |
 | bge-m3 model swap | Broke 1 hit, recovered 0 misses | Lexical matching on short descriptions |

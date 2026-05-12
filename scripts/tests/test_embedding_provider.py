@@ -93,6 +93,79 @@ class TestDefaults:
                 assert isinstance(provider, GeminiEmbeddingProvider)
 
 
+class TestEmbedMode:
+    """Test EmbedMode prefix injection."""
+
+    @staticmethod
+    def _mock_http_response(body: bytes):
+        mock_resp = MagicMock()
+        mock_resp.status = 200
+        mock_resp.read.return_value = body
+        mock_conn = MagicMock()
+        mock_conn.getresponse.return_value = mock_resp
+        return mock_conn
+
+    @staticmethod
+    def _provider_and_conn(n_vecs=1):
+        from evolution.providers.embeddings import OllamaEmbeddingProvider
+        from evolution.config import EMBED_DIM
+        vecs = [[0.1] * EMBED_DIM for _ in range(n_vecs)]
+        body = json.dumps({"embeddings": vecs}).encode()
+        provider = OllamaEmbeddingProvider(model="test")
+        mock_conn = TestEmbedMode._mock_http_response(body)
+        return provider, mock_conn
+
+    def test_query_mode_prepends_prefix(self, monkeypatch):
+        import evolution.providers.embeddings as mod
+        from evolution.providers.embeddings import EmbedMode, QUERY_PREFIX
+        monkeypatch.setattr(mod, "_PREFIXES_ENABLED", True)
+        provider, mock_conn = self._provider_and_conn()
+        with patch.object(provider, "_get_conn", return_value=mock_conn):
+            provider.embed("hello", mode=EmbedMode.QUERY)
+        call_body = json.loads(mock_conn.request.call_args[1]["body"])
+        assert call_body["input"] == [QUERY_PREFIX + "hello"]
+
+    def test_document_mode_prepends_prefix(self, monkeypatch):
+        import evolution.providers.embeddings as mod
+        from evolution.providers.embeddings import EmbedMode, DOCUMENT_PREFIX
+        monkeypatch.setattr(mod, "_PREFIXES_ENABLED", True)
+        provider, mock_conn = self._provider_and_conn()
+        with patch.object(provider, "_get_conn", return_value=mock_conn):
+            provider.embed("hello", mode=EmbedMode.DOCUMENT)
+        call_body = json.loads(mock_conn.request.call_args[1]["body"])
+        assert call_body["input"] == [DOCUMENT_PREFIX + "hello"]
+
+    def test_raw_mode_no_prefix(self, monkeypatch):
+        import evolution.providers.embeddings as mod
+        from evolution.providers.embeddings import EmbedMode
+        monkeypatch.setattr(mod, "_PREFIXES_ENABLED", True)
+        provider, mock_conn = self._provider_and_conn()
+        with patch.object(provider, "_get_conn", return_value=mock_conn):
+            provider.embed("hello", mode=EmbedMode.RAW)
+        call_body = json.loads(mock_conn.request.call_args[1]["body"])
+        assert call_body["input"] == ["hello"]
+
+    def test_env_var_disables_prefix(self, monkeypatch):
+        import evolution.providers.embeddings as mod
+        from evolution.providers.embeddings import EmbedMode
+        monkeypatch.setattr(mod, "_PREFIXES_ENABLED", False)
+        provider, mock_conn = self._provider_and_conn()
+        with patch.object(provider, "_get_conn", return_value=mock_conn):
+            provider.embed("hello", mode=EmbedMode.QUERY)
+        call_body = json.loads(mock_conn.request.call_args[1]["body"])
+        assert call_body["input"] == ["hello"]
+
+    def test_batch_respects_mode(self, monkeypatch):
+        import evolution.providers.embeddings as mod
+        from evolution.providers.embeddings import EmbedMode, DOCUMENT_PREFIX
+        monkeypatch.setattr(mod, "_PREFIXES_ENABLED", True)
+        provider, mock_conn = self._provider_and_conn(n_vecs=2)
+        with patch.object(provider, "_get_conn", return_value=mock_conn):
+            provider.embed_batch(["a", "b"], mode=EmbedMode.DOCUMENT)
+        call_body = json.loads(mock_conn.request.call_args[1]["body"])
+        assert call_body["input"] == [DOCUMENT_PREFIX + "a", DOCUMENT_PREFIX + "b"]
+
+
 class TestOllamaEmbeddingProvider:
     """Test OllamaEmbeddingProvider vector handling."""
 

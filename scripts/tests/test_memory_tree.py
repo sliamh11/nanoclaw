@@ -114,7 +114,7 @@ class StubEmbed:
     def __init__(self):
         self._cache = {}
 
-    def __call__(self, text: str) -> list[float]:
+    def __call__(self, text: str, mode=None) -> list[float]:
         if text in self._cache:
             return self._cache[text]
         import hashlib
@@ -145,8 +145,8 @@ def stub_embed(monkeypatch):
 @pytest.fixture
 def stub_embed_batch(monkeypatch, stub_embed):
     """Stub embed_batch_text using the same StubEmbed instance."""
-    def _batch(texts):
-        return [stub_embed(t) for t in texts]
+    def _batch(texts, mode=None):
+        return [stub_embed(t, mode=mode) for t in texts]
     monkeypatch.setattr(mt, "embed_batch_text", _batch)
     return stub_embed
 
@@ -1259,9 +1259,9 @@ class TestConceptExpansion:
         calls = []
         original_embed = mt.embed_text
 
-        def spy(text):
+        def spy(text, mode=None):
             calls.append(text)
-            return original_embed(text)
+            return original_embed(text, mode=mode)
 
         monkeypatch.setattr(mt, "embed_text", spy)
 

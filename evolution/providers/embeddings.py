@@ -21,8 +21,21 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from abc import ABC, abstractmethod
+from enum import Enum
 
 from ..config import EMBED_DIM, EMBED_MODELS, load_api_key
+
+
+class EmbedMode(Enum):
+    QUERY = "query"
+    DOCUMENT = "document"
+    RAW = "raw"
+
+
+QUERY_PREFIX = "task: search result | query: "
+DOCUMENT_PREFIX = "title: none | text: "
+
+_PREFIXES_ENABLED = os.environ.get("DEUS_EMBED_PREFIX", "0") == "1"
 
 logger = logging.getLogger(__name__)
 
@@ -38,12 +51,18 @@ OLLAMA_EMBED_BATCH_MAX = int(os.environ.get("OLLAMA_EMBED_BATCH_MAX", "32"))
 
 class EmbeddingProvider(ABC):
     @abstractmethod
-    def embed(self, text: str) -> list[float]:
+    def embed(self, text: str, mode: EmbedMode = EmbedMode.RAW) -> list[float]:
         """Embed a single text string. Returns a vector of EMBED_DIM floats."""
 
-    def embed_batch(self, texts: list[str]) -> list[list[float]]:
+    def embed_batch(self, texts: list[str], mode: EmbedMode = EmbedMode.RAW) -> list[list[float]]:
         """Embed multiple texts. Default: sequential calls to embed()."""
-        return [self.embed(t) for t in texts]
+        return [self.embed(t, mode=mode) for t in texts]
+
+
+_GEMINI_TASK_MAP = {
+    EmbedMode.QUERY: "RETRIEVAL_QUERY",
+    EmbedMode.DOCUMENT: "RETRIEVAL_DOCUMENT",
+}
 
 
 class GeminiEmbeddingProvider(EmbeddingProvider):
@@ -51,15 +70,18 @@ class GeminiEmbeddingProvider(EmbeddingProvider):
         from google import genai
         self._client = genai.Client(api_key=load_api_key())
 
-    def embed(self, text: str) -> list[float]:
+    def embed(self, text: str, mode: EmbedMode = EmbedMode.RAW) -> list[float]:
         from google.genai import types as genai_types
+        config_kwargs: dict = {"output_dimensionality": EMBED_DIM}
+        if _PREFIXES_ENABLED and mode in _GEMINI_TASK_MAP:
+            config_kwargs["task_type"] = _GEMINI_TASK_MAP[mode]
         last_exc = None
         for model in EMBED_MODELS:
             try:
                 result = self._client.models.embed_content(
                     model=model,
                     contents=text,
-                    config=genai_types.EmbedContentConfig(output_dimensionality=EMBED_DIM),
+                    config=genai_types.EmbedContentConfig(**config_kwargs),
                 )
                 return result.embeddings[0].values
             except Exception as exc:
@@ -160,10 +182,17 @@ class OllamaEmbeddingProvider(EmbeddingProvider):
             return vec + [0.0] * (EMBED_DIM - len(vec))
         return vec
 
-    def embed(self, text: str) -> list[float]:
-        return self.embed_batch([text])[0]
+    @staticmethod
+    def _apply_prefix(texts: list[str], mode: EmbedMode) -> list[str]:
+        if not _PREFIXES_ENABLED or mode == EmbedMode.RAW:
+            return texts
+        prefix = QUERY_PREFIX if mode == EmbedMode.QUERY else DOCUMENT_PREFIX
+        return [prefix + t for t in texts]
 
-    def embed_batch(self, texts: list[str]) -> list[list[float]]:
+    def embed(self, text: str, mode: EmbedMode = EmbedMode.RAW) -> list[float]:
+        return self.embed_batch([text], mode=mode)[0]
+
+    def embed_batch(self, texts: list[str], mode: EmbedMode = EmbedMode.RAW) -> list[list[float]]:
         """Batch-embed in a single HTTP call, chunked by OLLAMA_EMBED_BATCH_MAX.
 
         Each sub-batch retries independently on socket timeout with exponential
@@ -172,6 +201,7 @@ class OllamaEmbeddingProvider(EmbeddingProvider):
         if not texts:
             return []
 
+        texts = self._apply_prefix(texts, mode)
         out: list[list[float]] = []
         for start in range(0, len(texts), OLLAMA_EMBED_BATCH_MAX):
             chunk = texts[start : start + OLLAMA_EMBED_BATCH_MAX]
@@ -252,19 +282,19 @@ def get_embedding_provider() -> EmbeddingProvider:
     return _provider
 
 
-def embed(text: str) -> list[float]:
+def embed(text: str, mode: EmbedMode = EmbedMode.RAW) -> list[float]:
     """Convenience: embed a single text using the configured provider."""
-    return get_embedding_provider().embed(text)
+    return get_embedding_provider().embed(text, mode=mode)
 
 
-def embed_batch(texts: list[str]) -> list[list[float]]:
+def embed_batch(texts: list[str], mode: EmbedMode = EmbedMode.RAW) -> list[list[float]]:
     """Convenience: batch-embed a list of texts using the configured provider.
 
     Falls through to the provider's `embed_batch`, which is natively batched for
     Ollama (single HTTP call per sub-batch) and sequential for Gemini (the Gemini
     SDK doesn't expose a matching batch primitive at the dim we use).
     """
-    return get_embedding_provider().embed_batch(texts)
+    return get_embedding_provider().embed_batch(texts, mode=mode)
 
 
 def warmup_embedding_provider() -> None:

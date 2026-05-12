@@ -259,16 +259,32 @@ def cosine(u: list[float], v: list[float]) -> float:
     return sum(a * b for a, b in zip(u, v)) / (du * dv)
 
 
-def embed_text(text: str) -> list[float]:
+def embed_text(text: str, mode=None) -> list[float]:
     """Embed via the evolution provider. Monkey-patched in tests."""
-    from evolution.providers.embeddings import embed as _embed
-    return _embed(text)
+    from evolution.providers.embeddings import EmbedMode, embed as _embed
+    if mode is None:
+        mode = EmbedMode.RAW
+    return _embed(text, mode=mode)
 
 
-def embed_batch_text(texts: list[str]) -> list[list[float]]:
+def embed_batch_text(texts: list[str], mode=None) -> list[list[float]]:
     """Batch embed via the evolution provider. Monkey-patched in tests."""
-    from evolution.providers.embeddings import embed_batch as _embed_batch
-    return _embed_batch(texts)
+    from evolution.providers.embeddings import EmbedMode, embed_batch as _embed_batch
+    if mode is None:
+        mode = EmbedMode.RAW
+    return _embed_batch(texts, mode=mode)
+
+
+# Avoids evolution import at module load for test isolation.
+_EmbedMode = None
+
+
+def _get_embed_mode():
+    global _EmbedMode
+    if _EmbedMode is None:
+        from evolution.providers.embeddings import EmbedMode
+        _EmbedMode = EmbedMode
+    return _EmbedMode
 
 
 # ── Approach-angle helpers ──────────────────────────────────────────────────
@@ -986,7 +1002,7 @@ def build_tree(
         vec = None
         if need_embed and not skip_embed:
             try:
-                vec = embed_text(description)
+                vec = embed_text(description, mode=_get_embed_mode().DOCUMENT)
                 counts["embedded"] += 1
             except Exception as exc:
                 print(f"WARN: embed failed for {entry['path']}: {exc}", file=sys.stderr)
@@ -1094,7 +1110,7 @@ def reembed_file(vault: Path, rel_path: str, db: sqlite3.Connection) -> str:
     if old_hash == ch:
         return "unchanged"
     try:
-        vec = embed_text(embed_src)
+        vec = embed_text(embed_src, mode=_get_embed_mode().DOCUMENT)
     except Exception as exc:
         print(f"ERROR: embed failed: {exc}", file=sys.stderr)
         return "embed_failed"
@@ -1153,7 +1169,7 @@ def discover_node(vault: Path, rel_path: str, db: sqlite3.Connection) -> str:
     if existing is not None:
         return "already_tracked"
     try:
-        vec = embed_text(desc)
+        vec = embed_text(desc, mode=_get_embed_mode().DOCUMENT)
     except Exception as exc:
         print(f"ERROR: embed failed: {exc}", file=sys.stderr)
         return "embed_failed"
@@ -1218,7 +1234,7 @@ def retrieve(
 
     Returns {results: [{id, path, score, route}], confidence, fell_back, trace}.
     """
-    qv = query_vec if query_vec is not None else embed_text(query)
+    qv = query_vec if query_vec is not None else embed_text(query, mode=_get_embed_mode().QUERY)
 
     # Phase 1: flat cosine over all active nodes.
     all_nodes = db.execute(
@@ -1817,7 +1833,7 @@ def reindex_external(
         vec = None
         if need_embed and not skip_embed:
             try:
-                vec = embed_text(embed_src)
+                vec = embed_text(embed_src, mode=_get_embed_mode().DOCUMENT)
                 counts["embedded"] += 1
             except Exception as exc:
                 print(f"WARN: embed failed for {ns_path}: {exc}", file=sys.stderr)
@@ -2105,18 +2121,21 @@ def calibrate_sweep(
     import itertools
 
     # Pre-cache query embeddings so Ollama isn't called per-combo.
-    _cache: dict[str, list[float]] = {}
+    _qmode = _get_embed_mode().QUERY
+    _cache: dict[tuple, list[float]] = {}
     for item in dataset:
         q = item["query"]
-        if q not in _cache:
-            _cache[q] = embed_text(q)
+        key = (q, _qmode)
+        if key not in _cache:
+            _cache[key] = embed_text(q, mode=_qmode)
 
     _orig_embed = embed_text
 
-    def _cached_embed(text: str) -> list[float]:
-        if text in _cache:
-            return _cache[text]
-        return _orig_embed(text)
+    def _cached_embed(text: str, mode=None) -> list[float]:
+        key = (text, mode)
+        if key in _cache:
+            return _cache[key]
+        return _orig_embed(text, mode=mode)
 
     import memory_tree as _self
     _self.embed_text = _cached_embed
@@ -2701,7 +2720,7 @@ def backfill_approach_angles(
 
         if len(pending_embeds) >= batch_size:
             texts = [pe[2] for pe in pending_embeds]
-            vecs = embed_batch_text(texts)
+            vecs = embed_batch_text(texts, mode=_get_embed_mode().DOCUMENT)
             now = _utc_iso()
             for (pe_nid, pe_idx, pe_q, pe_hash), vec in zip(pending_embeds, vecs):
                 db.execute(
@@ -2715,7 +2734,7 @@ def backfill_approach_angles(
 
     if pending_embeds:
         texts = [pe[2] for pe in pending_embeds]
-        vecs = embed_batch_text(texts)
+        vecs = embed_batch_text(texts, mode=_get_embed_mode().DOCUMENT)
         now = _utc_iso()
         for (pe_nid, pe_idx, pe_q, pe_hash), vec in zip(pending_embeds, vecs):
             db.execute(
