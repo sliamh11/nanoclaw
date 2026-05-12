@@ -23,6 +23,11 @@ export const IS_LINUX = process.platform === 'linux';
 export const IS_WSL =
   IS_LINUX && fs.existsSync('/proc/sys/fs/binfmt_misc/WSLInterop');
 
+// ── Python binary ─────────────────────────────────────────────────────────
+
+export const PYTHON_BIN =
+  process.env.DEUS_PYTHON ?? (IS_WINDOWS ? 'python' : 'python3');
+
 // ── Directories ────────────────────────────────────────────────────────────
 
 /** Home directory. Always use this — process.env.HOME is undefined on Windows. */

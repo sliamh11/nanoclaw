@@ -27,6 +27,7 @@ vi.mock('./config.js', () => ({
   TRIGGER_PATTERN: /^@deus\b/i,
   SESSION_IDLE_RESET_HOURS: 8,
   DEFAULT_AGENT_RUNTIME: 'claude',
+  PROJECT_ROOT: '/tmp/deus-test',
   INJECTION_SCANNER_CONFIG: {
     enabled: false,
     threshold: 0.7,
