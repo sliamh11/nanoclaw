@@ -460,12 +460,12 @@ fn render_markdown_text(
             }
         } else if code_closed {
             highlighter = None;
-            if let Some(buf) = current_block.take() {
+            let buf = current_block.take();
+            if let Some(buf) = buf {
                 code_blocks.push(buf);
-                let n = code_blocks.len();
                 rendered = Line::from(vec![
                     Span::styled("  ───", theme::muted()),
-                    Span::styled(format!(" [{}]", n), theme::muted()),
+                    Span::styled(format!(" [{}]", code_blocks.len()), theme::muted()),
                 ]);
             }
         }
