@@ -203,9 +203,8 @@ class TestBenchmarkAblation:
         import scripts.tests.test_memory_tree as base  # reuse stub_embed
         pass
 
-    def test_v0_vs_v3_variant_keys_present(self, tmp_db, monkeypatch):
-        """Even on a tiny dataset, ablation must return all four variants."""
-        # Build a deterministic retrieve mock that varies per use_see_also/use_abstain.
+    def test_v0_vs_v4_variant_keys_present(self, tmp_db, monkeypatch):
+        """Even on a tiny dataset, ablation must return all five variants."""
         def fake_retrieve(db, query, **kw):
             conf = 0.5
             results = [{"id": "x", "path": "doc_a", "title": "T", "score": conf, "route": "flat"}]
@@ -219,10 +218,13 @@ class TestBenchmarkAblation:
             {"query": "q1", "expected_path": "doc_a", "tag": "single"},
         ]
         report = mt.benchmark_ablation(tmp_db, dataset, k=3)
-        assert set(report.keys()) == {"V0_flat_only", "V1_flat_abstain", "V2_flat_seealso", "V3_full"}
+        assert set(report.keys()) == {
+            "V0_flat_only", "V1_flat_abstain", "V2_flat_seealso",
+            "V3_no_coherence", "V4_full",
+        }
 
     def test_abstain_variants_differ_from_no_abstain(self, tmp_db, monkeypatch):
-        """V1/V3 (with abstain) must abstain on low confidence; V0/V2 (without) must not."""
+        """V1/V3/V4 (with abstain) must abstain on low confidence; V0/V2 (without) must not."""
         def fake_retrieve(db, query, **kw):
             conf = 0.10  # below any reasonable abstain
             results = [{"id": "x", "path": "doc_a", "title": "T", "score": conf, "route": "flat"}]
@@ -236,15 +238,14 @@ class TestBenchmarkAblation:
             {"query": "q1", "abstain": True, "tag": "abstain-far"},
         ]
         report = mt.benchmark_ablation(tmp_db, dataset)
-        # V0/V2 don't abstain — abstain_accuracy should be 0 (failed to abstain when expected).
         assert report["V0_flat_only"]["abstain_accuracy"] == 0.0
         assert report["V2_flat_seealso"]["abstain_accuracy"] == 0.0
-        # V1/V3 do abstain — should hit 1.0.
         assert report["V1_flat_abstain"]["abstain_accuracy"] == 1.0
-        assert report["V3_full"]["abstain_accuracy"] == 1.0
+        assert report["V3_no_coherence"]["abstain_accuracy"] == 1.0
+        assert report["V4_full"]["abstain_accuracy"] == 1.0
 
     def test_threshold_passthrough(self, tmp_db, monkeypatch):
-        """Custom low/abstain thresholds reach retrieve() in all four variants."""
+        """Custom low/abstain thresholds reach retrieve() in all five variants."""
         captured: list[dict] = []
         def fake_retrieve(db, query, **kw):
             captured.append({"low": kw.get("low_threshold"), "abstain": kw.get("abstain_threshold")})

@@ -100,6 +100,10 @@ APPROACH_ALPHA = float(os.environ.get("DEUS_APPROACH_ALPHA", "0.0"))
 APPROACH_COVERAGE_THRESHOLD = float(os.environ.get("DEUS_APPROACH_COVERAGE", "0.50"))
 COVERAGE_CONTENT_CAP = float(os.environ.get("DEUS_COVERAGE_CAP", "0.35"))
 
+# Coherence gate: rescue gap-abstain when top results are topically related.
+DEFAULT_USE_COHERENCE_GATE = os.environ.get("DEUS_COHERENCE_GATE", "1") == "1"
+DEFAULT_MIN_ENTITY_OVERLAP = int(os.environ.get("DEUS_MIN_ENTITY_OVERLAP", "2"))
+
 # Optimized params: load from evolution artifact if DEUS_TREE_PARAMS=1.
 if os.environ.get("DEUS_TREE_PARAMS") == "1":
     _project_root = str(Path(__file__).resolve().parent.parent)
@@ -118,6 +122,7 @@ if os.environ.get("DEUS_TREE_PARAMS") == "1":
             DEFAULT_SCORE_GAP_THRESHOLD = float(_learned.get("gap_threshold", DEFAULT_SCORE_GAP_THRESHOLD))
             DEFAULT_TOP_K = int(_learned.get("top_k", DEFAULT_TOP_K))
             DEFAULT_RRF_K = int(_learned.get("rrf_k", DEFAULT_RRF_K))
+            DEFAULT_MIN_ENTITY_OVERLAP = int(_learned.get("min_entity_overlap", DEFAULT_MIN_ENTITY_OVERLAP))
     except Exception:
         pass  # Fall back to env/hardcoded defaults
     finally:
@@ -388,6 +393,29 @@ def _query_entity_overlap(db: sqlite3.Connection, query: str) -> bool:
     row = db.execute(
         f"SELECT 1 FROM node_entities WHERE entity IN ({placeholders}) LIMIT 1",
         list(query_ents),
+    ).fetchone()
+    return row is not None
+
+
+def _node_entity_overlap(db: sqlite3.Connection, node_a: str, node_b: str) -> int:
+    """Count shared entities between two nodes via node_entities table."""
+    row = db.execute(
+        """SELECT COUNT(*) FROM node_entities a
+           INNER JOIN node_entities b ON a.entity = b.entity
+           WHERE a.node_id = ? AND b.node_id = ?""",
+        (node_a, node_b),
+    ).fetchone()
+    return row[0] if row else 0
+
+
+def _nodes_linked(db: sqlite3.Connection, node_a: str, node_b: str) -> bool:
+    """Check if two nodes are connected by any active edge."""
+    row = db.execute(
+        """SELECT 1 FROM edges
+           WHERE ((src_id = ? AND dst_id = ?) OR (src_id = ? AND dst_id = ?))
+             AND expired_at IS NULL
+           LIMIT 1""",
+        (node_a, node_b, node_b, node_a),
     ).fetchone()
     return row is not None
 
@@ -1166,6 +1194,8 @@ def retrieve(
     use_approach_angles: bool = DEFAULT_USE_APPROACH_ANGLES,
     coverage_threshold: float = APPROACH_COVERAGE_THRESHOLD,
     content_cap: float = COVERAGE_CONTENT_CAP,
+    use_coherence_gate: bool = DEFAULT_USE_COHERENCE_GATE,
+    min_entity_overlap: int = DEFAULT_MIN_ENTITY_OVERLAP,
 ) -> dict[str, Any]:
     """4-phase retrieval: flat cosine → FTS5 BM25 → graph expansion → abstain.
 
@@ -1334,9 +1364,36 @@ def retrieve(
         others_avg = sum(cosine_sorted[1:k + 1]) / min(len(cosine_sorted) - 1, k)
         gap = best - others_avg
         if gap < gap_threshold and best < abstain_threshold + gap_threshold:
-            fell_back = True
-            trace.append(f"abstain:gap={gap:.3f}<{gap_threshold}")
-            top = []
+            cosine_ranked = sorted(cosine_scores.items(), key=lambda x: -x[1])
+            rescued = False
+
+            if fts_hits:
+                bm25_top1 = fts_hits[0][0]
+                vec_top3_ids = [nid for nid, _ in cosine_ranked[:3]]
+                if bm25_top1 in vec_top3_ids:
+                    rescued = True
+                    trace.append("rrf_agree:keep")
+
+            if not rescued and use_coherence_gate and len(cosine_ranked) >= 2:
+                top1_id = cosine_ranked[0][0]
+                top2_id = cosine_ranked[1][0]
+                if _entities_available(db):
+                    overlap = _node_entity_overlap(db, top1_id, top2_id)
+                    if overlap >= min_entity_overlap:
+                        rescued = True
+                        trace.append(f"coherence:entities={overlap}")
+                if not rescued and _nodes_linked(db, top1_id, top2_id):
+                    rescued = True
+                    trace.append("coherence:edge")
+
+            if rescued:
+                trace.append(f"gap={gap:.3f}(rescued)")
+            else:
+                fell_back = True
+                trace.append(f"abstain:gap={gap:.3f}<{gap_threshold}")
+                if use_coherence_gate:
+                    trace.append("coherence:none")
+                top = []
         else:
             trace.append(f"gap={gap:.3f}")
 
@@ -2049,21 +2106,24 @@ def calibrate_sweep(
     gap_vals = [round(x, 2) for x in _frange(0.02, 0.09, 0.02)]
     coverage_vals = [round(x, 2) for x in _frange(0.40, 0.61, 0.05)]
     cap_vals = [round(x, 2) for x in _frange(0.30, 0.46, 0.05)]
+    entity_overlap_vals = [1, 2, 3]
 
     results: list[dict[str, Any]] = []
     try:
-        for abstain_t, gap_t, cov_t, cap_t in itertools.product(
-            abstain_vals, gap_vals, coverage_vals, cap_vals,
+        for abstain_t, gap_t, cov_t, cap_t, eo_t in itertools.product(
+            abstain_vals, gap_vals, coverage_vals, cap_vals, entity_overlap_vals,
         ):
             r = benchmark(db, dataset, k=k, abstain_threshold=abstain_t,
                           gap_threshold=gap_t, use_fts=True,
-                          coverage_threshold=cov_t, content_cap=cap_t)
+                          coverage_threshold=cov_t, content_cap=cap_t,
+                          use_coherence_gate=True, min_entity_overlap=eo_t)
 
             results.append({
                 "abstain_threshold": abstain_t,
                 "gap_threshold": gap_t,
                 "coverage_threshold": cov_t,
                 "content_cap": cap_t,
+                "min_entity_overlap": eo_t,
                 "recall": r["recall_at_k"],
                 "mrr": r["mrr_at_k"],
                 "abstain_accuracy": r.get("abstain_accuracy", 0.0),
@@ -2086,6 +2146,7 @@ def calibrate_sweep(
             "gap_threshold": DEFAULT_SCORE_GAP_THRESHOLD,
             "coverage_threshold": APPROACH_COVERAGE_THRESHOLD,
             "content_cap": COVERAGE_CONTENT_CAP,
+            "min_entity_overlap": DEFAULT_MIN_ENTITY_OVERLAP,
         },
     }
 
@@ -2114,6 +2175,8 @@ def benchmark(
     wrong_confident_score: float = 0.65,
     coverage_threshold: float = APPROACH_COVERAGE_THRESHOLD,
     content_cap: float = COVERAGE_CONTENT_CAP,
+    use_coherence_gate: bool = DEFAULT_USE_COHERENCE_GATE,
+    min_entity_overlap: int = DEFAULT_MIN_ENTITY_OVERLAP,
 ) -> dict[str, Any]:
     """Run dataset queries, compute recall@k, MRR@k, per-tag breakdown, latency.
 
@@ -2159,6 +2222,8 @@ def benchmark(
             use_fts=use_fts,
             coverage_threshold=coverage_threshold,
             content_cap=content_cap,
+            use_coherence_gate=use_coherence_gate,
+            min_entity_overlap=min_entity_overlap,
         )
         latencies.append(_time.monotonic() - t0)
 
@@ -2215,6 +2280,8 @@ def benchmark(
             "use_see_also": use_see_also,
             "use_abstain": use_abstain,
             "use_fts": use_fts,
+            "use_coherence_gate": use_coherence_gate,
+            "min_entity_overlap": min_entity_overlap,
         },
     }
 
@@ -2227,22 +2294,25 @@ def benchmark_ablation(
     low_threshold: float = DEFAULT_LOW_THRESHOLD,
     abstain_threshold: float = DEFAULT_ABSTAIN_THRESHOLD,
 ) -> dict[str, Any]:
-    """Run the same dataset under four variants so we can read the marginal
+    """Run the same dataset under five variants so we can read the marginal
     value of each retrieval phase:
 
         V0  — flat only, no see_also, no abstain (baseline)
         V1  — flat + abstain only
         V2  — flat + see_also only
-        V3  — full (current production behavior)
+        V3  — full minus coherence gate
+        V4  — full with coherence gate (current production)
     """
+    # (name, use_see_also, use_abstain, use_coherence_gate)
     variants = [
-        ("V0_flat_only", False, False),
-        ("V1_flat_abstain", False, True),
-        ("V2_flat_seealso", True, False),
-        ("V3_full", True, True),
+        ("V0_flat_only", False, False, False),
+        ("V1_flat_abstain", False, True, False),
+        ("V2_flat_seealso", True, False, False),
+        ("V3_no_coherence", True, True, False),
+        ("V4_full", True, True, True),
     ]
     out = {}
-    for name, use_sa, use_ab in variants:
+    for name, use_sa, use_ab, use_cg in variants:
         out[name] = benchmark(
             db, dataset,
             k=k,
@@ -2250,6 +2320,7 @@ def benchmark_ablation(
             abstain_threshold=abstain_threshold,
             use_see_also=use_sa,
             use_abstain=use_ab,
+            use_coherence_gate=use_cg,
         )
     return out
 
@@ -2551,6 +2622,7 @@ def main(argv: list[str] | None = None) -> int:
         "--concepts", type=str, default=None,
         help="Comma-separated concept terms for FTS5 expansion (from session tracker)",
     )
+    p_query.add_argument("--no-coherence", action="store_true", help="Disable coherence gate on gap abstain")
 
     p_reembed = sub.add_parser("reembed", help="Re-embed a single file")
     p_reembed.add_argument("path", help="Relative path from vault root")
@@ -2640,6 +2712,7 @@ def main(argv: list[str] | None = None) -> int:
                 low_threshold=args.low, abstain_threshold=args.abstain,
                 use_fts=not args.no_fts,
                 concepts=concept_list,
+                use_coherence_gate=not args.no_coherence,
             )
         if args.json:
             print(json.dumps(result, indent=2))
