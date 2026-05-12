@@ -127,6 +127,20 @@ fn main() -> io::Result<()> {
                         continue;
                     }
 
+                    if app.show_rewind_picker {
+                        match key.code {
+                            KeyCode::Esc => {
+                                app.show_rewind_picker = false;
+                                app.rewind_targets.clear();
+                            }
+                            KeyCode::Up | KeyCode::Char('k') => app.rewind_prev(),
+                            KeyCode::Down | KeyCode::Char('j') => app.rewind_next(),
+                            KeyCode::Enter => app.rewind_select(),
+                            _ => {}
+                        }
+                        continue;
+                    }
+
                     if app.reverse_search_mode {
                         let mut consumed = true;
                         match key.code {
