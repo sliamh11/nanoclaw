@@ -993,11 +993,21 @@ case "$1" in
     # Otherwise identical to bare `deus` / `deus home`.
     CHROME_FLAG=""
     TUI_DEFAULT="false"
+    AGENTS_MODE="false"
     if [ "$1" = "web" ] || [ "$(_read_config_key chrome_default)" = "true" ]; then
       CHROME_FLAG="--chrome"
     fi
     if [ "$1" != "web" ] && [ "$(_read_config_key tui_default)" = "true" ]; then
       TUI_DEFAULT="true"
+    fi
+    for _arg in "$@"; do
+      if [ "$_arg" = "--agents" ]; then
+        AGENTS_MODE="true"
+        break
+      fi
+    done
+    if [ "$AGENTS_MODE" = "true" ]; then
+      exec claude agents
     fi
 
     _launch_tui_with_context() {
@@ -1468,7 +1478,7 @@ $STARTUP_INSTRUCTION"
     exec "$tui_bin" "$@"
     ;;
   *)
-    echo "Usage: deus [claude|codex] [home|auth|web|backend|gcal|listen|logs|solution|sweep|tui]"
+    echo "Usage: deus [claude|codex] [home|auth|web|backend|gcal|listen|logs|solution|sweep|tui] [--agents]"
     echo ""
     echo "  deus            Launch in current directory (external project mode if not ~/deus)"
     echo "  deus codex      Launch with Codex (OpenAI) for this session"
@@ -1483,5 +1493,8 @@ $STARTUP_INSTRUCTION"
     echo "  deus solution   Manage solution atoms (list|search|add)"
     echo "  deus sweep      Run threshold calibration sweep against benchmark queries"
     echo "  deus tui        Interactive terminal UI (set tui_default=true in config to use by default)"
+    echo ""
+    echo "Flags:"
+    echo "  --agents        Open the claude agents preview UI (append to any launch command)"
     ;;
 esac
