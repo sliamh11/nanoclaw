@@ -1378,12 +1378,21 @@ def cmd_query(query: str, top: int = 3, recency_boost: bool = False,
                 continue
             row = db.execute(
                 """SELECT path, tldr, confidence, corroborations,
-                          source_chunk, category
+                          source_chunk, category, privacy
                    FROM entries WHERE id = ? AND type = 'atom'
                    AND orphaned_at IS NULL""",
                 [fts_id],
             ).fetchone()
-            if row and len(atom_results) < top * 3:
+            if not row:
+                continue
+            atom_priv = row[6] or "internal"
+            if effective_allowlist and atom_priv not in effective_allowlist:
+                continue
+            elif privacy and atom_priv != privacy:
+                continue
+            elif atom_priv == "sensitive":
+                continue
+            if len(atom_results) < top * 3:
                 atom_results.append({
                     "path": row[0], "chunk": row[1],
                     "confidence": row[2] or 0.0,
@@ -3499,6 +3508,15 @@ def _collect_health_metrics(db: sqlite3.Connection) -> dict:
         snapshot["privacy"] = {p: c for p, c in privacy_rows} if privacy_rows else {}
     except sqlite3.OperationalError:
         snapshot["privacy"] = {}
+    try:
+        angles_count = db.execute(
+            "SELECT COUNT(DISTINCT atom_id) FROM atom_approach_angles"
+        ).fetchone()[0]
+        snapshot["atoms_with_angles"] = angles_count
+        snapshot["angle_coverage"] = round(angles_count / max(total_atoms, 1), 3)
+    except sqlite3.OperationalError:
+        snapshot["atoms_with_angles"] = 0
+        snapshot["angle_coverage"] = 0.0
     return snapshot
 
 
@@ -3612,6 +3630,12 @@ def cmd_health(save: bool = True) -> None:
     priv = current.get("privacy", {})
     if priv:
         out.append("Privacy: " + "  ".join(f"{k}:{v}" for k, v in sorted(priv.items(), key=lambda x: -x[1])))
+    angle_cov = current.get("angle_coverage", 0.0)
+    angles_n = current.get("atoms_with_angles", 0)
+    if total > 0:
+        out.append(f"Approach angles: {angles_n}/{total} atoms ({100*angle_cov:.0f}% coverage)")
+        if angle_cov < 0.9:
+            out.append("  ⚠ Run --backfill-atom-angles to generate approach angles for better retrieval")
 
     out.append("")
     if prev:
