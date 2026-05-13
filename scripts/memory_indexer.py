@@ -1154,15 +1154,9 @@ def _rrf_fuse(
 def _rerank_cross_encoder(query: str, candidates: list[dict]) -> list[dict] | None:
     """Rerank atom candidates using a cross-encoder. Returns None on failure."""
     global _cross_encoder
-    try:
-        from sentence_transformers import CrossEncoder
-    except ImportError:
-        return None
+    from sentence_transformers import CrossEncoder
     if _cross_encoder is None:
-        try:
-            _cross_encoder = CrossEncoder(RERANKER_MODEL)
-        except Exception:
-            return None
+        _cross_encoder = CrossEncoder(RERANKER_MODEL)
     pairs = [(query, a["chunk"] or "") for a in candidates]
     try:
         scores = _cross_encoder.predict(pairs).tolist()
@@ -3301,11 +3295,9 @@ def cmd_rebuild():
             [now, "rebuild"],
         )
         # Derived tables (no primary user data) — safe to clear during rebuild
-        for table in ["embeddings", "entries_fts", "entities", "relationships", "atom_entities"]:
+        for table in ["embeddings", "entries_fts", "entities", "relationships",
+                      "atom_entities", "atom_approach_angles", "atom_angle_embeddings"]:
             try:
-                # safe: `table` iterates the literal list above; SQLite cannot
-                # parameterize identifiers in DELETE FROM. The `[...]` quoting
-                # is belt-and-suspenders on an already-fixed schema-name set.
                 db.execute(f"DELETE FROM [{table}]")
             except sqlite3.OperationalError:
                 pass
@@ -3404,6 +3396,21 @@ def cmd_rebuild():
         db.commit()
 
     print(f"\nDone. {ok}/{len(log_files)} logs + {atom_ok} atoms indexed into {DB_PATH}")
+
+    if ATOM_ANGLES_ENABLED:
+        db = open_db()
+        try:
+            atom_count = db.execute(
+                "SELECT COUNT(*) FROM entries WHERE type = 'atom' AND orphaned_at IS NULL"
+            ).fetchone()[0]
+            if atom_count > 0:
+                print(f"\nBackfilling approach angles for {atom_count} atoms...")
+                stats = backfill_atom_angles(db)
+                print(f"  generated={stats['generated']}, skipped={stats['skipped']}, "
+                      f"failed={stats['failed']}")
+        except sqlite3.OperationalError:
+            pass
+        db.close()
 
 
 # ── Health analytics ─────────────────────────────────────────────────────────
