@@ -129,7 +129,11 @@ ATOM_ANGLE_ALPHA = float(os.environ.get("DEUS_ATOM_ANGLE_ALPHA", "0.0"))
 SIBLING_DISCOUNT = float(os.environ.get("DEUS_SIBLING_DISCOUNT", "0.15"))
 SIBLING_MAX = int(os.environ.get("DEUS_SIBLING_MAX", "5"))
 ENTITY_BOOST = float(os.environ.get("DEUS_ENTITY_BOOST", "0.1"))
+RERANKER_ENABLED = os.environ.get("DEUS_RERANKER", "1") == "1"
+RERANKER_MODEL = os.environ.get("DEUS_RERANKER_MODEL", "cross-encoder/ms-marco-MiniLM-L-6-v2")
+RERANKER_TOP_K = int(os.environ.get("DEUS_RERANKER_CANDIDATES", "20"))
 
+_cross_encoder = None
 _client: genai.Client | None = None
 
 
@@ -1123,6 +1127,29 @@ def _rrf_fuse(
     return [p for p, _ in sorted(scores.items(), key=lambda x: -x[1])[:top]]
 
 
+def _rerank_cross_encoder(query: str, candidates: list[dict]) -> list[dict] | None:
+    """Rerank atom candidates using a cross-encoder. Returns None on failure."""
+    global _cross_encoder
+    try:
+        from sentence_transformers import CrossEncoder
+    except ImportError:
+        return None
+    if _cross_encoder is None:
+        try:
+            _cross_encoder = CrossEncoder(RERANKER_MODEL)
+        except Exception:
+            return None
+    pairs = [(query, a["chunk"] or "") for a in candidates]
+    try:
+        scores = _cross_encoder.predict(pairs).tolist()
+    except Exception:
+        return None
+    for a, score in zip(candidates, scores):
+        a["_ce_score"] = score
+    candidates.sort(key=lambda a: -a["_ce_score"])
+    return candidates
+
+
 def cmd_query(query: str, top: int = 3, recency_boost: bool = False,
               show_source: bool = False, domain: str | None = None,
               intent: str | None = None, as_of: str | None = None,
@@ -1398,6 +1425,13 @@ def cmd_query(query: str, top: int = 3, recency_boost: bool = False,
     for a in atom_results:
         a["score"] = a.get("dist", 999.0) - 0.25 * a["confidence"] - 0.15 * a.get("temperature", 1.0)
     atom_results.sort(key=lambda a: a["score"])
+
+    # ── Cross-encoder reranking ──────────────────────────────────────────────
+    if RERANKER_ENABLED and atom_results:
+        candidates = atom_results[:RERANKER_TOP_K]
+        reranked = _rerank_cross_encoder(query, candidates)
+        if reranked is not None:
+            atom_results = reranked
 
     # Category-aware atom sections — only atoms with ≥ 2 corroborations
     high_conf = [a for a in atom_results if a["corroborations"] >= 2]
@@ -3793,7 +3827,18 @@ def atom_benchmark(fixture_path: str, k: int = 5) -> dict:
             except sqlite3.OperationalError:
                 pass
 
-        sorted_atoms = sorted(atom_map.values(), key=lambda x: x[1])[:k]
+        sorted_atoms = sorted(atom_map.values(), key=lambda x: x[1])
+
+        if RERANKER_ENABLED and sorted_atoms:
+            ce_candidates = [{"chunk": chunk} for chunk, dist in sorted_atoms[:RERANKER_TOP_K]]
+            reranked = _rerank_cross_encoder(query, ce_candidates)
+            if reranked is not None:
+                sorted_atoms = [(a["chunk"], a.get("_ce_score", 0)) for a in reranked[:k]]
+            else:
+                sorted_atoms = sorted_atoms[:k]
+        else:
+            sorted_atoms = sorted_atoms[:k]
+
         elapsed_ms = (time.monotonic() - t0) * 1000
         latencies.append(elapsed_ms)
 
