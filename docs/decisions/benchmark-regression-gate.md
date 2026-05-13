@@ -40,7 +40,7 @@ Retrieval recall is measured over the 75 retrieval-expected queries only. Abstai
 
 The gap-abstain check is a second-order filter: it catches queries where the top score is weak AND indistinguishable from noise. The ceiling must be near the abstain floor (where scores genuinely can't be trusted), not the low-confidence threshold (which is above most Ollama scores).
 
-**Why:** `low_threshold` (0.55) is above the typical in-domain score range for Ollama embeddinggemma (0.30-0.50). `abstain_threshold + gap_threshold` (0.34 for Ollama, 0.56 for Gemini) stays near the noise floor regardless of provider. **Do not revert to `low_threshold`.**
+**Why:** `low_threshold` (0.55) is above the typical in-domain score range for Ollama embeddinggemma (0.30-0.50). `abstain_threshold + gap_threshold` (0.34 for Ollama, 0.56 for Gemini) stays near the noise floor regardless of provider. **Do not revert to `low_threshold` for Ollama embeddinggemma.** Other embedding models may have different score distributions - re-run `deus sweep` when switching providers.
 
 ## Disproved approaches
 
