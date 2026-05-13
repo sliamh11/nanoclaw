@@ -55,4 +55,12 @@ During the investigation, six retrieval improvement levers were smoke-tested and
 | Cross-encoder reranking (MiniLM-L6-v2) | Recovered 1/3, collapsed 2/3 to noise | MS-MARCO training doesn't transfer to 1-2 line descriptions |
 | Per-namespace z-score normalization | Worsened 2/3 misses | Auto-memory nodes are genuinely more relevant, not unfairly inflated |
 
+| Symmetric task prefixes (embeddinggemma) | recall -0.133 (0.743 to 0.610), abstain +0.318 | Re-embedded both sides (QUERY+DOCUMENT). Model becomes more conservative: better abstain but worse fuzzy recall. Vocab-mismatch -0.265, ambiguous -0.500. Infrastructure kept behind DEUS_EMBED_PREFIX=0 (2026-05-13) |
+
 **Do not re-attempt these without a concrete hypothesis for why the prior result would change.** The remaining 5 misses at 96% recall are dilution cases where auto-memory nodes are legitimately more semantically relevant than the expected vault structural nodes.
+
+## Validated approaches (atom retrieval)
+
+| Approach | Result | Details |
+|----------|--------|---------|
+| Approach angles for atoms (HyPE) | recall 0.444 to 1.000 on 18-query subset (+10 rescues) | 50-atom experiment: generated 3 synthetic questions per atom via `generate_approach_angles()`, embedded via Ollama, ANN search against angle embeddings. Distance separation +28.6% (0.159 to 0.204). Angles de-bias "The user prefers..." phrasing through vocabulary diversification. Full backfill: 1,342 atoms x 3 angles = 4,026 embeddings. (2026-05-13) |

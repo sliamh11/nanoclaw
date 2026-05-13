@@ -120,6 +120,16 @@ CATEGORY_SECTIONS: dict[str, tuple[str, str]] = {
     "methodology": ("Working Methodology", "Process rules — how to approach work."),
 }
 
+ATOM_ANGLES_ENABLED = os.environ.get("DEUS_ATOM_ANGLES", "1") == "1"
+# Changing ATOM_ANGLE_COUNT requires a full --backfill-atom-angles rebuild:
+# rowid encoding (atom_id * count + angle_idx) bakes this into the vec0 table.
+ATOM_ANGLE_COUNT = 3
+ATOM_ANGLE_MIN_SCORE = float(os.environ.get("DEUS_ATOM_ANGLE_MIN", "1.0"))
+ATOM_ANGLE_ALPHA = float(os.environ.get("DEUS_ATOM_ANGLE_ALPHA", "0.0"))
+SIBLING_DISCOUNT = float(os.environ.get("DEUS_SIBLING_DISCOUNT", "0.15"))
+SIBLING_MAX = int(os.environ.get("DEUS_SIBLING_MAX", "5"))
+ENTITY_BOOST = float(os.environ.get("DEUS_ENTITY_BOOST", "0.1"))
+
 _client: genai.Client | None = None
 
 
@@ -375,6 +385,23 @@ def open_db() -> sqlite3.Connection:
             db.execute(f"ALTER TABLE entries ADD COLUMN {col} {definition}")
         except sqlite3.OperationalError:
             pass
+    db.execute("""
+        CREATE TABLE IF NOT EXISTS atom_approach_angles (
+            atom_id      INTEGER NOT NULL REFERENCES entries(id),
+            angle_idx    INTEGER NOT NULL,
+            query_text   TEXT NOT NULL,
+            source_hash  TEXT NOT NULL,
+            created_at   TEXT NOT NULL,
+            PRIMARY KEY (atom_id, angle_idx)
+        )
+    """)
+    try:
+        db.execute(f"""
+            CREATE VIRTUAL TABLE IF NOT EXISTS atom_angle_embeddings
+            USING vec0(embedding float[{EMBED_DIM}])
+        """)
+    except sqlite3.OperationalError:
+        pass
     db.commit()
     _backfill_category(db)
     _backfill_fts(db)
@@ -1136,9 +1163,9 @@ def cmd_query(query: str, top: int = 3, recency_boost: bool = False,
     # bound through `params`. See PR #9 in docs/decisions/error-discipline.md.
     rows = db.execute(
         f"""
-        SELECT e.path, e.date, e.tldr, e.topics, e.decisions, e.type,
+        SELECT e.id, e.path, e.date, e.tldr, e.topics, e.decisions, e.type,
                e.confidence, e.corroborations, v.distance, e.source_chunk,
-               e.category
+               e.category, e.domain, e.privacy, e.temperature
         FROM embeddings v
         JOIN entries e ON e.id = v.rowid
         WHERE {' AND '.join(where_clauses)}
@@ -1155,38 +1182,22 @@ def cmd_query(query: str, top: int = 3, recency_boost: bool = False,
     # Resolve effective privacy allowlist once (not per-atom)
     effective_allowlist = _resolve_privacy_allowlist(allowed_privacy)
 
-    for path, date, tldr, topics, decisions, chunk_type, confidence, corroborations, dist, source_chunk, category in rows:
+    for entry_id, path, date, tldr, topics, decisions, chunk_type, confidence, corroborations, dist, source_chunk, category, entry_domain, entry_privacy, entry_temp in rows:
         if chunk_type == "atom":
-            # Apply domain filter if specified
-            if domain:
-                entry_domain = db.execute(
-                    "SELECT domain FROM entries WHERE path = ? LIMIT 1", [path]
-                ).fetchone()
-                if entry_domain and entry_domain[0] != domain:
-                    continue
-            # Apply privacy filter
-            entry_privacy = db.execute(
-                "SELECT privacy FROM entries WHERE path = ? LIMIT 1", [path]
-            ).fetchone()
-            atom_privacy = entry_privacy[0] if entry_privacy else "internal"
+            if domain and entry_domain and entry_domain != domain:
+                continue
+            atom_privacy = entry_privacy or "internal"
             if effective_allowlist:
                 if atom_privacy not in effective_allowlist:
                     privacy_filtered += 1
                     continue
             elif privacy:
-                # Legacy single-level filter: show only this level
                 if atom_privacy != privacy:
                     continue
             elif atom_privacy == "sensitive":
-                # Default: exclude sensitive
                 privacy_filtered += 1
                 continue
-            # Temperature: used for ranking, not exclusion.
-            # Cold atoms rank lower but are never fully hidden.
-            entry_temp = db.execute(
-                "SELECT temperature FROM entries WHERE path = ? LIMIT 1", [path]
-            ).fetchone()
-            atom_temp = entry_temp[0] if entry_temp and entry_temp[0] is not None else 1.0
+            atom_temp = entry_temp if entry_temp is not None else 1.0
             if has_atoms and len(atom_results) < top:
                 atom_results.append({
                     "path": path, "chunk": tldr, "confidence": confidence or 0.0,
@@ -1194,6 +1205,7 @@ def cmd_query(query: str, top: int = 3, recency_boost: bool = False,
                     "source_chunk": source_chunk or "",
                     "dist": dist, "temperature": atom_temp,
                     "category": category or "fact",
+                    "_entry_id": entry_id,
                 })
         else:
             if path not in seen or (chunk_type == "frontmatter" and seen[path]["type"] != "frontmatter"):
@@ -1250,10 +1262,137 @@ def cmd_query(query: str, top: int = 3, recency_boost: bool = False,
         ranked = sorted(seen.values(), key=lambda e: e["dist"])[:top]
         seen = {e["path"]: e for e in ranked}
 
+    # ── Atom approach-angle rescue ──────────────────────────────────────────────
+    # rowid encoding: atom_id * ATOM_ANGLE_COUNT + angle_idx (see constant def)
+    if ATOM_ANGLES_ENABLED and has_atoms:
+        try:
+            angle_rows = db.execute(
+                """SELECT aa.atom_id, ae.distance
+                   FROM atom_angle_embeddings ae
+                   JOIN atom_approach_angles aa
+                     ON ae.rowid = aa.atom_id * ? + aa.angle_idx
+                   WHERE ae.embedding MATCH ? AND k = ?
+                   ORDER BY ae.distance LIMIT ?""",
+                [ATOM_ANGLE_COUNT, serialize(q_vec), top * 6, top * 3],
+            ).fetchall()
+        except sqlite3.OperationalError:
+            angle_rows = []
+
+        if angle_rows:
+            existing_ids = {a["_entry_id"] for a in atom_results if "_entry_id" in a}
+
+            angle_best: dict[int, float] = {}
+            for atom_id, dist in angle_rows:
+                if atom_id not in angle_best or dist < angle_best[atom_id]:
+                    angle_best[atom_id] = dist
+
+            for a in atom_results:
+                eid = a.get("_entry_id")
+                if eid and eid in angle_best:
+                    aa_score = angle_best[eid]
+                    if aa_score < a["dist"]:
+                        a["dist"] = ATOM_ANGLE_ALPHA * a["dist"] + (1 - ATOM_ANGLE_ALPHA) * aa_score
+                        a["_route"] = "approach"
+
+            for atom_id, best_dist in angle_best.items():
+                if atom_id in existing_ids:
+                    continue
+                # Looser gate than benchmark (+ 0.5): rescue path tolerates weaker matches
+                if best_dist >= ATOM_ANGLE_MIN_SCORE + 0.5:
+                    continue
+                row = db.execute(
+                    """SELECT path, tldr, confidence, corroborations,
+                              source_chunk, category
+                       FROM entries WHERE id = ? AND type = 'atom'
+                       AND orphaned_at IS NULL""",
+                    [atom_id],
+                ).fetchone()
+                if row and len(atom_results) < top * 2:
+                    atom_results.append({
+                        "path": row[0], "chunk": row[1],
+                        "confidence": row[2] or 0.0,
+                        "corroborations": row[3] or 1,
+                        "source_chunk": row[4] or "",
+                        "dist": best_dist, "temperature": 1.0,
+                        "category": row[5] or "fact",
+                        "_route": "approach-rescue",
+                    })
+
     if not seen and not atom_results:
         sys.exit(1)  # trigger fallback in /resume
 
     lines = []
+
+    # ── Graph-sibling expansion ────────────────────────────────────────────────
+    if atom_results and SIBLING_DISCOUNT > 0:
+        existing_paths = {a["path"] for a in atom_results}
+        sibling_candidates: dict[int, float] = {}
+        for a in atom_results[:3]:
+            eid_row = a.get("_entry_id")
+            if not eid_row:
+                continue
+            siblings = db.execute(
+                """SELECT DISTINCT ae2.atom_id
+                   FROM atom_entities ae1
+                   JOIN atom_entities ae2 ON ae1.entity_id = ae2.entity_id
+                   WHERE ae1.atom_id = ? AND ae2.atom_id != ?
+                   LIMIT ?""",
+                [eid_row, eid_row, SIBLING_MAX * 3],
+            ).fetchall()
+            for (sib_id,) in siblings:
+                if sib_id not in sibling_candidates:
+                    sibling_candidates[sib_id] = a["dist"] + SIBLING_DISCOUNT
+
+        added = 0
+        for sib_id, sib_dist in sorted(sibling_candidates.items(), key=lambda x: x[1]):
+            if added >= SIBLING_MAX:
+                break
+            row = db.execute(
+                """SELECT path, tldr, confidence, corroborations,
+                          source_chunk, category
+                   FROM entries WHERE id = ? AND type = 'atom'
+                   AND orphaned_at IS NULL""",
+                [sib_id],
+            ).fetchone()
+            if row and row[0] not in existing_paths:
+                atom_results.append({
+                    "path": row[0], "chunk": row[1],
+                    "confidence": row[2] or 0.0,
+                    "corroborations": row[3] or 1,
+                    "source_chunk": row[4] or "",
+                    "dist": sib_dist, "temperature": 1.0,
+                    "category": row[5] or "fact",
+                    "_route": "sibling",
+                })
+                existing_paths.add(row[0])
+                added += 1
+
+    # ── Entity-overlap boosting ──────────────────────────────────────────────
+    if atom_results and ENTITY_BOOST > 0:
+        query_lower = query.lower()
+        query_entities = set()
+        ent_rows = db.execute(
+            "SELECT id, name FROM entities WHERE mention_count >= 2"
+        ).fetchall()
+        for eid, ename in ent_rows:
+            if ename.lower() in query_lower:
+                query_entities.add(eid)
+        if query_entities:
+            atom_eids = [a["_entry_id"] for a in atom_results if "_entry_id" in a]
+            if atom_eids:
+                eid_placeholders = ",".join("?" * len(atom_eids))
+                ent_placeholders = ",".join("?" * len(query_entities))
+                overlap_rows = db.execute(
+                    f"SELECT atom_id, COUNT(*) FROM atom_entities "
+                    f"WHERE atom_id IN ({eid_placeholders}) AND entity_id IN ({ent_placeholders}) "
+                    f"GROUP BY atom_id",
+                    atom_eids + list(query_entities),
+                ).fetchall()
+                overlap_map = dict(overlap_rows)
+                for a in atom_results:
+                    cnt = overlap_map.get(a.get("_entry_id"), 0)
+                    if cnt > 0:
+                        a["dist"] -= cnt * ENTITY_BOOST
 
     # Confidence + temperature weighted re-ranking
     for a in atom_results:
@@ -1572,20 +1711,25 @@ def extract_atoms(content: str) -> list[dict]:
     """Call Gemini Flash to extract 2-5 atomic facts from a session log."""
     prompt = (
         "You are an atomic fact extractor for a personal knowledge system.\n\n"
-        "Given a session log, extract 2-5 atomic facts the user would want a future AI assistant to remember. "
+        "Given a session log, extract 2-5 atomic facts worth remembering across future sessions. "
         "Each fact must be:\n"
-        "- A single sentence, timeless (not \"today we did X\" but \"prefers X over Y\")\n"
-        "- About the USER's preferences, identity, or stable decisions — not about what happened\n"
-        "- Actionable across future sessions\n\n"
+        "- A single sentence, timeless — not narrating what happened but capturing a stable truth\n"
+        "- Each fact MUST mention at least one specific named entity (project, tool, technology, person, file, or config)\n"
+        "- Discriminative: would help distinguish THIS user from any other. Generic facts ('prefers clean code') are noise\n"
+        "- Start with the entity or subject, not 'The user' — e.g. 'Deus uses sqlite-vec for vector storage in memory.db'\n\n"
+        "Good: 'Vitest is the test runner for all packages in the monorepo'\n"
+        "Good: 'Container agents must never receive real API keys — credentials stay on the host'\n"
+        "Bad: 'The user prefers good code quality' (generic, no entity)\n"
+        "Bad: 'Today we fixed a bug in the router' (narrative, not timeless)\n\n"
         "Categories:\n"
-        "- preference: user likes/dislikes, style choices (ttl: 365 days)\n"
-        "- constraint: hard rules, always/never requirements (ttl: 365 days)\n"
-        "- methodology: how to work — process patterns, execution strategy, quality gates (ttl: 365 days)\n"
-        "- belief: opinions, worldview, tentative inferences (ttl: 90 days)\n"
-        "- fact: identity info, context, environment details (no ttl)\n"
-        "- decision: architectural or tool choices that affect future work (no ttl)\n\n"
+        "- preference: tool/style choices tied to a specific technology or project (ttl: 365 days)\n"
+        "- constraint: hard rules referencing specific systems or boundaries (ttl: 365 days)\n"
+        "- methodology: process patterns tied to a named tool, system, or workflow (ttl: 365 days)\n"
+        "- belief: opinions or inferences about a specific domain or technology (ttl: 90 days)\n"
+        "- fact: identity info, environment details, named configurations (no ttl)\n"
+        "- decision: architectural or tool choices naming the chosen technology and context (no ttl)\n\n"
         "Respond with ONLY a JSON array, no markdown fencing:\n"
-        '[{"text": "...", "category": "preference|constraint|belief|fact|decision"}]\n\n'
+        '[{"text": "...", "category": "preference|constraint|methodology|belief|fact|decision"}]\n\n'
         "If nothing is worth extracting (casual/social session with no stable decisions), respond with: []\n\n"
         f"SESSION LOG:\n{_extract_content_for_llm(content)}"
     )
@@ -2803,6 +2947,96 @@ def promote_atoms(
     return promoted
 
 
+def backfill_atom_angles(
+    db: sqlite3.Connection,
+    limit: int = 0,
+    regenerate: bool = False,
+    batch_size: int = 32,
+) -> dict:
+    """Generate approach angles for atoms and store with embeddings."""
+    import hashlib
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from memory_tree import generate_approach_angles
+
+    rows = db.execute(
+        "SELECT id, chunk, source_chunk FROM entries "
+        "WHERE type = 'atom' AND orphaned_at IS NULL"
+    ).fetchall()
+    if limit:
+        rows = rows[:limit]
+
+    stats = {"total": len(rows), "generated": 0, "skipped": 0, "failed": 0}
+
+    pending_texts: list[str] = []
+    pending_meta: list[tuple[int, int, str, str]] = []
+
+    for i, (entry_id, chunk_text, source_chunk) in enumerate(rows):
+        content_hash = hashlib.sha256((chunk_text or "").encode()).hexdigest()[:16]
+
+        if not regenerate:
+            existing = db.execute(
+                "SELECT source_hash FROM atom_approach_angles "
+                "WHERE atom_id = ? AND angle_idx = 0",
+                [entry_id],
+            ).fetchone()
+            if existing and existing[0] == content_hash:
+                stats["skipped"] += 1
+                continue
+
+        body_excerpt = (source_chunk or "")[:500]
+        angles = generate_approach_angles(chunk_text or "", body_excerpt)
+        if not angles:
+            stats["failed"] += 1
+            continue
+
+        now = utc_now().strftime("%Y-%m-%dT%H:%M:%SZ")
+        db.execute("DELETE FROM atom_approach_angles WHERE atom_id = ?", [entry_id])
+        for aidx, angle_text in enumerate(angles[:ATOM_ANGLE_COUNT]):
+            db.execute(
+                "INSERT OR REPLACE INTO atom_approach_angles "
+                "(atom_id, angle_idx, query_text, source_hash, created_at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                [entry_id, aidx, angle_text, content_hash, now],
+            )
+            pending_texts.append(angle_text)
+            pending_meta.append((entry_id, aidx, content_hash, now))
+
+        stats["generated"] += 1
+
+        if len(pending_texts) >= batch_size:
+            vecs = embed_batch(pending_texts)
+            for vec, (eid, aidx, _, _) in zip(vecs, pending_meta):
+                rowid = eid * ATOM_ANGLE_COUNT + aidx
+                db.execute(
+                    "DELETE FROM atom_angle_embeddings WHERE rowid = ?", [rowid]
+                )
+                db.execute(
+                    "INSERT INTO atom_angle_embeddings(rowid, embedding) VALUES (?, ?)",
+                    [rowid, serialize(vec)],
+                )
+            db.commit()
+            pending_texts.clear()
+            pending_meta.clear()
+
+        if (i + 1) % 50 == 0:
+            print(f"  {i+1}/{len(rows)} atoms processed", file=sys.stderr)
+
+    if pending_texts:
+        vecs = embed_batch(pending_texts)
+        for vec, (eid, aidx, _, _) in zip(vecs, pending_meta):
+            rowid = eid * ATOM_ANGLE_COUNT + aidx
+            db.execute(
+                "DELETE FROM atom_angle_embeddings WHERE rowid = ?", [rowid]
+            )
+            db.execute(
+                "INSERT INTO atom_angle_embeddings(rowid, embedding) VALUES (?, ?)",
+                [rowid, serialize(vec)],
+            )
+        db.commit()
+
+    return stats
+
+
 def cmd_extract(session_path: str, no_contradict: bool = False):
     path = Path(session_path).expanduser().resolve()
     if not path.exists():
@@ -3471,6 +3705,163 @@ def cmd_gaps(top: int = 10):
         print("- No significant gaps found (all frequent topics have atom coverage)")
 
 
+def atom_benchmark(fixture_path: str, k: int = 5) -> dict:
+    """Benchmark atom retrieval against labeled queries.
+
+    Returns dict with recall_at_k, abstain_accuracy, and per-tag stats.
+    """
+    fixture = Path(fixture_path)
+    if not fixture.exists():
+        print(f"ERROR: fixture not found: {fixture}", file=sys.stderr)
+        sys.exit(1)
+
+    queries = []
+    with open(fixture, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                queries.append(json.loads(line))
+
+    db = open_db()
+    total_atoms = db.execute(
+        "SELECT COUNT(*) FROM entries WHERE type = 'atom' AND orphaned_at IS NULL"
+    ).fetchone()[0]
+    print(f"Atom benchmark: {len(queries)} queries, {total_atoms} atoms, k={k}", file=sys.stderr)
+
+    hits = 0
+    abstain_correct = 0
+    abstain_total = 0
+    positive_total = 0
+    by_tag: dict[str, dict] = {}
+    details: list[dict] = []
+    latencies: list[float] = []
+
+    for item in queries:
+        query = item["query"]
+        expected = item.get("expected_atoms", [])
+        tag = item.get("tag", "unknown")
+        is_abstain = len(expected) == 0
+
+        if tag not in by_tag:
+            by_tag[tag] = {"n": 0, "hits": 0, "abstain_correct": 0, "abstain_total": 0}
+        by_tag[tag]["n"] += 1
+
+        t0 = time.monotonic()
+        q_vec = embed(query)
+        q_blob = serialize(q_vec)
+        rows = db.execute(
+            """SELECT e.id, e.chunk, v.distance
+               FROM embeddings v JOIN entries e ON e.id = v.rowid
+               WHERE v.embedding MATCH ? AND k = ?
+               AND e.type = 'atom' AND e.orphaned_at IS NULL
+               ORDER BY v.distance LIMIT ?""",
+            [q_blob, k * 3, k],
+        ).fetchall()
+
+        atom_map: dict[int, tuple[str, float]] = {}
+        for eid, chunk, dist in rows:
+            atom_map[eid] = (chunk, dist)
+
+        if ATOM_ANGLES_ENABLED:
+            try:
+                angle_rows = db.execute(
+                    """SELECT aa.atom_id, ae.distance
+                       FROM atom_angle_embeddings ae
+                       JOIN atom_approach_angles aa
+                         ON ae.rowid = aa.atom_id * ? + aa.angle_idx
+                       WHERE ae.embedding MATCH ? AND k = ?
+                       ORDER BY ae.distance LIMIT ?""",
+                    [ATOM_ANGLE_COUNT, q_blob, k * 6, k * 3],
+                ).fetchall()
+                angle_best: dict[int, float] = {}
+                for atom_id, adist in angle_rows:
+                    if atom_id not in angle_best or adist < angle_best[atom_id]:
+                        angle_best[atom_id] = adist
+                for atom_id, adist in angle_best.items():
+                    if atom_id in atom_map:
+                        chunk, raw_dist = atom_map[atom_id]
+                        blended = ATOM_ANGLE_ALPHA * raw_dist + (1 - ATOM_ANGLE_ALPHA) * adist
+                        if blended < raw_dist:
+                            atom_map[atom_id] = (chunk, blended)
+                    elif adist < ATOM_ANGLE_MIN_SCORE:
+                        row = db.execute(
+                            "SELECT chunk FROM entries WHERE id = ? AND type = 'atom' AND orphaned_at IS NULL",
+                            [atom_id],
+                        ).fetchone()
+                        if row:
+                            atom_map[atom_id] = (row[0], adist)
+            except sqlite3.OperationalError:
+                pass
+
+        sorted_atoms = sorted(atom_map.values(), key=lambda x: x[1])[:k]
+        elapsed_ms = (time.monotonic() - t0) * 1000
+        latencies.append(elapsed_ms)
+
+        returned_atoms = [chunk for chunk, dist in sorted_atoms]
+
+        if is_abstain:
+            abstain_total += 1
+            by_tag[tag]["abstain_total"] += 1
+            found_any = len(returned_atoms) > 0
+            if not found_any:
+                abstain_correct += 1
+                by_tag[tag]["abstain_correct"] += 1
+            details.append({
+                "query": query, "tag": tag, "abstained": True,
+                "correct": not found_any, "returned": len(returned_atoms),
+            })
+        else:
+            positive_total += 1
+            hit = False
+            matched = []
+            for exp_substr in expected:
+                for atom_text in returned_atoms:
+                    if exp_substr.lower() in atom_text.lower():
+                        hit = True
+                        matched.append(exp_substr)
+                        break
+            if hit:
+                hits += 1
+                by_tag[tag]["hits"] += 1
+            details.append({
+                "query": query, "tag": tag, "abstained": False,
+                "hit": hit, "matched": matched,
+                "expected_count": len(expected), "returned": len(returned_atoms),
+                "top_dist": sorted_atoms[0][1] if sorted_atoms else None,
+            })
+
+    db.close()
+
+    recall = hits / positive_total if positive_total else 0.0
+    abstain_acc = abstain_correct / abstain_total if abstain_total else 0.0
+    lat_sorted = sorted(latencies)
+    p50 = lat_sorted[len(lat_sorted) // 2] if lat_sorted else 0.0
+    p95 = lat_sorted[int(len(lat_sorted) * 0.95)] if lat_sorted else 0.0
+
+    tag_summary = {}
+    for tag, stats in by_tag.items():
+        t = {"n": stats["n"]}
+        pos = stats["n"] - stats["abstain_total"]
+        if pos > 0:
+            t["recall_at_k"] = round(stats["hits"] / pos, 3)
+        if stats["abstain_total"] > 0:
+            t["abstain_accuracy"] = round(stats["abstain_correct"] / stats["abstain_total"], 3)
+        tag_summary[tag] = t
+
+    result = {
+        "n": len(queries),
+        "positive": positive_total,
+        "abstain": abstain_total,
+        "recall_at_k": round(recall, 4),
+        "abstain_accuracy": round(abstain_acc, 4),
+        "latency_p50_ms": round(p50, 1),
+        "latency_p95_ms": round(p95, 1),
+        "by_tag": tag_summary,
+        "details": details,
+    }
+    return result
+
+
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 def main():
@@ -3533,6 +3924,10 @@ def main():
                        help="Re-embed atoms with enriched input (chunk + source_chunk context)")
     group.add_argument("--promote", action="store_true",
                        help="Promote high-corroboration atoms to auto-memory for tree indexing")
+    group.add_argument("--atom-benchmark", metavar="FIXTURE",
+                       help="Benchmark atom retrieval against labeled queries (JSONL fixture)")
+    group.add_argument("--backfill-atom-angles", action="store_true",
+                       help="Generate approach angles for all atoms (uses Ollama)")
     parser.add_argument("--no-extract", action="store_true",
                         help="Skip atom extraction when using --add (useful for CI/benchmarks)")
     parser.add_argument("--top", type=int, default=3, help="Number of results for --query")
@@ -3642,6 +4037,19 @@ def main():
         print(f"Promoted {len(promoted)} atoms to {auto_mem}")
         for p in promoted:
             print(f"  {p}")
+        db.close()
+        return
+    if args.atom_benchmark:
+        result = atom_benchmark(args.atom_benchmark, k=args.top)
+        print(json.dumps(result, indent=2))
+        return
+    if args.backfill_atom_angles:
+        db = open_db()
+        print("Backfilling approach angles for atoms (Ollama)...", file=sys.stderr)
+        stats = backfill_atom_angles(db)
+        print(f"Done: generated={stats['generated']}, "
+              f"skipped={stats['skipped']}, failed={stats['failed']}, "
+              f"total={stats['total']}", file=sys.stderr)
         db.close()
         return
 

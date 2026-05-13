@@ -1,0 +1,40 @@
+{"query": "where is the deus project located", "expected_atoms": ["project directory is located at ~/deus", "project at ~/deus", "project 'deus' at the path ~/deus"], "tag": "fact"}
+{"query": "what is the default embedding provider", "expected_atoms": ["Ollama is the default provider for memory embeddings"], "tag": "entity"}
+{"query": "what are the trading risk limits", "expected_atoms": ["maximum 2% risk per trade", "3% daily drawdown limit", "bracket limit orders"], "tag": "constraint"}
+{"query": "database deletion policy", "expected_atoms": ["no-DB-deletion policy", "orphaned_at and expired_at flags"], "tag": "constraint"}
+{"query": "how does the code review process work", "expected_atoms": [".code-reviewed marker", "SHIP verdict from a code reviewer"], "tag": "methodology"}
+{"query": "documentation style preference", "expected_atoms": ["caveman", "extreme brevity", "removing articles"], "tag": "preference"}
+{"query": "structural vs behavioral fixes", "expected_atoms": ["structural fixes (hook injection) over behavioral fixes"], "tag": "preference"}
+{"query": "how are agent rules stored", "expected_atoms": ["externalized, versioned .md files within .claude/wardens/"], "tag": "decision"}
+{"query": "what embedding model for memory", "expected_atoms": ["Ollama", "memory embeddings"], "tag": "entity"}
+{"query": "container mount policies", "expected_atoms": ["read-only mounts for source code", "containerized environments"], "tag": "constraint"}
+{"query": "how does the channel adapter architecture work", "expected_atoms": ["MCP-based architecture for channel adapters", "McpChannelAdapter"], "tag": "entity"}
+{"query": "should I modify STARTUP_INSTRUCTION", "expected_atoms": ["avoids modifying STARTUP_INSTRUCTION", "fragility"], "tag": "constraint"}
+{"query": "LLM provider fallback strategy", "expected_atoms": ["Gemini-to-Ollama fallback", "prioritizing Gemini"], "tag": "decision"}
+{"query": "test file exclusion from build", "expected_atoms": ["exclude test files from the production build", "tsconfig exclude"], "tag": "decision"}
+{"query": "error handling granularity", "expected_atoms": ["specific, granular error handling", "catching OSError or UnicodeDecodeError"], "tag": "preference"}
+{"query": "matching rules for task compression", "expected_atoms": ["explicit identifier-based matching rules over fuzzy matching"], "tag": "preference"}
+{"query": "STATE.md loading strategy", "expected_atoms": ["STATE.md as an on-demand resource", "auto-loaded system prompt"], "tag": "decision"}
+{"query": "approach angle fine-tuning decision", "expected_atoms": ["rejects approach-angle fine-tuning", "overfitting to past query vocabulary"], "tag": "decision"}
+{"query": "how are skills registered", "expected_atoms": ["new entries in .claude/skills/ must be manually added", "AGENTS.md"], "tag": "constraint"}
+{"query": "sync agent skills enforcement", "expected_atoms": ["sync_agent_skills.py", "--check flag"], "tag": "decision"}
+{"query": "image data at MCP boundary", "expected_atoms": ["base64 image data in metadata", "temporary files"], "tag": "decision"}
+{"query": "clipboard cache directory isolation", "expected_atoms": ["PID-scoped", "cleanup collisions"], "tag": "decision"}
+{"query": "study html dark mode", "expected_atoms": ["light/dark mode toggle"], "tag": "constraint"}
+{"query": "3 minute study technique", "expected_atoms": ["3-minute rule", "look at the material", "rewrite from scratch"], "tag": "methodology"}
+{"query": "TUI framework choice", "expected_atoms": ["Ink (Node.js) for TUI", "Ratatui"], "tag": "entity"}
+{"query": "docker container timeout", "expected_atoms": ["300-600s timeout", "Docker-based agent evaluations"], "tag": "constraint"}
+{"query": "warden portability philosophy", "expected_atoms": ["portable AI toolkit items", "project-specific gates"], "tag": "belief"}
+{"query": "memory schema rebuild requirement", "expected_atoms": ["memory_indexer.py --rebuild", "memory schema is modified"], "tag": "constraint"}
+{"query": "channel smoke test requirement", "expected_atoms": ["channel smoke test", "configuration change"], "tag": "constraint"}
+{"query": "wikilink resolution for embeddings", "expected_atoms": ["wikilinks", "display text or page title", "embedding"], "tag": "constraint"}
+{"query": "how to cook pasta carbonara", "expected_atoms": [], "tag": "abstain-far"}
+{"query": "best JavaScript framework 2025", "expected_atoms": [], "tag": "abstain-far"}
+{"query": "weather forecast for Tel Aviv", "expected_atoms": [], "tag": "abstain-far"}
+{"query": "how to install Linux on a laptop", "expected_atoms": [], "tag": "abstain-far"}
+{"query": "quantum computing basics", "expected_atoms": [], "tag": "abstain-far"}
+{"query": "what color is my car", "expected_atoms": [], "tag": "abstain-near"}
+{"query": "my favorite pizza topping", "expected_atoms": [], "tag": "abstain-near"}
+{"query": "what gym do I go to", "expected_atoms": [], "tag": "abstain-near"}
+{"query": "my shoe size", "expected_atoms": [], "tag": "abstain-near"}
+{"query": "what brand laptop do I use", "expected_atoms": [], "tag": "abstain-near"}

@@ -4181,3 +4181,100 @@ def test_empty_category_section_omitted(mi, fresh_vault, monkeypatch, capsys):
     assert "Active Constraints" not in output
     assert "Working Beliefs" not in output
     assert "## Known Facts" in output
+
+
+# ── Atom Benchmark ───────────────────────────────────────────────────────────
+
+
+def test_atom_benchmark_returns_metrics(mi, fresh_vault, tmp_path, monkeypatch):
+    monkeypatch.setattr(mi, "embed", lambda text: [0.1] * mi.EMBED_DIM)
+    db = mi.open_db()
+    _insert_atom_with_category(db, mi, "/fake/a.md", "Ollama is the default embedding provider",
+                               "decision", corroborations=3)
+    _insert_atom_with_category(db, mi, "/fake/b.md", "sqlite-vec for vector storage",
+                               "fact", corroborations=2)
+    db.close()
+
+    fixture = tmp_path / "test_queries.jsonl"
+    fixture.write_text(
+        '{"query": "embedding provider", "expected_atoms": ["Ollama"], "tag": "entity"}\n'
+        '{"query": "vector database", "expected_atoms": ["sqlite-vec"], "tag": "entity"}\n'
+        '{"query": "how to bake a cake", "expected_atoms": [], "tag": "abstain-far"}\n',
+        encoding="utf-8",
+    )
+
+    result = mi.atom_benchmark(str(fixture), k=5)
+    assert result["n"] == 3
+    assert result["positive"] == 2
+    assert result["abstain"] == 1
+    assert "recall_at_k" in result
+    assert "abstain_accuracy" in result
+    assert "by_tag" in result
+    assert "entity" in result["by_tag"]
+    assert "abstain-far" in result["by_tag"]
+    assert len(result["details"]) == 3
+
+
+def test_backfill_atom_angles_creates_entries(mi, fresh_vault, monkeypatch):
+    monkeypatch.setattr(mi, "embed", lambda text: [0.1] * mi.EMBED_DIM)
+    monkeypatch.setattr(mi, "embed_batch", lambda texts: [[0.1] * mi.EMBED_DIM] * len(texts))
+    monkeypatch.setattr(
+        "memory_tree.generate_approach_angles",
+        lambda desc, body: ["question one?", "question two?", "question three?"],
+    )
+
+    db = mi.open_db()
+    _insert_atom_with_category(db, mi, "/fake/a.md", "Ollama is the default provider",
+                               "decision", corroborations=3)
+    db.close()
+
+    db = mi.open_db()
+    stats = mi.backfill_atom_angles(db)
+    assert stats["generated"] >= 1
+    assert stats["failed"] == 0
+
+    angles = db.execute("SELECT query_text FROM atom_approach_angles").fetchall()
+    assert len(angles) >= 3
+    assert angles[0][0] == "question one?"
+
+    emb_count = db.execute("SELECT COUNT(*) FROM atom_angle_embeddings").fetchone()[0]
+    assert emb_count >= 3
+    db.close()
+
+
+def test_atom_angle_retrieval_does_not_crash(mi, fresh_vault, monkeypatch, capsys):
+    monkeypatch.setattr(mi, "embed", lambda text: [0.1] * mi.EMBED_DIM)
+    monkeypatch.setattr(mi, "embed_batch", lambda texts: [[0.1] * mi.EMBED_DIM] * len(texts))
+    monkeypatch.setattr(mi, "ATOM_ANGLES_ENABLED", True)
+    monkeypatch.setattr(mi, "classify_query_intent", lambda q: "factual")
+
+    db = mi.open_db()
+    _insert_atom_with_category(db, mi, "/fake/a.md", "Ollama is the default provider",
+                               "decision", corroborations=2)
+    db.close()
+
+    mi.cmd_query("what embedding model", top=5)
+    output = capsys.readouterr().out
+    assert "Ollama" in output
+
+
+def test_entity_overlap_boost_surfaces_entity_atom(mi, fresh_vault, monkeypatch, capsys):
+    monkeypatch.setattr(mi, "embed", lambda text: [0.1] * mi.EMBED_DIM)
+    monkeypatch.setattr(mi, "classify_query_intent", lambda q: "factual")
+
+    db = mi.open_db()
+    _insert_atom_with_category(db, mi, "/fake/a.md", "Ollama is the default provider",
+                               "decision", corroborations=2)
+    atom_id = db.execute("SELECT id FROM entries WHERE type = 'atom' LIMIT 1").fetchone()[0]
+    ent_id = db.execute(
+        "INSERT INTO entities (name, entity_type, first_seen, last_seen, mention_count) "
+        "VALUES ('ollama', 'tool', '2026-01-01', '2026-05-13', 5) RETURNING id"
+    ).fetchone()[0]
+    db.execute("INSERT INTO atom_entities (atom_id, entity_id) VALUES (?, ?)",
+               [atom_id, ent_id])
+    db.commit()
+    db.close()
+
+    mi.cmd_query("ollama embedding model", top=5)
+    output = capsys.readouterr().out
+    assert "Ollama" in output
