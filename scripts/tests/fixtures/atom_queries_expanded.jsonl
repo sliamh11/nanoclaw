@@ -1,0 +1,135 @@
+{"query": "where is the deus project located", "expected_atoms": ["project directory is located at ~/deus", "project at ~/deus", "project 'deus' at the path ~/deus"], "tag": "fact"}
+{"query": "what is the default embedding provider", "expected_atoms": ["Ollama is the default provider for memory embeddings"], "tag": "entity"}
+{"query": "what are the trading risk limits", "expected_atoms": ["maximum 2% risk per trade", "3% daily drawdown limit", "bracket limit orders"], "tag": "constraint"}
+{"query": "database deletion policy", "expected_atoms": ["no-DB-deletion policy", "orphaned_at and expired_at flags"], "tag": "constraint"}
+{"query": "how does the code review process work", "expected_atoms": [".code-reviewed marker", "SHIP verdict from a code reviewer"], "tag": "methodology"}
+{"query": "documentation style preference", "expected_atoms": ["caveman", "extreme brevity", "removing articles"], "tag": "preference"}
+{"query": "structural vs behavioral fixes", "expected_atoms": ["structural fixes (hook injection) over behavioral fixes"], "tag": "preference"}
+{"query": "how are agent rules stored", "expected_atoms": ["externalized, versioned .md files within .claude/wardens/"], "tag": "decision"}
+{"query": "what embedding model for memory", "expected_atoms": ["Ollama", "memory embeddings"], "tag": "entity"}
+{"query": "container mount policies", "expected_atoms": ["read-only mounts for source code", "containerized environments"], "tag": "constraint"}
+{"query": "how does the channel adapter architecture work", "expected_atoms": ["MCP-based architecture for channel adapters", "McpChannelAdapter"], "tag": "entity"}
+{"query": "should I modify STARTUP_INSTRUCTION", "expected_atoms": ["avoids modifying STARTUP_INSTRUCTION", "fragility"], "tag": "constraint"}
+{"query": "LLM provider fallback strategy", "expected_atoms": ["Gemini-to-Ollama fallback", "prioritizing Gemini"], "tag": "decision"}
+{"query": "test file exclusion from build", "expected_atoms": ["exclude test files from the production build", "tsconfig exclude"], "tag": "decision"}
+{"query": "error handling granularity", "expected_atoms": ["specific, granular error handling", "catching OSError or UnicodeDecodeError"], "tag": "preference"}
+{"query": "matching rules for task compression", "expected_atoms": ["explicit identifier-based matching rules over fuzzy matching"], "tag": "preference"}
+{"query": "STATE.md loading strategy", "expected_atoms": ["STATE.md as an on-demand resource", "auto-loaded system prompt"], "tag": "decision"}
+{"query": "approach angle fine-tuning decision", "expected_atoms": ["rejects approach-angle fine-tuning", "overfitting to past query vocabulary"], "tag": "decision"}
+{"query": "how are skills registered", "expected_atoms": ["new entries in .claude/skills/ must be manually added", "AGENTS.md"], "tag": "constraint"}
+{"query": "sync agent skills enforcement", "expected_atoms": ["sync_agent_skills.py", "--check flag"], "tag": "decision"}
+{"query": "image data at MCP boundary", "expected_atoms": ["base64 image data in metadata", "temporary files"], "tag": "decision"}
+{"query": "clipboard cache directory isolation", "expected_atoms": ["PID-scoped", "cleanup collisions"], "tag": "decision"}
+{"query": "study html dark mode", "expected_atoms": ["light/dark mode toggle"], "tag": "constraint"}
+{"query": "3 minute study technique", "expected_atoms": ["3-minute rule", "look at the material", "rewrite from scratch"], "tag": "methodology"}
+{"query": "TUI framework choice", "expected_atoms": ["Ink (Node.js) for TUI", "Ratatui"], "tag": "entity"}
+{"query": "docker container timeout", "expected_atoms": ["300-600s timeout", "Docker-based agent evaluations"], "tag": "constraint"}
+{"query": "warden portability philosophy", "expected_atoms": ["portable AI toolkit items", "project-specific gates"], "tag": "belief"}
+{"query": "memory schema rebuild requirement", "expected_atoms": ["memory_indexer.py --rebuild", "memory schema is modified"], "tag": "constraint"}
+{"query": "channel smoke test requirement", "expected_atoms": ["channel smoke test", "configuration change"], "tag": "constraint"}
+{"query": "wikilink resolution for embeddings", "expected_atoms": ["wikilinks", "display text or page title", "embedding"], "tag": "constraint"}
+{"query": "how to cook pasta carbonara", "expected_atoms": [], "tag": "abstain-far"}
+{"query": "best JavaScript framework 2025", "expected_atoms": [], "tag": "abstain-far"}
+{"query": "weather forecast for Tel Aviv", "expected_atoms": [], "tag": "abstain-far"}
+{"query": "how to install Linux on a laptop", "expected_atoms": [], "tag": "abstain-far"}
+{"query": "quantum computing basics", "expected_atoms": [], "tag": "abstain-far"}
+{"query": "what color is my car", "expected_atoms": [], "tag": "abstain-near"}
+{"query": "my favorite pizza topping", "expected_atoms": [], "tag": "abstain-near"}
+{"query": "what gym do I go to", "expected_atoms": [], "tag": "abstain-near"}
+{"query": "my shoe size", "expected_atoms": [], "tag": "abstain-near"}
+{"query": "what brand laptop do I use", "expected_atoms": [], "tag": "abstain-near"}
+{"query": "manages pattern drift updating", "expected_atoms": ["in the frontmatter of"], "tag": "decision"}
+{"query": "direct search dspy scalar", "expected_atoms": ["dspy for scalar parameter"], "tag": "decision"}
+{"query": "mandates pareto selection threshold", "expected_atoms": ["sweeps to keep recall"], "tag": "constraint"}
+{"query": "using atomic counters uuids", "expected_atoms": ["session identifiers to maintain"], "tag": "decision"}
+{"query": "ghost-text inline autocomplete argument-specific", "expected_atoms": ["argument-specific autocomplete for all"], "tag": "constraint"}
+{"query": "believes improving atom discrimination", "expected_atoms": ["is a higher-impact retrieval"], "tag": "belief"}
+{"query": "rejects approach-angle fine-tuning retrieval", "expected_atoms": ["to avoid overfitting to"], "tag": "decision"}
+{"query": "reserves project links signature", "expected_atoms": ["lines exclusively for comment"], "tag": "decision"}
+{"query": "utilizes atoms exclusively explicit", "expected_atoms": ["search and session catch-up"], "tag": "preference"}
+{"query": "conversational, first-person writing style", "expected_atoms": ["style with occasional imperfections"], "tag": "preference"}
+{"query": "structural fixes (hook injection)", "expected_atoms": ["behavioral fixes (startup instruction"], "tag": "preference"}
+{"query": "user's trading system architecture", "expected_atoms": ["between open-source infrastructure (ibkr-mcp)"], "tag": "decision"}
+{"query": "trading architecture where analysis", "expected_atoms": ["within the deus project"], "tag": "decision"}
+{"query": "yaml frontmatter serialization backslashes", "expected_atoms": ["escaped before quotes to"], "tag": "constraint"}
+{"query": "guards entry points import.meta.url", "expected_atoms": ["allow for safe importing"], "tag": "decision"}
+{"query": "'deus' project orchestrator private", "expected_atoms": ["orchestrator in a private"], "tag": "fact"}
+{"query": "communication style leads impact-per-project", "expected_atoms": ["leads with impact-per-project rather"], "tag": "preference"}
+{"query": "documentation structure vault claude.md", "expected_atoms": ["vault that uses claude.md"], "tag": "preference"}
+{"query": "narrative-discovery framing feature-list updates", "expected_atoms": ["over feature-list updates for"], "tag": "preference"}
+{"query": "explain technical terms inline", "expected_atoms": ["technical terms inline within"], "tag": "preference"}
+{"query": "follows phased development methodology", "expected_atoms": ["features are sequenced into"], "tag": "preference"}
+{"query": "min_entity_overlap value memory tree", "expected_atoms": ["for memory tree queries"], "tag": "decision"}
+{"query": "catch-up processes verify disk", "expected_atoms": ["disk state freshness before"], "tag": "constraint"}
+{"query": "prioritizes quality speed prohibits", "expected_atoms": ["loops or rationalizing lower"], "tag": "constraint"}
+{"query": "bumping 'last_verified' dates pattern", "expected_atoms": ["over bypassing drift_check to"], "tag": "decision"}
+{"query": "interested exploring hierarchical agent", "expected_atoms": ["using a code-reviewer as"], "tag": "preference"}
+{"query": "strict architectural separation where", "expected_atoms": ["handle build/restart tasks and"], "tag": "decision"}
+{"query": "disable adaptive thinking claude", "expected_atoms": ["claude code by setting"], "tag": "decision"}
+{"query": "centralized 'standards.md' file quality", "expected_atoms": ["quality expectations over duplicating"], "tag": "preference"}
+{"query": "oncelock rwlock theme caching", "expected_atoms": ["caching because the tui"], "tag": "decision"}
+{"query": "lead posts personal lessons", "expected_atoms": ["experiences, introducing the project"], "tag": "preference"}
+{"query": "'defer trigger' scheduling cancellation", "expected_atoms": ["cancellation for tasks that"], "tag": "preference"}
+{"query": "neutral fallback score unjudged", "expected_atoms": ["0.5 for unjudged user"], "tag": "decision"}
+{"query": "keeping threat-modeler (design-level) security-auditor", "expected_atoms": ["security-auditor (project-wide) as separate"], "tag": "decision"}
+{"query": "maintain infrastructure experimental features", "expected_atoms": ["behind environment variable gates"], "tag": "methodology"}
+{"query": "strict git-only communication protocol", "expected_atoms": ["agents, with sqlite reserved"], "tag": "constraint"}
+{"query": "strict policy never writing", "expected_atoms": ["lock files into third-party"], "tag": "constraint"}
+{"query": "follows read-modify-write pattern configuration", "expected_atoms": ["configuration files to ensure"], "tag": "decision"}
+{"query": "study tools reference materials", "expected_atoms": ["reference materials in the"], "tag": "fact"}
+{"query": "avoid accepting salary below", "expected_atoms": ["per month, as it"], "tag": "constraint"}
+{"query": "async onmessage handlers prevent", "expected_atoms": ["race conditions between image"], "tag": "constraint"}
+{"query": "clipboard image cache directories", "expected_atoms": ["to prevent cleanup collisions"], "tag": "decision"}
+{"query": "distinguishes between data-quality wardens", "expected_atoms": ["retrieval) and code-health wardens"], "tag": "fact"}
+{"query": "strict separation between pure", "expected_atoms": ["(testable without environment dependencies)"], "tag": "decision"}
+{"query": "manual triggering /recap command,", "expected_atoms": ["command, with auto-triggering available"], "tag": "preference"}
+{"query": "exclude test files production", "expected_atoms": ["build process by adding"], "tag": "decision"}
+{"query": "utilizes sqlite-vec vector database", "expected_atoms": ["vector database for the"], "tag": "fact"}
+{"query": "using enums multiple boolean", "expected_atoms": ["to make invalid states"], "tag": "preference"}
+{"query": "schedules automated knowledge base", "expected_atoms": ["daily at 04:30, with"], "tag": "decision"}
+{"query": "syntect tree-sitter code highlighting", "expected_atoms": ["in the deus tui"], "tag": "decision"}
+{"query": "intentionally keeps plan-review gate", "expected_atoms": ["for worktree edits to"], "tag": "decision"}
+{"query": "path-leak-detector hook prevent personal", "expected_atoms": ["personal data from being"], "tag": "constraint"}
+{"query": "follows 'walking skeleton' development", "expected_atoms": ["core dispatch loop functionality"], "tag": "decision"}
+{"query": "wrapper-based architecture claude interactions,", "expected_atoms": ["parsing 'claude -p --output-format"], "tag": "decision"}
+{"query": "state.md on-demand resource auto-loaded", "expected_atoms": ["an auto-loaded system prompt"], "tag": "decision"}
+{"query": "believes trading agents, regime-gating", "expected_atoms": ["non-optional and signal diversity"], "tag": "belief"}
+{"query": "docker buildkit=0 sandcastle images", "expected_atoms": ["images to ensure compatibility"], "tag": "constraint"}
+{"query": "prioritizes specific product names", "expected_atoms": ["outcomes in cv role"], "tag": "preference"}
+{"query": "throwing errors calling process.exit", "expected_atoms": ["cli tools to ensure"], "tag": "decision"}
+{"query": "explicit identifier-based matching rules", "expected_atoms": ["over fuzzy matching for"], "tag": "preference"}
+{"query": "system staleness issues targeted,", "expected_atoms": ["targeted, lightweight runtime instructions"], "tag": "preference"}
+{"query": "views executor llm-changeability layer", "expected_atoms": ["maintain consistent tools, secrets,"], "tag": "belief"}
+{"query": "defers complex features like", "expected_atoms": ["to later phases to"], "tag": "constraint"}
+{"query": "sessionid(u64) internal session identification", "expected_atoms": ["session identification instead of"], "tag": "decision"}
+{"query": "officially dropped biomedical engineering", "expected_atoms": ["dropped the biomedical engineering"], "tag": "fact"}
+{"query": "follows spec-first architecture, requiring", "expected_atoms": ["contracts to be defined"], "tag": "decision"}
+{"query": "encountering rebase conflict pre-squash", "expected_atoms": ["commits already present upstream,"], "tag": "decision"}
+{"query": "english explanations hebrew html", "expected_atoms": ["explanations and hebrew for"], "tag": "preference"}
+{"query": "dependabot merged --admin because", "expected_atoms": ["personal_id_pattern secret is unavailable"], "tag": "decision"}
+{"query": "mandates bracket limit orders", "expected_atoms": ["for all trades to"], "tag": "constraint"}
+{"query": "mandates 'measure-before-acting' meta-pattern tasks", "expected_atoms": ["tasks to ensure data-driven"], "tag": "constraint"}
+{"query": "file state.md retired used", "expected_atoms": ["not be used or"], "tag": "constraint"}
+{"query": "prioritizes optimization-time compilation prompts", "expected_atoms": ["prompts over runtime llm"], "tag": "preference"}
+{"query": "user's target salary range", "expected_atoms": ["cyberpro ai engineer role"], "tag": "fact"}
+{"query": "vault atom paths never", "expected_atoms": ["be included in public"], "tag": "constraint"}
+{"query": "disable atom auto-retrieval because", "expected_atoms": ["embedding models fail to"], "tag": "decision"}
+{"query": "utilizes 4-step proof-writing methodology:", "expected_atoms": ["type, write definitions, name"], "tag": "decision"}
+{"query": "rust ratatui node.js development", "expected_atoms": ["tui development to ensure"], "tag": "decision"}
+{"query": "char-level pre-wrapping word-wrap input", "expected_atoms": ["tui input fields to"], "tag": "preference"}
+{"query": "take priority oauth both", "expected_atoms": ["take priority over oauth"], "tag": "preference"}
+{"query": "best restaurants in Tokyo", "expected_atoms": [], "tag": "abstain-far"}
+{"query": "how to change a tire", "expected_atoms": [], "tag": "abstain-far"}
+{"query": "python decorator syntax tutorial", "expected_atoms": [], "tag": "abstain-far"}
+{"query": "Netflix recommendations for tonight", "expected_atoms": [], "tag": "abstain-far"}
+{"query": "mortgage interest rates 2026", "expected_atoms": [], "tag": "abstain-far"}
+{"query": "kubernetes pod networking", "expected_atoms": [], "tag": "abstain-far"}
+{"query": "react useState hook examples", "expected_atoms": [], "tag": "abstain-far"}
+{"query": "how to make sourdough bread", "expected_atoms": [], "tag": "abstain-far"}
+{"query": "crypto market analysis", "expected_atoms": [], "tag": "abstain-far"}
+{"query": "yoga poses for beginners", "expected_atoms": [], "tag": "abstain-far"}
+{"query": "what time zone is London in", "expected_atoms": [], "tag": "abstain-far"}
+{"query": "SQL window functions tutorial", "expected_atoms": [], "tag": "abstain-far"}
+{"query": "how to train a puppy", "expected_atoms": [], "tag": "abstain-far"}
+{"query": "best headphones under 100 dollars", "expected_atoms": [], "tag": "abstain-far"}
+{"query": "machine learning interview questions", "expected_atoms": [], "tag": "abstain-far"}

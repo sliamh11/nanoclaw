@@ -124,7 +124,7 @@ ATOM_ANGLES_ENABLED = os.environ.get("DEUS_ATOM_ANGLES", "1") == "1"
 # Changing ATOM_ANGLE_COUNT requires a full --backfill-atom-angles rebuild:
 # rowid encoding (atom_id * count + angle_idx) bakes this into the vec0 table.
 ATOM_ANGLE_COUNT = 3
-ATOM_ANGLE_MIN_SCORE = float(os.environ.get("DEUS_ATOM_ANGLE_MIN", "1.0"))
+ATOM_ANGLE_MIN_SCORE = float(os.environ.get("DEUS_ATOM_ANGLE_MIN", "1.1"))
 ATOM_ANGLE_ALPHA = float(os.environ.get("DEUS_ATOM_ANGLE_ALPHA", "0.0"))
 SIBLING_DISCOUNT = float(os.environ.get("DEUS_SIBLING_DISCOUNT", "0.15"))
 SIBLING_MAX = int(os.environ.get("DEUS_SIBLING_MAX", "5"))
@@ -1108,6 +1108,30 @@ def _fts_query(db: sqlite3.Connection, query: str, k: int) -> list[tuple[str, in
     return result[:k]
 
 
+def _fts_atom_query(db: sqlite3.Connection, query: str, k: int) -> list[tuple[int, int]]:
+    """FTS5 keyword search over atoms. Returns [(entry_id, rank)]."""
+    escaped = _fts_escape(query)
+    if not escaped.strip():
+        return []
+    try:
+        rows = db.execute(
+            """
+            SELECT e.id, entries_fts.rank
+            FROM entries_fts
+            JOIN entries e ON e.id = entries_fts.rowid
+            WHERE entries_fts MATCH ?
+              AND e.type = 'atom'
+              AND e.orphaned_at IS NULL
+            ORDER BY entries_fts.rank
+            LIMIT ?
+            """,
+            [escaped, k],
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return []
+    return [(eid, i + 1) for i, (eid, _rank) in enumerate(rows)]
+
+
 def _rrf_fuse(
     ann_ranked: list[tuple[str, int]],
     fts_ranked: list[tuple[str, int]],
@@ -1300,7 +1324,7 @@ def cmd_query(query: str, top: int = 3, recency_boost: bool = False,
                      ON ae.rowid = aa.atom_id * ? + aa.angle_idx
                    WHERE ae.embedding MATCH ? AND k = ?
                    ORDER BY ae.distance LIMIT ?""",
-                [ATOM_ANGLE_COUNT, serialize(q_vec), top * 6, top * 3],
+                [ATOM_ANGLE_COUNT, serialize(q_vec), top * 12, top * 6],
             ).fetchall()
         except sqlite3.OperationalError:
             angle_rows = []
@@ -1344,6 +1368,33 @@ def cmd_query(query: str, top: int = 3, recency_boost: bool = False,
                         "category": row[5] or "fact",
                         "_route": "approach-rescue",
                     })
+
+    # ── Atom BM25 rescue ──────────────────────────────────────────────────────
+    if has_atoms:
+        existing_atom_ids = {a.get("_entry_id") for a in atom_results if "_entry_id" in a}
+        fts_atoms = _fts_atom_query(db, query, k=top * 2)
+        for fts_id, fts_rank in fts_atoms:
+            if fts_id in existing_atom_ids:
+                continue
+            row = db.execute(
+                """SELECT path, tldr, confidence, corroborations,
+                          source_chunk, category
+                   FROM entries WHERE id = ? AND type = 'atom'
+                   AND orphaned_at IS NULL""",
+                [fts_id],
+            ).fetchone()
+            if row and len(atom_results) < top * 3:
+                atom_results.append({
+                    "path": row[0], "chunk": row[1],
+                    "confidence": row[2] or 0.0,
+                    "corroborations": row[3] or 1,
+                    "source_chunk": row[4] or "",
+                    "dist": 0.8, "temperature": 1.0,
+                    "category": row[5] or "fact",
+                    "_entry_id": fts_id,
+                    "_route": "bm25-rescue",
+                })
+                existing_atom_ids.add(fts_id)
 
     if not seen and not atom_results:
         sys.exit(1)  # trigger fallback in /resume
@@ -3805,7 +3856,7 @@ def atom_benchmark(fixture_path: str, k: int = 5) -> dict:
                          ON ae.rowid = aa.atom_id * ? + aa.angle_idx
                        WHERE ae.embedding MATCH ? AND k = ?
                        ORDER BY ae.distance LIMIT ?""",
-                    [ATOM_ANGLE_COUNT, q_blob, k * 6, k * 3],
+                    [ATOM_ANGLE_COUNT, q_blob, k * 12, k * 6],
                 ).fetchall()
                 angle_best: dict[int, float] = {}
                 for atom_id, adist in angle_rows:
@@ -3826,6 +3877,17 @@ def atom_benchmark(fixture_path: str, k: int = 5) -> dict:
                             atom_map[atom_id] = (row[0], adist)
             except sqlite3.OperationalError:
                 pass
+
+        # BM25 atom rescue
+        fts_atoms = _fts_atom_query(db, query, k=k * 2)
+        for fts_id, fts_rank in fts_atoms:
+            if fts_id not in atom_map:
+                row = db.execute(
+                    "SELECT chunk FROM entries WHERE id = ? AND type = 'atom' AND orphaned_at IS NULL",
+                    [fts_id],
+                ).fetchone()
+                if row:
+                    atom_map[fts_id] = (row[0], 0.8)
 
         sorted_atoms = sorted(atom_map.values(), key=lambda x: x[1])
 
