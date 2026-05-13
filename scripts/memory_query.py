@@ -88,6 +88,8 @@ def _log_retrieval(
         pass
 
 
+# Controls distance-based atom fallback only. Atoms remain indexed for
+# MCP search (memory_indexer --query) and session catch-up (--learnings).
 ATOM_DIST_THRESHOLD = float(os.environ.get("DEUS_ATOM_DIST", "0"))
 
 

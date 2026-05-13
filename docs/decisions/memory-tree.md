@@ -61,6 +61,6 @@ Existing vault files already use `summary:`. Accepting both as equivalent avoide
 - `MEMORY_TREE.md` (≈425 tokens) is loaded at cold start — small, bounded cost.
 - Cross-branch queries ("what movies should I recommend to my roommate") work without a node being in two places.
 - Re-embeddings run locally — offline-capable, no network dependency, no rate limits.
-- Phase 3 calibration is a **prerequisite for merge**. Shipping defaults without calibration risks either rejecting correct answers (LOW too high) or surfacing garbage (ABSTAIN too low).
+- Phase 3 calibration completed (2026-05-13). Thresholds calibrated via `deus sweep` on 136-query benchmark: abstain=0.30, gap=0.04 for Ollama embeddinggemma. Recall 0.743, abstain accuracy 0.50.
 - `scripts/memory_tree.py` grows from the 1063-LOC scaffold; future changes to retrieval logic must update `docs/research/memory-tree.md` as well — the research doc is load-bearing context for the thresholds and ship criteria.
 - Phase 6 (parallel budget migrations — entity extraction, contradiction detection, domain classifier → Ollama) is intentionally deferred to a separate branch. It is a related RPD-budget win, not part of this feature.
