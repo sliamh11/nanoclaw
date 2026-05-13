@@ -1,17 +1,15 @@
 """
 DSPy-based prompt optimizer.
 Loads scored interactions from the interaction log, splits into train/dev,
-and runs MIPROv2 to find better prompts for each module.
+and runs GEPA to find better prompts for each module.
 
-Requires: pip install dspy-ai
+Requires: pip install dspy
 Minimum samples: DSPY_MIN_SAMPLES (default 20) per module.
 """
 import json
 from typing import Optional
 
 from ..config import (
-    DSPY_MAX_BOOTSTRAPPED,
-    DSPY_MAX_LABELED,
     DSPY_MIN_DOMAIN_SAMPLES,
     DSPY_MIN_SAMPLES,
     DSPY_OLLAMA_MODEL,
@@ -98,13 +96,16 @@ def _build_examples(module: str, interactions: list[dict]) -> list:
     return examples
 
 
-def _judge_metric(example, prediction, trace=None):
-    """Metric function: checks that prediction is non-empty and reasonable."""
+def _judge_metric(example, prediction, trace=None, pred_name=None, pred_trace=None):
+    """GEPA requires metrics return {"score": float, "feedback": str} (GEPAFeedbackMetric protocol)."""
     try:
         pred_str = str(prediction.answer if hasattr(prediction, "answer") else prediction)
-        return len(pred_str.strip()) > 20
+        is_good = len(pred_str.strip()) > 20
+        score = 1.0 if is_good else 0.0
+        feedback = "Good response length and content." if is_good else "Response too short or empty."
+        return {"score": score, "feedback": feedback}
     except Exception:
-        return False
+        return {"score": 0.0, "feedback": "Prediction raised an exception."}
 
 
 def optimize(
@@ -115,7 +116,7 @@ def optimize(
     domain: Optional[str] = None,
 ) -> Optional[str]:
     """
-    Run DSPy MIPROv2 optimization on logged interactions.
+    Run DSPy GEPA optimization on logged interactions.
     When domain is specified, uses weighted inclusion: primary pool (domain-specific)
     plus secondary pool (top cross-domain interactions) for generalization.
     Returns the artifact ID on success, None if insufficient samples.
@@ -195,19 +196,14 @@ def optimize(
     ModuleCls = MODULE_REGISTRY[module]
     program = ModuleCls()
 
-    # Run MIPROv2 — auto="light" sets num_candidates/num_trials internally,
-    # so we can't pass num_candidates alongside it (DSPy v3 requirement).
-    teleprompter = dspy.MIPROv2(
+    teleprompter = dspy.GEPA(
         metric=_judge_metric,
         auto="light",
-        max_bootstrapped_demos=DSPY_MAX_BOOTSTRAPPED,
-        max_labeled_demos=DSPY_MAX_LABELED,
-        verbose=True,
+        track_stats=True,
     )
     optimized = teleprompter.compile(
         program,
         trainset=trainset,
-        minibatch_size=min(10, len(trainset)),
     )
 
     # Extract compiled prompt
@@ -221,7 +217,8 @@ def optimize(
     for ex in devset[:10]:
         try:
             pred = optimized.forward(**{k: ex[k] for k in ex.inputs()})
-            opt_scores.append(1.0 if _judge_metric(None, ex, pred) else 0.0)
+            result = _judge_metric(ex, pred)
+            opt_scores.append(result["score"])
         except Exception:
             pass
     optimized_score = sum(opt_scores) / len(opt_scores) if opt_scores else baseline

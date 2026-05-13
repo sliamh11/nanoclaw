@@ -15,8 +15,8 @@ except ImportError:
 def _require_dspy():
     if not _DSPY_AVAILABLE:
         raise ImportError(
-            "dspy-ai is required for prompt optimization. "
-            "Install with: pip install dspy-ai"
+            "dspy is required for prompt optimization. "
+            "Install with: pip install dspy"
         )
 
 

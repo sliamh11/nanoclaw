@@ -52,8 +52,6 @@ DSPY_OLLAMA_MODEL = os.environ.get("DSPY_OLLAMA_MODEL", OLLAMA_MODEL)
 
 DSPY_MIN_SAMPLES = int(os.environ.get("EVOLUTION_DSPY_MIN_SAMPLES", "20"))
 DSPY_MIN_DOMAIN_SAMPLES = int(os.environ.get("EVOLUTION_DSPY_MIN_DOMAIN_SAMPLES", "10"))
-DSPY_MAX_BOOTSTRAPPED = int(os.environ.get("EVOLUTION_DSPY_MAX_BOOTSTRAPPED", "4"))
-DSPY_MAX_LABELED = int(os.environ.get("EVOLUTION_DSPY_MAX_LABELED", "8"))
 
 # ── Auto-triggers ────────────────────────────────────────────────────────────
 

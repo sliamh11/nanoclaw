@@ -106,8 +106,6 @@ All variables are set in `.env` at the project root. Copy `.env.example` to get 
 |----------|---------|-------------|
 | `EVOLUTION_DSPY_MIN_SAMPLES` | `20` | Minimum scored interactions before optimizer can run |
 | `EVOLUTION_DSPY_MIN_DOMAIN_SAMPLES` | `10` | Minimum domain-specific samples for domain optimization |
-| `EVOLUTION_DSPY_MAX_BOOTSTRAPPED` | `4` | Max bootstrapped demos for DSPy |
-| `EVOLUTION_DSPY_MAX_LABELED` | `8` | Max labeled demos for DSPy |
 | `DSPY_OLLAMA_MODEL` | `gemma4:e4b` | Ollama model for DSPy optimization |
 
 ## Memory
