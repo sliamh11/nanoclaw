@@ -1000,6 +1000,9 @@ case "$1" in
     if [ "$1" != "web" ] && [ "$(_read_config_key tui_default)" = "true" ]; then
       TUI_DEFAULT="true"
     fi
+    if [ "$(_read_config_key agents_default)" = "true" ]; then
+      AGENTS_MODE="true"
+    fi
     for _arg in "$@"; do
       if [ "$_arg" = "--agents" ]; then
         AGENTS_MODE="true"
@@ -1007,7 +1010,7 @@ case "$1" in
       fi
     done
     if [ "$AGENTS_MODE" = "true" ]; then
-      exec claude agents
+      exec command claude agents
     fi
 
     _launch_tui_with_context() {
@@ -1495,6 +1498,6 @@ $STARTUP_INSTRUCTION"
     echo "  deus tui        Interactive terminal UI (set tui_default=true in config to use by default)"
     echo ""
     echo "Flags:"
-    echo "  --agents        Open the claude agents preview UI (append to any launch command)"
+    echo "  --agents        Open the claude agents preview UI (set agents_default=true in config for default)"
     ;;
 esac
