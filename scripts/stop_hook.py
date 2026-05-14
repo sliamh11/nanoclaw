@@ -299,9 +299,8 @@ def _bg_compress_gate(transcript_path: str) -> dict | None:
     if _compress_already_ran(transcript_path):
         return None
     return {
-        "continue": False,
-        "stopReason": "Background session must run /compress before completing.",
-        "systemMessage": (
+        "decision": "block",
+        "reason": (
             "This is a background session. Before completing, you MUST run "
             "/compress to save the session to the vault. Invoke the Skill "
             'tool with skill="compress" now, then re-emit your result: line.'
