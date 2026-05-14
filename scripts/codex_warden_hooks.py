@@ -86,6 +86,13 @@ HOOK_SPECS: tuple[HookSpec, ...] = (
         5,
         "Checking Deus path leaks",
     ),
+    HookSpec(
+        "PostToolUse",
+        "Agent",
+        "warden-verdict-tracker",
+        5,
+        "Tracking warden verdicts",
+    ),
     HookSpec("Stop", None, "stop-checkpoint", 5, "Writing Deus checkpoint"),
     HookSpec(
         "UserPromptSubmit",
@@ -441,14 +448,30 @@ def run_plan_review_gate(event: dict[str, Any], repo_root: Path) -> int:
         return 0
 
     target_list = "\n".join(f"  - {path}" for path in paths[:5])
-    reason = (
-        "[plan-review-gate] BLOCKED: no plan-reviewer approval marker.\n\n"
-        "Before editing Deus source, run the plan-reviewer Warden and wait for "
-        "VERDICT: SHIP. Then run:\n\n"
-        f"  touch {shlex.quote(str(_marker(repo_root, '.plan-reviewed')))}\n\n"
-        "Targets:\n"
-        f"{target_list}"
+    mark_cmd = (
+        f"  python3 {shlex.quote(str(_active_script_path(repo_root)))} "
+        f"mark plan-reviewed SHIP \"reason\""
     )
+
+    if _last_verdict_is_blocking(repo_root, "plan-reviewer"):
+        last = _last_verdict(repo_root, "plan-reviewer")
+        reason = (
+            f"[plan-review-gate] BLOCKED: last plan-reviewer verdict was {last}.\n\n"
+            "Re-run the plan-reviewer after fixing the issues. Trivial bypass is "
+            f"not permitted after {last} — no exceptions.\n\n"
+            f"After SHIP:\n{mark_cmd}\n\nTargets:\n{target_list}"
+        )
+    else:
+        reason = (
+            "[plan-review-gate] BLOCKED: no plan-reviewer approval marker.\n\n"
+            "Before editing Deus source, run the plan-reviewer Warden and wait for "
+            "VERDICT: SHIP. Then run:\n\n"
+            f"{mark_cmd}\n\n"
+            "Trivial-change bypass (typos, comments, single-line renames):\n"
+            f"  python3 {shlex.quote(str(_active_script_path(repo_root)))} "
+            f"mark plan-reviewed TRIVIAL \"reason\"\n\n"
+            f"Targets:\n{target_list}"
+        )
     _block_pre_tool(reason)
     return 0
 
@@ -469,12 +492,29 @@ def run_code_review_gate(event: dict[str, Any], repo_root: Path) -> int:
     if _marker(repo_root, ".code-reviewed").exists():
         return 0
 
-    reason = (
-        "[code-review-gate] BLOCKED: no code-reviewer approval marker.\n\n"
-        "Before committing Deus changes, run the code-reviewer Warden and wait "
-        "for VERDICT: SHIP. Then run:\n\n"
-        f"  touch {shlex.quote(str(_marker(repo_root, '.code-reviewed')))}"
+    mark_cmd = (
+        f"  python3 {shlex.quote(str(_active_script_path(repo_root)))} "
+        f"mark code-reviewed SHIP \"reason\""
     )
+
+    if _last_verdict_is_blocking(repo_root, "code-reviewer"):
+        last = _last_verdict(repo_root, "code-reviewer")
+        reason = (
+            f"[code-review-gate] BLOCKED: last code-reviewer verdict was {last}.\n\n"
+            "Re-run the code-reviewer after fixing the issues. Trivial bypass is "
+            f"not permitted after {last} — no exceptions.\n\n"
+            f"After SHIP:\n{mark_cmd}"
+        )
+    else:
+        reason = (
+            "[code-review-gate] BLOCKED: no code-reviewer approval marker.\n\n"
+            "Before committing Deus changes, run the code-reviewer Warden and wait "
+            "for VERDICT: SHIP. Then run:\n\n"
+            f"{mark_cmd}\n\n"
+            "Trivial-commit bypass (typos, deps, config-only):\n"
+            f"  python3 {shlex.quote(str(_active_script_path(repo_root)))} "
+            f"mark code-reviewed TRIVIAL \"reason\""
+        )
     _block_pre_tool(reason)
     return 0
 
@@ -911,6 +951,89 @@ def run_orchestrator_preflight(event: dict[str, Any], repo_root: Path) -> int:
     return 0
 
 
+def _verdicts_path(repo_root: Path) -> Path:
+    return repo_root / ".claude" / ".warden-verdicts.json"
+
+
+def _audit_log_path(repo_root: Path) -> Path:
+    return repo_root / ".claude" / ".warden-log"
+
+
+def _read_verdicts(repo_root: Path) -> dict[str, Any]:
+    path = _verdicts_path(repo_root)
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _write_verdict(repo_root: Path, warden: str, verdict: str, reason: str, source: str = "manual") -> None:
+    path = _verdicts_path(repo_root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    data = _read_verdicts(repo_root)
+    stamp = dt.datetime.now(dt.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    data[warden] = {"verdict": verdict, "ts": stamp, "reason": reason, "source": source}
+    _write_atomic(path, json.dumps(data, indent=2, sort_keys=True) + "\n")
+
+    log = _audit_log_path(repo_root)
+    safe_reason = reason.replace("|", "/").replace("\n", " ").strip()
+    with log.open("a", encoding="utf-8") as f:
+        f.write(f"{stamp} | {warden:<15} | {verdict:<7} | {safe_reason}\n")
+
+
+def _last_verdict(repo_root: Path, warden: str) -> str | None:
+    data = _read_verdicts(repo_root)
+    entry = data.get(warden)
+    if isinstance(entry, dict):
+        v = entry.get("verdict")
+        return v if isinstance(v, str) else None
+    return None
+
+
+def _last_verdict_is_blocking(repo_root: Path, warden: str) -> bool:
+    v = _last_verdict(repo_root, warden)
+    return v in ("REVISE", "BLOCK")
+
+
+VERDICT_RE = re.compile(
+    r"^##\s*Verdict\s*:\s*(SHIP|REVISE|BLOCK)\b",
+    re.MULTILINE,
+)
+
+WARDEN_SUBAGENT_TYPES = frozenset({"plan-reviewer", "code-reviewer", "threat-modeler"})
+
+
+def run_verdict_tracker(event: dict[str, Any], repo_root: Path) -> int:
+    tool_input = event.get("tool_input")
+    if not isinstance(tool_input, dict):
+        return 0
+    subagent = str(tool_input.get("subagent_type") or tool_input.get("agent_type") or "")
+    if subagent not in WARDEN_SUBAGENT_TYPES:
+        return 0
+
+    response = event.get("tool_response")
+    if isinstance(response, dict):
+        text = str(response.get("content") or response.get("response") or response.get("text") or "")
+    elif isinstance(response, str):
+        text = response
+    elif isinstance(response, list):
+        text = "\n".join(str(item.get("text", "")) if isinstance(item, dict) else str(item) for item in response)
+    else:
+        return 0
+
+    match = VERDICT_RE.search(text)
+    if not match:
+        return 0
+
+    verdict = match.group(1).upper()
+    _write_verdict(repo_root, subagent, verdict, f"{subagent} returned {verdict}", source="agent")
+    _debug(f"verdict-tracker: {subagent} → {verdict}")
+    return 0
+
+
 RUNNERS = {
     "session-init": lambda event, repo: run_session_init(repo),
     "plan-review-gate": run_plan_review_gate,
@@ -925,7 +1048,42 @@ RUNNERS = {
     "catchup-freshness": run_catchup_freshness,
     "memory-retrieval": run_memory_retrieval,
     "orchestrator-preflight": run_orchestrator_preflight,
+    "warden-verdict-tracker": run_verdict_tracker,
 }
+
+
+MARKER_NAMES = {
+    "plan-reviewed": "plan-reviewer",
+    "code-reviewed": "code-reviewer",
+    "threat-modeled": "threat-modeler",
+}
+
+
+def mark_warden(marker_name: str, verdict: str, reason: str, repo_root: Path) -> int:
+    warden = MARKER_NAMES.get(marker_name)
+    if not warden:
+        print(f"Unknown marker: {marker_name}. Valid: {', '.join(sorted(MARKER_NAMES))}", file=sys.stderr)
+        return 1
+    verdict = verdict.upper()
+    if verdict not in ("SHIP", "TRIVIAL"):
+        print(f"Invalid verdict: {verdict}. Must be SHIP or TRIVIAL.", file=sys.stderr)
+        return 1
+
+    if verdict == "TRIVIAL" and _last_verdict_is_blocking(repo_root, warden):
+        last = _last_verdict(repo_root, warden)
+        if last:
+            print(
+                f"[warden-mark] BLOCKED: last {warden} verdict was {last}.\n"
+                f"Re-run the warden and get SHIP — trivial bypass is not permitted after {last}.",
+                file=sys.stderr,
+            )
+            return 2
+
+    _write_verdict(repo_root, warden, verdict, reason, source="mark")
+    _marker(repo_root, f".{marker_name}").parent.mkdir(parents=True, exist_ok=True)
+    _marker(repo_root, f".{marker_name}").touch()
+    print(f"[warden-mark] {marker_name} marked as {verdict}: {reason}")
+    return 0
 
 
 def _load_json(path: Path) -> dict[str, Any]:
@@ -1333,6 +1491,12 @@ def build_parser() -> argparse.ArgumentParser:
     approve_parser.add_argument("--repo-root", default=Path(__file__).resolve().parents[1])
     approve_parser.add_argument("--command", dest="admin_command", required=True)
 
+    mark_parser = subparsers.add_parser("mark")
+    mark_parser.add_argument("marker_name", choices=sorted(MARKER_NAMES))
+    mark_parser.add_argument("mark_verdict", choices=["SHIP", "TRIVIAL"])
+    mark_parser.add_argument("mark_reason")
+    mark_parser.add_argument("--repo-root", default=Path(__file__).resolve().parents[1])
+
     for name in ("install", "check", "uninstall"):
         sub = subparsers.add_parser(name)
         _add_common_install_args(sub)
@@ -1349,6 +1513,13 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.action == "run":
         return run(args)
+    if args.action == "mark":
+        return mark_warden(
+            args.marker_name,
+            args.mark_verdict,
+            args.mark_reason,
+            Path(args.repo_root).resolve(strict=False),
+        )
     if args.action == "approve-admin-merge":
         return approve_admin_merge(
             args.admin_command, Path(args.repo_root).resolve(strict=False)

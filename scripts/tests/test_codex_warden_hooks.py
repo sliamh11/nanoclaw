@@ -882,3 +882,136 @@ def test_uninstall_allows_missing_script_path(tmp_path):
 
     assert hooks.uninstall(args) == 0
     assert json.loads(hooks_json.read_text(encoding="utf-8"))["hooks"] == {}
+
+
+# ── Verdict tracking & mark subcommand ────────────────────────────────────────
+
+
+def test_mark_creates_marker_and_audit_log(tmp_path):
+    hooks = load_hooks()
+    repo = git_repo(tmp_path)
+    (repo / ".claude" / "wardens").mkdir(parents=True)
+
+    result = hooks.mark_warden("plan-reviewed", "SHIP", "tests pass", repo)
+    assert result == 0
+    assert (repo / ".claude" / ".plan-reviewed").exists()
+
+    verdicts = json.loads((repo / ".claude" / ".warden-verdicts.json").read_text())
+    assert verdicts["plan-reviewer"]["verdict"] == "SHIP"
+
+    log = (repo / ".claude" / ".warden-log").read_text()
+    assert "plan-reviewer" in log
+    assert "SHIP" in log
+
+
+def test_mark_blocks_trivial_after_revise(tmp_path):
+    hooks = load_hooks()
+    repo = git_repo(tmp_path)
+    (repo / ".claude" / "wardens").mkdir(parents=True)
+
+    hooks._write_verdict(repo, "code-reviewer", "REVISE", "issues found", "agent")
+
+    result = hooks.mark_warden("code-reviewed", "TRIVIAL", "just a typo", repo)
+    assert result == 2
+    assert not (repo / ".claude" / ".code-reviewed").exists()
+
+
+def test_mark_allows_ship_after_revise(tmp_path):
+    hooks = load_hooks()
+    repo = git_repo(tmp_path)
+    (repo / ".claude" / "wardens").mkdir(parents=True)
+
+    hooks._write_verdict(repo, "code-reviewer", "REVISE", "issues found", "agent")
+
+    result = hooks.mark_warden("code-reviewed", "SHIP", "fixed all issues", repo)
+    assert result == 0
+    assert (repo / ".claude" / ".code-reviewed").exists()
+
+
+def test_verdict_tracker_detects_ship(tmp_path):
+    hooks = load_hooks()
+    repo = git_repo(tmp_path)
+    (repo / ".claude" / "wardens").mkdir(parents=True)
+
+    event = {
+        "cwd": str(repo),
+        "hook_event_name": "PostToolUse",
+        "tool_name": "Agent",
+        "tool_input": {"subagent_type": "code-reviewer"},
+        "tool_response": "## Verdict: SHIP\n\nNo blocking issues.",
+    }
+    hooks.run_verdict_tracker(event, repo)
+
+    verdicts = json.loads((repo / ".claude" / ".warden-verdicts.json").read_text())
+    assert verdicts["code-reviewer"]["verdict"] == "SHIP"
+
+
+def test_verdict_tracker_detects_revise(tmp_path):
+    hooks = load_hooks()
+    repo = git_repo(tmp_path)
+    (repo / ".claude" / "wardens").mkdir(parents=True)
+
+    event = {
+        "cwd": str(repo),
+        "hook_event_name": "PostToolUse",
+        "tool_name": "Agent",
+        "tool_input": {"subagent_type": "plan-reviewer"},
+        "tool_response": "## Verdict: REVISE\n\nTwo blocking issues.",
+    }
+    hooks.run_verdict_tracker(event, repo)
+
+    verdicts = json.loads((repo / ".claude" / ".warden-verdicts.json").read_text())
+    assert verdicts["plan-reviewer"]["verdict"] == "REVISE"
+
+
+def test_verdict_tracker_ignores_non_warden_agents(tmp_path):
+    hooks = load_hooks()
+    repo = git_repo(tmp_path)
+    (repo / ".claude" / "wardens").mkdir(parents=True)
+
+    event = {
+        "cwd": str(repo),
+        "hook_event_name": "PostToolUse",
+        "tool_name": "Agent",
+        "tool_input": {"subagent_type": "Explore"},
+        "tool_response": "Found 3 files.",
+    }
+    hooks.run_verdict_tracker(event, repo)
+    assert not (repo / ".claude" / ".warden-verdicts.json").exists()
+
+
+def test_plan_review_gate_shows_revise_escalation(tmp_path, capsys):
+    hooks = load_hooks()
+    repo = git_repo(tmp_path)
+    (repo / ".claude" / "wardens").mkdir(parents=True)
+    (repo / "src").mkdir()
+    (repo / "src" / "foo.ts").write_text("export const foo = 1;")
+    subprocess.run(["git", "add", "."], cwd=repo, check=True, stdout=subprocess.DEVNULL)
+    subprocess.run(
+        ["git", "commit", "-m", "init"],
+        cwd=repo,
+        check=True,
+        stdout=subprocess.DEVNULL,
+    )
+
+    hooks._write_verdict(repo, "plan-reviewer", "REVISE", "blocking issue", "agent")
+
+    event = apply_patch_event(repo, "src/foo.ts")
+    hooks.run_plan_review_gate(event, repo)
+    out = capsys.readouterr().out
+    assert "REVISE" in out
+    assert "Trivial-change bypass" not in out
+
+
+def test_code_review_gate_shows_revise_escalation(tmp_path, capsys):
+    hooks = load_hooks()
+    repo = git_repo(tmp_path)
+    (repo / ".claude" / "wardens").mkdir(parents=True)
+
+    hooks._write_verdict(repo, "code-reviewer", "REVISE", "blocking issue", "agent")
+
+    event = bash_event(repo, "git commit -m test")
+    hooks.run_code_review_gate(event, repo)
+    out = capsys.readouterr().out
+    assert "REVISE" in out
+    assert "Trivial-commit bypass" not in out
