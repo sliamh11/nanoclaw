@@ -78,11 +78,11 @@ All variables are set in `.env` at the project root. Copy `.env.example` to get 
 | `EVOLUTION_PYTHON` | `python3` | Python binary path for evolution subprocess |
 | `EVOLUTION_REFLECTION_THRESHOLD` | `0.6` | Interactions scoring below this trigger corrective reflections |
 | `EVOLUTION_POSITIVE_THRESHOLD` | `0.85` | Interactions scoring above this trigger positive pattern extraction |
-| `EVOLUTION_JUDGE_MODEL` | `models/gemini-3.1-flash-lite-preview` | Gemini model used for judging and principle extraction |
+| `EVOLUTION_JUDGE_MODEL` | `models/gemini-3.1-flash-lite` | Gemini model used for judging and principle extraction |
 | `EVOLUTION_JUDGE_PROVIDER` | (auto-detect) | Force a specific judge provider: `ollama`, `gemini`, `claude`, `mock` |
 | `EVOLUTION_GEN_PROVIDER` | (auto-detect) | Force a specific generative provider: `gemini`, `ollama`, `mock` |
 | `DEUS_STORAGE_PROVIDER` | (auto-detect) | Force a specific storage provider: `sqlite` |
-| `EVOLUTION_GEN_MODEL` | `models/gemini-3.1-flash-lite-preview` | Default generative model (Gemini) |
+| `EVOLUTION_GEN_MODEL` | `models/gemini-3.1-flash-lite` | Default generative model (Gemini) |
 | `EVOLUTION_MAX_REFLECTIONS` | `3` | Max reflections retrieved per agent query |
 | `EVOLUTION_REFLECTION_DEDUP_L2` | `0.4` | L2 distance threshold for deduplicating similar reflections |
 | `DEUS_EVAL_CONCURRENT` | — | Override eval pre-warm concurrency |
