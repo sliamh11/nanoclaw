@@ -15,6 +15,7 @@ import {
   runContainerAgent,
 } from '../container-runner.js';
 import type { RegisteredGroup } from '../types.js';
+import { resolveAgentEffort } from './resolve.js';
 
 export interface ContainerRuntimeDeps {
   resolveGroup: (groupFolder: string) => RegisteredGroup | undefined;
@@ -79,6 +80,7 @@ export class ContainerRuntime implements AgentRuntime {
     };
 
     const hasSession = sessionRef.session_id !== '';
+    const effort = runContext.effort ?? resolveAgentEffort(group);
     const output = await runContainerAgent(
       group,
       {
@@ -91,6 +93,7 @@ export class ContainerRuntime implements AgentRuntime {
         isControlGroup: runContext.isControlGroup,
         isScheduledTask: runContext.isScheduledTask,
         assistantName: this.deps.assistantName,
+        effort,
         ...(runContext.imageInputs?.length && {
           imageAttachments: runContext.imageInputs,
         }),

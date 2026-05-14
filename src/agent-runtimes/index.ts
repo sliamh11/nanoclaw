@@ -9,7 +9,8 @@ export type {
   RuntimeEventSink,
 } from './types.js';
 export { defaultSession } from './types.js';
-export { resolveAgentRuntime } from './resolve.js';
+export { resolveAgentRuntime, resolveAgentEffort } from './resolve.js';
+export type { AgentEffortLevel } from '../types.js';
 export {
   ContainerRuntime,
   type ContainerRuntimeDeps,

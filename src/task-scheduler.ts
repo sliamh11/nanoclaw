@@ -9,6 +9,7 @@ import {
   type RuntimeEventSink,
 } from './agent-runtimes/types.js';
 import type { RuntimeRegistry } from './agent-runtimes/registry.js';
+import { resolveAgentEffort } from './agent-runtimes/resolve.js';
 import { SCHEDULER_POLL_INTERVAL, TIMEZONE } from './config.js';
 import { writeTasksSnapshot } from './container-runner.js';
 import {
@@ -188,6 +189,7 @@ async function runTask(
     chatJid: task.chat_jid,
     isControlGroup,
     isScheduledTask: true,
+    effort: resolveAgentEffort(group, task),
   };
 
   const currentSessionRef = sessionRef ?? defaultSession('', backend);

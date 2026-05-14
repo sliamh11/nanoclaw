@@ -353,3 +353,37 @@ describe('handleSettingsCommand — memory_privacy', () => {
     ]);
   });
 });
+
+describe('handleSettingsCommand — effort', () => {
+  it('sets valid effort level', () => {
+    const group = makeGroup();
+    const result = handleSettingsCommand('/settings effort=high', group, 24);
+    expect(result.response).toBe('effort set to high');
+    expect(result.updatedGroup?.containerConfig?.agentEffort).toBe('high');
+  });
+
+  it('rejects invalid effort level', () => {
+    const group = makeGroup();
+    const result = handleSettingsCommand('/settings effort=turbo', group, 24);
+    expect(result.response).toContain('Invalid effort level: turbo');
+    expect(result.updatedGroup).toBeUndefined();
+  });
+
+  it('normalizes to lowercase', () => {
+    const group = makeGroup();
+    const result = handleSettingsCommand('/settings effort=MAX', group, 24);
+    expect(result.updatedGroup?.containerConfig?.agentEffort).toBe('max');
+  });
+
+  it('displays current effort in settings output', () => {
+    const group = makeGroup({ containerConfig: { agentEffort: 'medium' } });
+    const result = handleSettingsCommand('/settings', group, 24);
+    expect(result.response).toContain('effort: medium');
+  });
+
+  it('displays default when no effort configured', () => {
+    const group = makeGroup();
+    const result = handleSettingsCommand('/settings', group, 24);
+    expect(result.response).toContain('effort: low (default)');
+  });
+});
