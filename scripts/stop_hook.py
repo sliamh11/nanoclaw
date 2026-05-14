@@ -56,6 +56,7 @@ THROTTLE_MINUTES = 30
 MIN_TURNS = 4       # skip trivial sessions
 KEEP_TURNS = 6      # turns to include in checkpoint (last N with text)
 MAX_TURN_CHARS = 400  # truncate each turn at this length
+BG_COMPRESS_MIN_TURNS = 6  # skip compress gate for trivial bg sessions
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -234,6 +235,80 @@ def _discover_new_files(vault: Path, tracked: set[str], db, mt, *, limit: int) -
     return discovered
 
 
+# ── Background session compress gate ─────────────────────────────────────────
+
+def _is_bg_session() -> bool:
+    return bool(os.environ.get("CLAUDE_JOB_DIR"))
+
+
+def _compress_already_ran(transcript_path: str) -> bool:
+    """Scan transcript JSONL for a Skill tool_use with skill=compress."""
+    p = Path(transcript_path)
+    if not p.exists():
+        return False
+    for line in p.read_text(encoding="utf-8", errors="replace").splitlines():
+        line = line.strip()
+        if not line or '"Skill"' not in line:
+            continue
+        try:
+            entry = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        msg = entry.get("message", {})
+        content = msg.get("content", [])
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if (
+                isinstance(block, dict)
+                and block.get("type") == "tool_use"
+                and block.get("name") == "Skill"
+                and isinstance(block.get("input"), dict)
+                and block["input"].get("skill") == "compress"
+            ):
+                return True
+    return False
+
+
+def _count_transcript_turns(transcript_path: str) -> int:
+    """Fast turn count without full parsing."""
+    p = Path(transcript_path)
+    if not p.exists():
+        return 0
+    count = 0
+    for line in p.read_text(encoding="utf-8", errors="replace").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        if '"user"' in line or '"assistant"' in line:
+            count += 1
+    return count
+
+
+def _bg_compress_gate(transcript_path: str) -> dict | None:
+    """Block once per bg session if /compress hasn't run yet."""
+    if not _is_bg_session():
+        return None
+    if not transcript_path:
+        return None
+    sentinel = Path(os.environ["CLAUDE_JOB_DIR"]) / ".compress_gate"
+    if sentinel.exists():
+        return None
+    if _count_transcript_turns(transcript_path) < BG_COMPRESS_MIN_TURNS:
+        return None
+    if _compress_already_ran(transcript_path):
+        return None
+    return {
+        "continue": False,
+        "stopReason": "Background session must run /compress before completing.",
+        "systemMessage": (
+            "This is a background session. Before completing, you MUST run "
+            "/compress to save the session to the vault. Invoke the Skill "
+            'tool with skill="compress" now, then re-emit your result: line.'
+        ),
+    }
+
+
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 def _maybe_drift_scan():
@@ -252,8 +327,19 @@ def main():
         _maybe_drift_scan()
         return
 
+    transcript_path = hook_data.get("transcript_path", "")
+
+    block = _bg_compress_gate(transcript_path)
+    if block:
+        print(json.dumps(block))
+        # Sentinel after print — crash before delivery doesn't permanently consume the gate
+        try:
+            (Path(os.environ["CLAUDE_JOB_DIR"]) / ".compress_gate").touch()
+        except OSError:
+            pass
+        return
+
     if should_checkpoint():
-        transcript_path = hook_data.get("transcript_path", "")
         if transcript_path:
             turns = read_transcript(transcript_path)
             if len(turns) >= MIN_TURNS:
