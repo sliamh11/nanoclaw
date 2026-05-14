@@ -1,3 +1,4 @@
+import type { AgentEffortLevel } from '../types.js';
 import type { ToolBroker } from '../tool-broker/types.js';
 
 export type AgentRuntimeId = 'claude' | 'openai';
@@ -26,6 +27,7 @@ export interface RunContext {
   chatJid: string;
   isControlGroup: boolean;
   isScheduledTask?: boolean;
+  effort?: AgentEffortLevel;
   backendConfig?: Record<string, unknown>;
   imageInputs?: Array<{ relativePath: string; mediaType: string }>;
   toolBroker?: ToolBroker;

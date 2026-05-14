@@ -11,7 +11,12 @@ Usage:
   python3 scripts/trec_atom_benchmark.py --stage pool      # → ~/.deus/bench/pooled_atoms.jsonl
   python3 scripts/trec_atom_benchmark.py --stage judge     # → ~/.deus/bench/judged_pairs.jsonl
   python3 scripts/trec_atom_benchmark.py --stage export    # → scripts/tests/fixtures/atom_queries_trec.jsonl
-  python3 scripts/trec_atom_benchmark.py --stage all       # run all stages
+  python3 scripts/trec_atom_benchmark.py                   # run judge stage (default)
+
+Judge flags (stage judge only):
+  --judge gemini|ollama        Judge backend (default: gemini)
+  --judge-model <name>         Ollama model name (default: gemma4:e4b)
+  --fresh                      Delete judge_cache.json before judging
 """
 from __future__ import annotations
 
@@ -20,10 +25,12 @@ import hashlib
 import json
 import os
 import random
+import re
 import sqlite3
 import struct
 import sys
 import time
+import urllib.request
 from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
@@ -273,9 +280,38 @@ JUDGE_PROMPT = (
 )
 
 
-def stage_judge():
+OLLAMA_URL = "http://localhost:11434/api/generate"
+
+
+def _judge_ollama(prompt: str, model: str) -> int | None:
+    """Call Ollama /api/generate and return 0/1/2 or None on failure."""
+    payload = json.dumps({
+        "model": model,
+        "prompt": prompt,
+        "stream": False,
+        "options": {"temperature": 0, "num_predict": 1024},
+    }).encode()
+    req = urllib.request.Request(
+        OLLAMA_URL,
+        data=payload,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            body = json.loads(resp.read())
+        text = body.get("response", "").strip()
+        m = re.search(r"[012]", text)
+        if m:
+            return int(m.group())
+        return None
+    except Exception:
+        return None
+
+
+def stage_judge(judge: str = "gemini", judge_model: str = "gemma4:e4b", fresh: bool = False):
     """LLM-judge each (query, atom) pair blind."""
-    print("Stage 3: Judging (query, atom) pairs...", file=sys.stderr)
+    print(f"Stage 3: Judging (query, atom) pairs with {judge}...", file=sys.stderr)
 
     pool_path = BENCH_DIR / "pooled_atoms.jsonl"
     if not pool_path.exists():
@@ -286,18 +322,22 @@ def stage_judge():
         pooled = [json.loads(line) for line in f]
 
     cache_path = BENCH_DIR / "judge_cache.json"
+    if fresh and cache_path.exists():
+        cache_path.unlink()
+        print("  --fresh: deleted judge cache", file=sys.stderr)
     cache: dict[str, int] = {}
     if cache_path.exists():
         cache = json.loads(cache_path.read_text())
         print(f"  Loaded {len(cache)} cached judgments", file=sys.stderr)
 
-    from google import genai
-    from google.genai import types as genai_types
-    from evolution.config import load_api_key, GEN_MODELS
+    if judge == "gemini":
+        from google import genai
+        from google.genai import types as genai_types
+        from evolution.config import load_api_key, GEN_MODELS
+        client = genai.Client(api_key=load_api_key())
+    else:
+        client = None
 
-    client = genai.Client(api_key=load_api_key())
-
-    total_pairs = sum(len(p["atoms"]) for p in pooled)
     cached_hits = 0
     api_calls = 0
     errors = 0
@@ -316,35 +356,50 @@ def stage_judge():
 
             prompt = JUDGE_PROMPT.format(query=query, atom=atom_text)
             score = None
-            for model in GEN_MODELS:
-                try:
-                    resp = client.models.generate_content(
-                        model=model,
-                        contents=prompt,
-                        config=genai_types.GenerateContentConfig(
-                            temperature=0.0,
-                            max_output_tokens=4,
-                        ),
-                    )
-                    text = resp.text.strip()
-                    score = int(text) if text in ("0", "1", "2") else 0
-                    api_calls += 1
-                    break
-                except Exception as e:
-                    if "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e):
-                        time.sleep(2)
-                        continue
-                    errors += 1
-                    break
 
-            if score is None:
-                errors += 1
-                consecutive_errors += 1
-                if consecutive_errors >= 3:
-                    wait = min(60, consecutive_errors * 10)
-                    print(f"  Rate limited ({consecutive_errors}x), waiting {wait}s...", file=sys.stderr)
-                    time.sleep(wait)
-                continue
+            if judge == "ollama":
+                score = _judge_ollama(prompt, judge_model)
+                if score is not None:
+                    api_calls += 1
+                else:
+                    errors += 1
+                    consecutive_errors += 1
+                    if consecutive_errors >= 3:
+                        wait = min(60, consecutive_errors * 10)
+                        print(f"  Ollama errors ({consecutive_errors}x), waiting {wait}s...", file=sys.stderr)
+                        time.sleep(wait)
+                    continue
+            else:
+                for model in GEN_MODELS:
+                    try:
+                        resp = client.models.generate_content(
+                            model=model,
+                            contents=prompt,
+                            config=genai_types.GenerateContentConfig(
+                                temperature=0.0,
+                                max_output_tokens=4,
+                            ),
+                        )
+                        text = resp.text.strip()
+                        score = int(text) if text in ("0", "1", "2") else 0
+                        api_calls += 1
+                        break
+                    except Exception as e:
+                        if "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e):
+                            time.sleep(2)
+                            continue
+                        errors += 1
+                        break
+
+                if score is None:
+                    errors += 1
+                    consecutive_errors += 1
+                    if consecutive_errors >= 3:
+                        wait = min(60, consecutive_errors * 10)
+                        print(f"  Rate limited ({consecutive_errors}x), waiting {wait}s...", file=sys.stderr)
+                        time.sleep(wait)
+                    continue
+
             consecutive_errors = 0
             atom_entry["relevance"] = score
             cache[cache_key] = score
@@ -432,9 +487,15 @@ def stage_export():
 
 def main():
     parser = argparse.ArgumentParser(description="TREC-style pooled atom benchmark")
-    parser.add_argument("--stage", required=True,
+    parser.add_argument("--stage", default="judge",
                         choices=["sample", "pool", "judge", "export", "all"],
-                        help="Which stage to run")
+                        help="Which stage to run (default: judge)")
+    parser.add_argument("--judge", default="gemini", choices=["gemini", "ollama"],
+                        help="Judge backend (default: gemini)")
+    parser.add_argument("--judge-model", default="gemma4:e4b",
+                        help="Model name for --judge ollama (default: gemma4:e4b)")
+    parser.add_argument("--fresh", action="store_true",
+                        help="Delete judge_cache.json before judging")
     args = parser.parse_args()
 
     if args.stage == "sample" or args.stage == "all":
@@ -442,7 +503,7 @@ def main():
     if args.stage == "pool" or args.stage == "all":
         stage_pool()
     if args.stage == "judge" or args.stage == "all":
-        stage_judge()
+        stage_judge(judge=args.judge, judge_model=args.judge_model, fresh=args.fresh)
     if args.stage == "export" or args.stage == "all":
         stage_export()
 
