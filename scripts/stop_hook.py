@@ -301,9 +301,9 @@ def _bg_compress_gate(transcript_path: str) -> dict | None:
     return {
         "decision": "block",
         "reason": (
-            "This is a background session. Before completing, you MUST run "
-            "/compress to save the session to the vault. Invoke the Skill "
-            'tool with skill="compress" now, then re-emit your result: line.'
+            "Background session compress gate: /compress has not run yet. "
+            "Policy requires background sessions to run /compress before "
+            "completion so the session is saved to the vault."
         ),
     }
 
