@@ -1286,6 +1286,10 @@ for f in c.get('vault_autoload', ['CLAUDE.md']):
 
     printf "✓ Ready.                        \n"
 
+    # Signal to vault_context_hook.py that vault was already injected via
+    # --append-system-prompt, preventing double-injection in the session.
+    export DEUS_VAULT_PRELOADED=1
+
     # ─── EXTERNAL PROJECT MODE ───
     # Same full Deus brain, different working directory and startup.
     # Memory level controls how much project data persists between sessions.
