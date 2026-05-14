@@ -1,6 +1,13 @@
 import { DEFAULT_AGENT_RUNTIME } from '../config.js';
-import type { RegisteredGroup, ScheduledTask } from '../types.js';
+import { VALID_EFFORT_LEVELS } from '../types.js';
+import type {
+  AgentEffortLevel,
+  RegisteredGroup,
+  ScheduledTask,
+} from '../types.js';
 import type { AgentRuntimeId } from './types.js';
+
+export type { AgentEffortLevel };
 
 export function resolveAgentRuntime(
   group: RegisteredGroup,
@@ -11,4 +18,24 @@ export function resolveAgentRuntime(
     return group.containerConfig.agentBackend;
   }
   return DEFAULT_AGENT_RUNTIME;
+}
+
+const DEFAULT_AGENT_EFFORT: AgentEffortLevel = 'low';
+
+export function resolveAgentEffort(
+  group: RegisteredGroup,
+  task?: ScheduledTask,
+): AgentEffortLevel {
+  if (task?.agent_effort) return task.agent_effort;
+  if (group.containerConfig?.agentEffort) {
+    return group.containerConfig.agentEffort;
+  }
+  const envEffort = process.env.DEUS_AGENT_EFFORT?.toLowerCase();
+  if (
+    envEffort &&
+    (VALID_EFFORT_LEVELS as readonly string[]).includes(envEffort)
+  ) {
+    return envEffort as AgentEffortLevel;
+  }
+  return DEFAULT_AGENT_EFFORT;
 }

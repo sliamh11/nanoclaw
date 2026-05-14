@@ -41,6 +41,7 @@ import {
 import { forceKillProcess } from './platform.js';
 import { detectAuthMode } from './credential-proxy.js';
 import { buildVolumeMounts } from './container-mounter.js';
+import type { AgentEffortLevel } from './types.js';
 import { RegisteredGroup } from './types.js';
 import { detectDomainsWithFallback } from './domain-presets.js';
 import { getReflections, logInteraction } from './evolution-client.js';
@@ -65,6 +66,7 @@ export interface ContainerInput {
   assistantName?: string;
   imageAttachments?: Array<{ relativePath: string; mediaType: string }>;
   projectHint?: string;
+  effort?: AgentEffortLevel;
 }
 
 export interface ContainerOutput {

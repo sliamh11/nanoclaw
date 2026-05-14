@@ -1,4 +1,5 @@
-import type { NewMessage, RegisteredGroup } from './types.js';
+import type { NewMessage, RegisteredGroup, AgentEffortLevel } from './types.js';
+import { VALID_EFFORT_LEVELS } from './types.js';
 import { logger } from './logger.js';
 
 // ── /settings command ─────────────────────────────────────────────────────────
@@ -31,7 +32,8 @@ const SETTINGS_HELP =
   '  timeout=N             — container timeout in seconds (min 30)\n' +
   '  requires_trigger=true/false  — whether @Name prefix is required\n' +
   '  memory_privacy=level1,level2  — privacy levels this channel can access\n' +
-  '    levels: public, internal, private, sensitive (default: public,internal,private)';
+  '    levels: public, internal, private, sensitive (default: public,internal,private)\n' +
+  '  effort=level  — agent reasoning effort (low, medium, high, max; default: low)';
 
 /**
  * Parse and apply a /settings command.
@@ -48,6 +50,7 @@ export function handleSettingsCommand(
   if (!args) {
     const idleHours = group.containerConfig?.sessionIdleResetHours;
     const timeoutMs = group.containerConfig?.timeout;
+    const effortLevel = group.containerConfig?.agentEffort;
     const lines = [
       `Settings — ${group.name}`,
       `  session_idle_hours: ${
@@ -60,6 +63,7 @@ export function handleSettingsCommand(
       `  timeout: ${timeoutMs !== undefined ? `${Math.round(timeoutMs / 1000)}s` : '300s (default)'}`,
       `  requires_trigger: ${group.requiresTrigger !== false}`,
       `  memory_privacy: ${group.containerConfig?.memoryPrivacy?.join(',') || 'public,internal,private (default)'}`,
+      `  effort: ${effortLevel || 'low (default)'}`,
       '',
       SETTINGS_HELP,
     ];
@@ -145,6 +149,22 @@ export function handleSettingsCommand(
       };
       return {
         response: `memory_privacy set to ${levels.join(',')}`,
+        updatedGroup,
+      };
+    }
+    case 'effort': {
+      const level = value.toLowerCase();
+      if (!(VALID_EFFORT_LEVELS as readonly string[]).includes(level)) {
+        return {
+          response: `Invalid effort level: ${value}. Valid: ${VALID_EFFORT_LEVELS.join(', ')}`,
+        };
+      }
+      updatedGroup.containerConfig = {
+        ...updatedGroup.containerConfig,
+        agentEffort: level as AgentEffortLevel,
+      };
+      return {
+        response: `effort set to ${level}`,
         updatedGroup,
       };
     }

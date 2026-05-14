@@ -1,6 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, afterEach, vi } from 'vitest';
 
-import { resolveAgentRuntime } from './resolve.js';
+import { resolveAgentRuntime, resolveAgentEffort } from './resolve.js';
 import type { RegisteredGroup, ScheduledTask } from '../types.js';
 
 function makeGroup(overrides: Partial<RegisteredGroup> = {}): RegisteredGroup {
@@ -51,5 +51,47 @@ describe('resolveAgentRuntime', () => {
 
   it('falls back to the global default when no override exists', () => {
     expect(resolveAgentRuntime(makeGroup())).toBe('claude');
+  });
+});
+
+describe('resolveAgentEffort', () => {
+  afterEach(() => {
+    delete process.env.DEUS_AGENT_EFFORT;
+  });
+
+  it('prefers the scheduled task effort override', () => {
+    const group = makeGroup({
+      containerConfig: { agentEffort: 'medium' },
+    });
+    const task = makeTask({ agent_effort: 'max' });
+
+    expect(resolveAgentEffort(group, task)).toBe('max');
+  });
+
+  it('falls back to the group effort override', () => {
+    const group = makeGroup({
+      containerConfig: { agentEffort: 'high' },
+    });
+
+    expect(resolveAgentEffort(group)).toBe('high');
+  });
+
+  it('falls back to DEUS_AGENT_EFFORT env var', () => {
+    process.env.DEUS_AGENT_EFFORT = 'medium';
+    expect(resolveAgentEffort(makeGroup())).toBe('medium');
+  });
+
+  it('ignores invalid env var values', () => {
+    process.env.DEUS_AGENT_EFFORT = 'turbo';
+    expect(resolveAgentEffort(makeGroup())).toBe('low');
+  });
+
+  it('is case-insensitive for env var', () => {
+    process.env.DEUS_AGENT_EFFORT = 'HIGH';
+    expect(resolveAgentEffort(makeGroup())).toBe('high');
+  });
+
+  it('defaults to low when no override exists', () => {
+    expect(resolveAgentEffort(makeGroup())).toBe('low');
   });
 });

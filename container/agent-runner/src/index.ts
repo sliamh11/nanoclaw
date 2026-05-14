@@ -53,6 +53,7 @@ interface ContainerInput {
   assistantName?: string;
   imageAttachments?: Array<{ relativePath: string; mediaType: string }>;
   projectHint?: string;
+  effort?: 'low' | 'medium' | 'high' | 'max';
 }
 
 interface ImageContentBlock {
@@ -606,19 +607,20 @@ async function runQuery(
   let messageCount = 0;
   let resultCount = 0;
 
-  // Effort level (Opus 4.7): default 'low' for latency-sensitive
-  // personal-assistant traffic. Override via DEUS_AGENT_EFFORT env var.
-  // Valid values: low | medium | high | max | default (unset).
-  // Migration guide: 'low' is recommended for "short, scoped tasks and
-  // latency-sensitive workloads that are not intelligence-sensitive".
-  const effortEnv = (process.env.DEUS_AGENT_EFFORT || 'low').toLowerCase();
+  // 'default' = let SDK pick (effort undefined). Env var is operator escape hatch.
+  const rawEffort =
+    containerInput.effort ??
+    process.env.DEUS_AGENT_EFFORT?.toLowerCase() ??
+    'low';
   const effort =
-    effortEnv === 'default'
+    rawEffort === 'default'
       ? undefined
-      : ['low', 'medium', 'high', 'max'].includes(effortEnv)
-        ? (effortEnv as 'low' | 'medium' | 'high' | 'max')
+      : ['low', 'medium', 'high', 'max'].includes(rawEffort)
+        ? (rawEffort as 'low' | 'medium' | 'high' | 'max')
         : 'low';
-  log(`Effort level: ${effort ?? 'SDK default'}`);
+  log(
+    `Effort level: ${effort ?? 'SDK default'}${containerInput.effort ? ' (per-group)' : ''}`,
+  );
 
   // Detect external project mount: if /workspace/project exists and has content,
   // use it as the primary cwd. The agent works in the user's project directory

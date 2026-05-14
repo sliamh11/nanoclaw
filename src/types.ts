@@ -29,6 +29,14 @@ export interface AllowedRoot {
   description?: string;
 }
 
+export type AgentEffortLevel = 'low' | 'medium' | 'high' | 'max';
+export const VALID_EFFORT_LEVELS: readonly AgentEffortLevel[] = [
+  'low',
+  'medium',
+  'high',
+  'max',
+];
+
 export interface ContainerConfig {
   additionalMounts?: AdditionalMount[];
   timeout?: number; // Default: 300000ms (5 minutes). Configurable via /settings timeout=N (seconds).
@@ -36,6 +44,7 @@ export interface ContainerConfig {
   memoryPrivacy?: string[]; // Privacy levels the container can access (e.g. ["public","internal","private"]).
   // Injected as DEUS_MEMORY_PRIVACY env var. Default: all except sensitive.
   agentBackend?: AgentRuntimeId; // Optional override for this group's default backend.
+  agentEffort?: AgentEffortLevel; // Optional override for this group's agent effort level.
 }
 
 export interface ProjectType {
@@ -103,6 +112,7 @@ export interface ScheduledTask {
   status: 'active' | 'paused' | 'completed';
   created_at: string;
   agent_backend?: AgentRuntimeId | null;
+  agent_effort?: AgentEffortLevel | null;
 }
 
 export interface TaskRunLog {
