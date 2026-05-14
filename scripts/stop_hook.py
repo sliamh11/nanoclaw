@@ -285,16 +285,28 @@ def _count_transcript_turns(transcript_path: str) -> int:
     return count
 
 
+def _compress_gate_sentinel() -> Path:
+    """One-shot sentinel so the gate blocks at most once per session."""
+    job_dir = os.environ.get("CLAUDE_JOB_DIR", "")
+    if job_dir:
+        return Path(job_dir) / ".compress_gate_fired"
+    return Path("/tmp/.compress_gate_fired")
+
+
 def _bg_compress_gate(transcript_path: str) -> dict | None:
     """If this is a bg session that hasn't compressed yet, return block JSON."""
     if not _is_bg_session():
         return None
     if not transcript_path:
         return None
+    sentinel = _compress_gate_sentinel()
+    if sentinel.exists():
+        return None
     if _count_transcript_turns(transcript_path) < BG_COMPRESS_MIN_TURNS:
         return None
     if _compress_already_ran(transcript_path):
         return None
+    sentinel.write_text("1")
     return {
         "continue": False,
         "stopReason": "Background session must run /compress before completing.",
