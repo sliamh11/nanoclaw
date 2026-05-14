@@ -80,7 +80,7 @@ export class ContainerRuntime implements AgentRuntime {
     };
 
     const hasSession = sessionRef.session_id !== '';
-    const effort = resolveAgentEffort(group);
+    const effort = runContext.effort ?? resolveAgentEffort(group);
     const output = await runContainerAgent(
       group,
       {

@@ -7,8 +7,6 @@ import type {
 } from '../types.js';
 import type { AgentRuntimeId } from './types.js';
 
-export type { AgentEffortLevel };
-
 export function resolveAgentRuntime(
   group: RegisteredGroup,
   task?: ScheduledTask,

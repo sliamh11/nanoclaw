@@ -26,6 +26,7 @@ All variables are set in `.env` at the project root. Copy `.env.example` to get 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `DEUS_AGENT_BACKEND` | `claude` | Default container agent backend: `claude` or `openai` |
+| `DEUS_AGENT_EFFORT` | `low` | Default agent reasoning effort: `low`, `medium`, `high`, or `max`. Per-group override via `/settings effort=X`. |
 | `DEUS_CLI_AGENT` | `DEUS_AGENT_BACKEND` | Default `deus` global command agent: `claude`, `codex`, or `openai` |
 | `DEUS_OPENAI_MODEL` | `gpt-4o` | Default OpenAI model for the `openai` agent backend |
 | `DEUS_CODEX_MODEL` | `DEUS_OPENAI_MODEL` | Optional Codex CLI model override for the `deus codex` launcher |
@@ -134,6 +135,13 @@ Group/task backend overrides:
 - Registered groups can set `containerConfig.agentBackend` to pin a group to `claude` or `openai`.
 - Scheduled tasks can set `agent_backend` to override the group/default backend for that task only.
 - Resolution order is: task override, group override, `DEUS_AGENT_BACKEND`, then `claude`.
+
+Group/task effort overrides:
+
+- Registered groups can set `containerConfig.agentEffort` to pin a group to a specific effort level.
+- Scheduled tasks can set `agent_effort` to override the group/default effort for that task only.
+- Resolution order is: task override, group override, `DEUS_AGENT_EFFORT`, then `low`.
+- Effort currently applies to the Claude backend only. OpenAI backend logs and ignores the value.
 
 ## Safety
 

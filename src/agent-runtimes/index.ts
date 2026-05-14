@@ -10,7 +10,7 @@ export type {
 } from './types.js';
 export { defaultSession } from './types.js';
 export { resolveAgentRuntime, resolveAgentEffort } from './resolve.js';
-export type { AgentEffortLevel } from './resolve.js';
+export type { AgentEffortLevel } from '../types.js';
 export {
   ContainerRuntime,
   type ContainerRuntimeDeps,

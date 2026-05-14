@@ -26,6 +26,7 @@ export interface RunContext {
   chatJid: string;
   isControlGroup: boolean;
   isScheduledTask?: boolean;
+  effort?: import('../types.js').AgentEffortLevel;
   backendConfig?: Record<string, unknown>;
   imageInputs?: Array<{ relativePath: string; mediaType: string }>;
   toolBroker?: ToolBroker;
