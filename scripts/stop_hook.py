@@ -291,7 +291,7 @@ def _bg_compress_gate(transcript_path: str) -> dict | None:
         return None
     if not transcript_path:
         return None
-    sentinel = Path(os.environ["CLAUDE_JOB_DIR"]) / ".compress_gate_fired"
+    sentinel = Path(os.environ["CLAUDE_JOB_DIR"]) / ".compress_gate"
     if sentinel.exists():
         return None
     if _count_transcript_turns(transcript_path) < BG_COMPRESS_MIN_TURNS:
@@ -332,8 +332,11 @@ def main():
     block = _bg_compress_gate(transcript_path)
     if block:
         print(json.dumps(block))
-        # Write sentinel only after block JSON is delivered
-        Path(os.environ["CLAUDE_JOB_DIR"], ".compress_gate_fired").touch()
+        # Sentinel after print — crash before delivery doesn't permanently consume the gate
+        try:
+            (Path(os.environ["CLAUDE_JOB_DIR"]) / ".compress_gate").touch()
+        except OSError:
+            pass
         return
 
     if should_checkpoint():
