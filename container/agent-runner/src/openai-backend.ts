@@ -473,7 +473,7 @@ export async function runOpenAIConversation(ctx: OpenAIContext): Promise<void> {
     containerInput.sessionRef?.session_id || containerInput.sessionId;
   let metadataJson = containerInput.sessionRef?.metadata_json;
 
-  // TODO: wire effort into OpenAI Responses API reasoning.effort for o-series models
+  // TODO(2026-Q3): wire effort into OpenAI Responses API reasoning.effort for o-series models
   if (containerInput.effort && containerInput.effort !== 'low') {
     log(
       `Effort level '${containerInput.effort}' requested but not yet supported for OpenAI backend — using model default`,
