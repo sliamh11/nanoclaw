@@ -108,7 +108,7 @@ Use these instead of rediscovering the system:
 | TUI backends | `tui/src/backend/` | Strategy trait — one file per provider (Claude, Codex, etc.) |
 | Mount/security boundary | `src/container-mounter.ts` | Project/group/vault visibility and isolation |
 | Memory retrieval | `scripts/memory_tree.py`, `scripts/memory_indexer.py` | Personal recall and semantic lookup |
-| Codex Warden hooks | `scripts/codex_warden_hooks.py` | Installs and runs Codex hook equivalents for Warden gates |
+| Codex Warden hooks | `scripts/codex_warden_hooks.py` | Installs and runs Codex hook equivalents for Warden gates (plan-reviewer, code-reviewer, verification-gate, threat-modeler) |
 
 More detailed maps live in [docs/AGENT_DEUS_101.md](docs/AGENT_DEUS_101.md).
 

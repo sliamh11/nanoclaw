@@ -1113,3 +1113,81 @@ def test_bypass_log_written_on_trivial_refusal(tmp_path, monkeypatch):
     assert entry["warden"] == "code-reviewer"
     assert entry["verdict"] == "REFUSED"
     assert entry["session_type"] == "interactive"
+
+
+# ── Verification gate ────────────────────────────────────────────────────────
+
+
+def test_verification_gate_blocks_git_commit_without_marker(tmp_path, capsys):
+    hooks = load_hooks()
+    repo = git_repo(tmp_path)
+
+    rc = hooks.run_verification_gate(bash_event(repo, "git commit -m test"), repo)
+
+    assert rc == 0
+    output = json.loads(capsys.readouterr().out)
+    reason = output["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "verification-gate" in reason
+
+
+def test_verification_gate_allows_after_marker(tmp_path, capsys):
+    hooks = load_hooks()
+    repo = git_repo(tmp_path)
+    (repo / ".claude" / ".verified").touch()
+
+    rc = hooks.run_verification_gate(bash_event(repo, "git commit -m test"), repo)
+
+    assert rc == 0
+    assert capsys.readouterr().out == ""
+
+
+def test_verification_gate_shows_revise_escalation(tmp_path, capsys):
+    hooks = load_hooks()
+    repo = git_repo(tmp_path)
+    (repo / ".claude" / "wardens").mkdir(parents=True)
+
+    hooks._write_verdict(repo, "verification-gate", "REVISE", "incomplete", "agent")
+
+    event = bash_event(repo, "git commit -m test")
+    hooks.run_verification_gate(event, repo)
+    out = capsys.readouterr().out
+    assert "REVISE" in out
+    assert "Trivial-commit bypass" not in out
+
+
+def test_verification_invalidator_clears_marker_after_edit(tmp_path):
+    hooks = load_hooks()
+    repo = git_repo(tmp_path)
+    (repo / "src").mkdir()
+    (repo / "src" / "app.ts").write_text("old\n", encoding="utf-8")
+    marker = repo / ".claude" / ".verified"
+    marker.touch()
+
+    rc = hooks.run_verification_invalidator(apply_patch_event(repo, "src/app.ts"), repo)
+
+    assert rc == 0
+    assert not marker.exists()
+
+
+def test_session_init_clears_verified_marker(tmp_path):
+    hooks = load_hooks()
+    repo = git_repo(tmp_path)
+    marker = repo / ".claude" / ".verified"
+    marker.touch()
+
+    assert hooks.run_session_init(repo) == 0
+
+    assert not marker.exists()
+
+
+def test_mark_verified_creates_marker(tmp_path):
+    hooks = load_hooks()
+    repo = git_repo(tmp_path)
+    (repo / ".claude" / "wardens").mkdir(parents=True)
+
+    result = hooks.mark_warden("verified", "SHIP", "all claims verified", repo)
+    assert result == 0
+    assert (repo / ".claude" / ".verified").exists()
+
+    verdicts = json.loads((repo / ".claude" / ".warden-verdicts.json").read_text())
+    assert verdicts["verification-gate"]["verdict"] == "SHIP"
