@@ -56,6 +56,8 @@ Use this format:
 type: session
 date: YYYY-MM-DD
 topics: [topic1, topic2]
+continues: "prior-session-filename.md"
+superseded_by: "later-session-filename.md"
 project_path: "<working directory path, or '~/deus' for home mode>"
 tldr: |
   What happened (1 sentence). Key decision or outcome. Pending: X, Y.
@@ -78,6 +80,12 @@ decisions:
 ## Pending Tasks
 - [ ] ...
 ```
+
+**Cross-linking multi-session investigations (`continues` / `superseded_by`):**
+- Both fields are optional. Omit them for standalone sessions (the common case).
+- Values are bare filenames (e.g. `auto-compress-bg-gate.md`) when the linked session is in the same date folder. For cross-date links, use a relative path from `Session-Logs/` (e.g. `2026-05-13/prior-topic.md`).
+- `continues` — set when this session resumes a prior investigation. Value: the filename of the earlier session. When setting this field, also update the prior session's frontmatter to add `superseded_by` pointing to the new log.
+- `superseded_by` — forward-pointer added retroactively to a prior session when a continuation is created. Not set directly; always set via the `continues` step above.
 
 **External Project Mode — standard memory level redaction:**
 - Do NOT include specific file paths, function names, or code snippets in the session log
