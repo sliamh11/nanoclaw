@@ -9,7 +9,8 @@ Stage 4: Export as frozen benchmark fixture
 Usage:
   python3 scripts/trec_atom_benchmark.py --stage sample   # → ~/.deus/bench/sampled_queries.jsonl
   python3 scripts/trec_atom_benchmark.py --stage pool      # → ~/.deus/bench/pooled_atoms.jsonl
-  python3 scripts/trec_atom_benchmark.py --stage judge     # → ~/.deus/bench/judged_pairs.jsonl
+  python3 scripts/trec_atom_benchmark.py --stage judge     # → ~/.deus/bench/judged_pairs.jsonl (Gemini)
+  python3 scripts/trec_atom_benchmark.py --stage judge --judge ollama --judge-model gemma4:e4b --fresh
   python3 scripts/trec_atom_benchmark.py --stage export    # → scripts/tests/fixtures/atom_queries_trec.jsonl
   python3 scripts/trec_atom_benchmark.py --stage all       # run all stages
 """
@@ -24,6 +25,8 @@ import sqlite3
 import struct
 import sys
 import time
+import urllib.error
+import urllib.request
 from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
@@ -273,9 +276,57 @@ JUDGE_PROMPT = (
 )
 
 
-def stage_judge():
+def _ollama_judge(prompt: str, model: str) -> int | None:
+    """Call Ollama /api/generate and parse the first digit from the response."""
+    payload = json.dumps({
+        "model": model,
+        "prompt": prompt,
+        "stream": False,
+        "options": {"temperature": 0, "num_predict": 512},
+    }).encode()
+    req = urllib.request.Request(
+        "http://localhost:11434/api/generate",
+        data=payload,
+        headers={"Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            body = json.loads(resp.read())
+    except (urllib.error.URLError, OSError, json.JSONDecodeError):
+        return None
+    text = body.get("response", "").strip()
+    for ch in text:
+        if ch in ("0", "1", "2"):
+            return int(ch)
+    return None
+
+
+def _gemini_judge(prompt: str, client, genai_types, gen_models: list[str]) -> tuple[int | None, bool]:
+    """Call Gemini API and return (score, was_rate_limited)."""
+    for model in gen_models:
+        try:
+            resp = client.models.generate_content(
+                model=model,
+                contents=prompt,
+                config=genai_types.GenerateContentConfig(
+                    temperature=0.0,
+                    max_output_tokens=4,
+                ),
+            )
+            text = resp.text.strip()
+            score = int(text) if text in ("0", "1", "2") else 0
+            return score, False
+        except Exception as e:
+            if "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e):
+                time.sleep(2)
+                continue
+            return None, False
+    return None, True
+
+
+def stage_judge(judge_backend: str = "gemini", judge_model: str = "gemma4:e4b"):
     """LLM-judge each (query, atom) pair blind."""
-    print("Stage 3: Judging (query, atom) pairs...", file=sys.stderr)
+    print(f"Stage 3: Judging (query, atom) pairs [judge={judge_backend}, model={judge_model}]...", file=sys.stderr)
 
     pool_path = BENCH_DIR / "pooled_atoms.jsonl"
     if not pool_path.exists():
@@ -291,11 +342,16 @@ def stage_judge():
         cache = json.loads(cache_path.read_text())
         print(f"  Loaded {len(cache)} cached judgments", file=sys.stderr)
 
-    from google import genai
-    from google.genai import types as genai_types
-    from evolution.config import load_api_key, GEN_MODELS
-
-    client = genai.Client(api_key=load_api_key())
+    gemini_client = None
+    gemini_types = None
+    gen_models = None
+    if judge_backend == "gemini":
+        from google import genai
+        from google.genai import types as genai_types
+        from evolution.config import load_api_key, GEN_MODELS
+        gemini_client = genai.Client(api_key=load_api_key())
+        gemini_types = genai_types
+        gen_models = GEN_MODELS
 
     total_pairs = sum(len(p["atoms"]) for p in pooled)
     cached_hits = 0
@@ -316,26 +372,15 @@ def stage_judge():
 
             prompt = JUDGE_PROMPT.format(query=query, atom=atom_text)
             score = None
-            for model in GEN_MODELS:
-                try:
-                    resp = client.models.generate_content(
-                        model=model,
-                        contents=prompt,
-                        config=genai_types.GenerateContentConfig(
-                            temperature=0.0,
-                            max_output_tokens=4,
-                        ),
-                    )
-                    text = resp.text.strip()
-                    score = int(text) if text in ("0", "1", "2") else 0
+
+            if judge_backend == "ollama":
+                score = _ollama_judge(prompt, judge_model)
+                if score is not None:
                     api_calls += 1
-                    break
-                except Exception as e:
-                    if "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e):
-                        time.sleep(2)
-                        continue
-                    errors += 1
-                    break
+            else:
+                score, was_rate_limited = _gemini_judge(prompt, gemini_client, gemini_types, gen_models)
+                if score is not None:
+                    api_calls += 1
 
             if score is None:
                 errors += 1
@@ -353,10 +398,10 @@ def stage_judge():
                 cache_path.write_text(json.dumps(cache))
 
         if (pi + 1) % 10 == 0:
-            print(f"  {pi+1}/{len(pooled)} queries judged ({api_calls} API calls, {cached_hits} cached, {errors} errors)", file=sys.stderr)
+            print(f"  {pi+1}/{len(pooled)} queries judged ({api_calls} calls, {cached_hits} cached, {errors} errors)", file=sys.stderr)
 
     cache_path.write_text(json.dumps(cache))
-    print(f"  Total: {api_calls} API calls, {cached_hits} cached, {errors} errors", file=sys.stderr)
+    print(f"  Total: {api_calls} calls, {cached_hits} cached, {errors} errors", file=sys.stderr)
 
     out_path = BENCH_DIR / "judged_pairs.jsonl"
     with open(out_path, "w", encoding="utf-8") as f:
@@ -435,14 +480,26 @@ def main():
     parser.add_argument("--stage", required=True,
                         choices=["sample", "pool", "judge", "export", "all"],
                         help="Which stage to run")
+    parser.add_argument("--judge", choices=["gemini", "ollama"], default="gemini",
+                        help="Judge backend (default: gemini)")
+    parser.add_argument("--judge-model", default="gemma4:e4b",
+                        help="Model name for ollama judge (default: gemma4:e4b)")
+    parser.add_argument("--fresh", action="store_true",
+                        help="Clear judge cache before judging")
     args = parser.parse_args()
+
+    if args.fresh:
+        cache_path = BENCH_DIR / "judge_cache.json"
+        if cache_path.exists():
+            cache_path.unlink()
+            print("Cleared judge cache.", file=sys.stderr)
 
     if args.stage == "sample" or args.stage == "all":
         stage_sample()
     if args.stage == "pool" or args.stage == "all":
         stage_pool()
     if args.stage == "judge" or args.stage == "all":
-        stage_judge()
+        stage_judge(judge_backend=args.judge, judge_model=args.judge_model)
     if args.stage == "export" or args.stage == "all":
         stage_export()
 
