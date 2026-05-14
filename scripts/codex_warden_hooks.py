@@ -959,6 +959,43 @@ def _audit_log_path(repo_root: Path) -> Path:
     return repo_root / ".claude" / ".warden-log"
 
 
+def _bypass_log_path() -> Path:
+    override = os.environ.get("DEUS_WARDEN_BYPASS_LOG")
+    if override:
+        return Path(override)
+    return Path.home() / ".claude" / ".warden-bypass-log"
+
+
+def _write_bypass_log(
+    warden: str,
+    verdict: str,
+    session_type: str,
+    reason: str,
+    cwd: Path,
+) -> None:
+    try:
+        diff_stats = _git(cwd, "diff", "--stat", "HEAD")
+        entry = {
+            "timestamp": dt.datetime.now(dt.UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "warden": warden,
+            "verdict": verdict,
+            "session_type": session_type,
+            "reason": reason,
+            "cwd": str(cwd),
+            "diff_stats": diff_stats,
+        }
+        path = _bypass_log_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(entry, separators=(",", ":")) + "\n")
+    except OSError:
+        _debug("bypass log write failed")
+
+
+def _is_bg_session() -> bool:
+    return bool(os.environ.get("CLAUDE_JOB_DIR"))
+
+
 def _read_verdicts(repo_root: Path) -> dict[str, Any]:
     path = _verdicts_path(repo_root)
     if not path.exists():
@@ -1069,17 +1106,32 @@ def mark_warden(marker_name: str, verdict: str, reason: str, repo_root: Path) ->
         print(f"Invalid verdict: {verdict}. Must be SHIP or TRIVIAL.", file=sys.stderr)
         return 1
 
+    bg = _is_bg_session()
+    session_type = "bg" if bg else "interactive"
+
+    if verdict == "TRIVIAL" and bg:
+        _write_bypass_log(warden, "REFUSED", "bg", reason, repo_root)
+        print(
+            "[warden-mark] BLOCKED: TRIVIAL bypass is not permitted in background sessions.\n"
+            "Background sessions must run the full warden and get SHIP.",
+            file=sys.stderr,
+        )
+        return 2
+
     if verdict == "TRIVIAL" and _last_verdict_is_blocking(repo_root, warden):
         last = _last_verdict(repo_root, warden)
         if last:
+            _write_bypass_log(warden, "REFUSED", session_type, reason, repo_root)
             print(
                 f"[warden-mark] BLOCKED: last {warden} verdict was {last}.\n"
-                f"Re-run the warden and get SHIP — trivial bypass is not permitted after {last}.",
+                "Re-run the warden and get SHIP — trivial bypass is not permitted after REVISE or BLOCK.",
                 file=sys.stderr,
             )
             return 2
 
     _write_verdict(repo_root, warden, verdict, reason, source="mark")
+    if verdict == "TRIVIAL":
+        _write_bypass_log(warden, "TRIVIAL", session_type, reason, repo_root)
     _marker(repo_root, f".{marker_name}").parent.mkdir(parents=True, exist_ok=True)
     _marker(repo_root, f".{marker_name}").touch()
     print(f"[warden-mark] {marker_name} marked as {verdict}: {reason}")
