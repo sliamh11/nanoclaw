@@ -1,7 +1,7 @@
 ---
 governs:
   - docs/
-last_verified: "2026-05-14" # auto-bump
+last_verified: "2026-05-14" # auto-bump (gemini-3.1-flash-lite GA)
 test_tasks:
   - "Add a new ADR to docs/decisions/ explaining an architectural change"
   - "Update ARCHITECTURE.md after a major refactor"
