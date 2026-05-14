@@ -56,7 +56,7 @@ DSPY_MIN_DOMAIN_SAMPLES = int(os.environ.get("EVOLUTION_DSPY_MIN_DOMAIN_SAMPLES"
 # ── Auto-triggers ────────────────────────────────────────────────────────────
 
 # Auto-optimize after this many new scored interactions (0 = disabled).
-AUTO_OPTIMIZE_THRESHOLD = int(os.environ.get("EVOLUTION_AUTO_OPTIMIZE_THRESHOLD", "50"))
+AUTO_OPTIMIZE_THRESHOLD = int(os.environ.get("EVOLUTION_AUTO_OPTIMIZE_THRESHOLD", "15"))
 # Cooldown between principle extractions (hours).
 PRINCIPLES_COOLDOWN_HOURS = int(os.environ.get("EVOLUTION_PRINCIPLES_COOLDOWN_HOURS", "24"))
 # How many times to retry Gemini judge on JSON parse failure before falling back to neutral score.

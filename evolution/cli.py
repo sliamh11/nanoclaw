@@ -165,12 +165,14 @@ def _maybe_auto_optimize(domain_presets: Optional[list] = None) -> None:
 
     try:
         from .optimizer.dspy_optimizer import optimize
-        optimize(module="qa")
-        # Domain-specific optimization if enough domain data
-        for domain in (domain_presets or []):
-            optimize(module="qa", domain=domain)
-    except Exception:
-        pass  # Non-fatal
+        from .optimizer.modules import MODULE_REGISTRY
+        for module_name in MODULE_REGISTRY:
+            optimize(module=module_name)
+            # Domain-specific optimization if enough domain data
+            for domain in (domain_presets or []):
+                optimize(module=module_name, domain=domain)
+    except Exception as exc:
+        log.warning('evolution: auto-optimize failed — %s: %s', type(exc).__name__, exc)
 
 
 def _maybe_batch_judge(domain_presets: Optional[list] = None) -> None:

@@ -690,3 +690,103 @@ def test_main_unknown_subcommand_exits_nonzero():
         cwd=str(Path(__file__).resolve().parents[2]),
     )
     assert result.returncode != 0
+
+
+# ── _maybe_auto_optimize tests ──────────────────────────────────────────────
+
+
+def test_auto_optimize_calls_all_modules(monkeypatch):
+    """_maybe_auto_optimize should call optimize() for every module in MODULE_REGISTRY."""
+    import evolution.config as cfg
+    monkeypatch.setattr(cfg, "AUTO_OPTIMIZE_THRESHOLD", 10)
+
+    # Mock storage to report enough scored interactions
+    fake_store = MagicMock()
+    fake_store.get_latest_artifact_timestamp.return_value = "1970-01-01"
+    fake_store.count_scored_since.return_value = 20  # above threshold
+
+    monkeypatch.setattr("evolution.storage.get_storage", lambda: fake_store)
+
+    optimize_calls = []
+
+    def fake_optimize(module="qa", **kwargs):
+        optimize_calls.append((module, kwargs.get("domain")))
+        return None
+
+    monkeypatch.setattr("evolution.optimizer.dspy_optimizer.optimize", fake_optimize)
+
+    from evolution.cli import _maybe_auto_optimize
+    _maybe_auto_optimize(domain_presets=None)
+
+    called_modules = [m for m, d in optimize_calls]
+    assert "qa" in called_modules
+    assert "tool_selection" in called_modules
+    assert "summarization" in called_modules
+
+
+def test_auto_optimize_includes_domain_presets(monkeypatch):
+    """_maybe_auto_optimize should call optimize() with each domain for every module."""
+    import evolution.config as cfg
+    monkeypatch.setattr(cfg, "AUTO_OPTIMIZE_THRESHOLD", 10)
+
+    fake_store = MagicMock()
+    fake_store.get_latest_artifact_timestamp.return_value = "1970-01-01"
+    fake_store.count_scored_since.return_value = 20
+
+    monkeypatch.setattr("evolution.storage.get_storage", lambda: fake_store)
+
+    optimize_calls = []
+
+    def fake_optimize(module="qa", **kwargs):
+        optimize_calls.append((module, kwargs.get("domain")))
+        return None
+
+    monkeypatch.setattr("evolution.optimizer.dspy_optimizer.optimize", fake_optimize)
+
+    from evolution.cli import _maybe_auto_optimize
+    _maybe_auto_optimize(domain_presets=["marketing", "engineering"])
+
+    # Each of the 3 modules should have a None-domain call + 2 domain calls = 9 total
+    assert len(optimize_calls) == 9, f"Expected 9 optimize calls (3 modules x 3 variants), got {len(optimize_calls)}: {optimize_calls}"
+
+    # Verify domain calls exist for each module
+    for mod in ["qa", "tool_selection", "summarization"]:
+        mod_calls = [(m, d) for m, d in optimize_calls if m == mod]
+        domains = [d for _, d in mod_calls]
+        assert None in domains, f"{mod} missing cross-domain call"
+        assert "marketing" in domains, f"{mod} missing marketing domain call"
+        assert "engineering" in domains, f"{mod} missing engineering domain call"
+
+
+def test_auto_optimize_disabled_when_threshold_zero(monkeypatch):
+    """EVOLUTION_AUTO_OPTIMIZE_THRESHOLD=0 should disable auto-optimization."""
+    import evolution.config as cfg
+    monkeypatch.setattr(cfg, "AUTO_OPTIMIZE_THRESHOLD", 0)
+
+    optimize_calls = []
+    monkeypatch.setattr("evolution.optimizer.dspy_optimizer.optimize", lambda **kw: optimize_calls.append(kw))
+
+    from evolution.cli import _maybe_auto_optimize
+    _maybe_auto_optimize()
+
+    assert len(optimize_calls) == 0, "optimize should not be called when threshold is 0"
+
+
+def test_auto_optimize_skips_below_threshold(monkeypatch):
+    """_maybe_auto_optimize should skip when scored count is below threshold."""
+    import evolution.config as cfg
+    monkeypatch.setattr(cfg, "AUTO_OPTIMIZE_THRESHOLD", 10)
+
+    fake_store = MagicMock()
+    fake_store.get_latest_artifact_timestamp.return_value = "1970-01-01"
+    fake_store.count_scored_since.return_value = 5  # below threshold
+
+    monkeypatch.setattr("evolution.storage.get_storage", lambda: fake_store)
+
+    optimize_calls = []
+    monkeypatch.setattr("evolution.optimizer.dspy_optimizer.optimize", lambda **kw: optimize_calls.append(kw))
+
+    from evolution.cli import _maybe_auto_optimize
+    _maybe_auto_optimize()
+
+    assert len(optimize_calls) == 0, "optimize should not be called below threshold"
