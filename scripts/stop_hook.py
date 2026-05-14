@@ -286,19 +286,21 @@ def _count_transcript_turns(transcript_path: str) -> int:
 
 
 def _bg_compress_gate(transcript_path: str) -> dict | None:
-    """If this is a bg session that hasn't compressed yet, return block JSON."""
+    """Block once per bg session if /compress hasn't run yet."""
     if not _is_bg_session():
         return None
     if not transcript_path:
+        return None
+    sentinel = Path(os.environ["CLAUDE_JOB_DIR"]) / ".compress_gate"
+    if sentinel.exists():
         return None
     if _count_transcript_turns(transcript_path) < BG_COMPRESS_MIN_TURNS:
         return None
     if _compress_already_ran(transcript_path):
         return None
     return {
-        "continue": False,
-        "stopReason": "Background session must run /compress before completing.",
-        "systemMessage": (
+        "decision": "block",
+        "reason": (
             "This is a background session. Before completing, you MUST run "
             "/compress to save the session to the vault. Invoke the Skill "
             'tool with skill="compress" now, then re-emit your result: line.'
@@ -329,6 +331,11 @@ def main():
     block = _bg_compress_gate(transcript_path)
     if block:
         print(json.dumps(block))
+        # Sentinel after print — crash before delivery doesn't permanently consume the gate
+        try:
+            (Path(os.environ["CLAUDE_JOB_DIR"]) / ".compress_gate").touch()
+        except OSError:
+            pass
         return
 
     if should_checkpoint():
