@@ -45,6 +45,7 @@ A personal AI that understands you - not just recalls things you've said. It lea
 
 - macOS (Apple Silicon recommended), Linux, or Windows
 - [Claude Code](https://claude.ai/download) or [Codex CLI](https://github.com/openai/codex) installed and authenticated
+  - Codex with an API key is recommended — subscription-only auth disables hooks (see [CLI](#cli))
 - [Docker Desktop](https://www.docker.com/products/docker-desktop/) (handles WSL 2 on Windows automatically)
 - Node.js 20+, Python 3.11+
 - A [Gemini API key](https://aistudio.google.com/apikey) (free tier is enough)
@@ -130,6 +131,15 @@ python3 scripts/codex_warden_hooks.py install
 python3 scripts/codex_warden_hooks.py check
 ```
 
+> **Codex auth modes and hooks:** Codex supports two authentication modes: API
+> key (`OPENAI_API_KEY`) and subscription/OAuth (`codex login`). Warden hooks
+> require an API key — subscription-only auth cannot enable the
+> `[features].codex_hooks` flag, so no quality gates, memory retrieval, or
+> safety checks will fire. For the full Deus experience with Codex, use an API
+> key. See [Multi-backend](docs/MULTI_BACKEND.md) for setup and
+> [Hook Dispatch System](docs/decisions/hook-dispatch-system.md) for the
+> architectural rationale.
+
 ---
 
 ## Comparison
@@ -163,6 +173,7 @@ Deus goes deep on understanding you and adapting over time. Hermes goes wide on 
 | Development setup | [Development](docs/DEVELOPMENT.md) |
 | Contributing | [Contributing](CONTRIBUTING.md) |
 | Known limitations | [Limitations](docs/KNOWN_LIMITATIONS.md) |
+| Hook dispatch architecture | [Hook Dispatch System](docs/decisions/hook-dispatch-system.md) |
 
 ---
 
