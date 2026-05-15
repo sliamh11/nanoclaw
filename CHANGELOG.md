@@ -4,6 +4,36 @@ All notable changes to Deus will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.14.0](https://github.com/sliamh11/Deus/compare/v1.13.0...v1.14.0) (2026-05-15)
+
+
+### Features
+
+* **bench:** add Ollama judge backend to TREC atom benchmark ([#395](https://github.com/sliamh11/Deus/issues/395)) ([8f5d355](https://github.com/sliamh11/Deus/commit/8f5d355611326d0342574bc88a3438bbad7dca23))
+* **cli:** add --agents flag ([#386](https://github.com/sliamh11/Deus/issues/386)) ([fa50c6a](https://github.com/sliamh11/Deus/commit/fa50c6ae8f357c0f16bc0497161b67d9e5f59bc5))
+* **evolution:** upgrade DSPy to v3, swap MIPROv2 → GEPA optimizer ([#388](https://github.com/sliamh11/Deus/issues/388)) ([d5263f9](https://github.com/sliamh11/Deus/commit/d5263f937cb51cb2773b0c69d6139a16015cd3df))
+* **hooks:** auto-compress gate for background sessions ([1a4b3e3](https://github.com/sliamh11/Deus/commit/1a4b3e388a7a50b705b6b26d2b0d2c3f15d29c94))
+* **memory:** add TREC benchmark, embedding shootout, implicit feedback tools ([#383](https://github.com/sliamh11/Deus/issues/383)) ([dd98302](https://github.com/sliamh11/Deus/commit/dd9830244e8e6703bf0e7a492c33fb327d751751))
+* **memory:** auto-classify promoted atoms via classify_atom() ([#409](https://github.com/sliamh11/Deus/issues/409)) ([a764ae8](https://github.com/sliamh11/Deus/commit/a764ae89228bf76a7b77e9d5d7ad2b224e65e91e))
+* **runtime:** per-group agent effort level ([#392](https://github.com/sliamh11/Deus/issues/392)) ([dc34e8d](https://github.com/sliamh11/Deus/commit/dc34e8d457301e32fd3945ef7a8dd2f637e333d1))
+* **settings:** add locked merge-write contract for settings.json ([#404](https://github.com/sliamh11/Deus/issues/404)) ([0fd2826](https://github.com/sliamh11/Deus/commit/0fd2826b8dad8364bf51bd60ee8a5134e09a026a))
+* **skills:** add session-log cross-link frontmatter fields ([#400](https://github.com/sliamh11/Deus/issues/400)) ([3e438e9](https://github.com/sliamh11/Deus/commit/3e438e9f7cec9dd07ac0fb65f408fc9e00b0a7c5))
+* **wardens:** add hook schema citation and smoke test rules ([#401](https://github.com/sliamh11/Deus/issues/401)) ([70a1a5b](https://github.com/sliamh11/Deus/commit/70a1a5bc72cb8970abb1c92b6376d1f05811ac4b))
+* **wardens:** portable warden gates with verdict tracking ([#396](https://github.com/sliamh11/Deus/issues/396)) ([d43d3e0](https://github.com/sliamh11/Deus/commit/d43d3e08219a04e921ec0aa670c5e6431e27dc6b))
+* **wardens:** wire verification-gate as automatic pre-commit gate ([#405](https://github.com/sliamh11/Deus/issues/405)) ([9181fff](https://github.com/sliamh11/Deus/commit/9181fffabd4e5b39c9a429eeeb977da620b7cd67))
+
+
+### Bug Fixes
+
+* **bench:** align methodology probes to actual atom filenames ([#410](https://github.com/sliamh11/Deus/issues/410)) ([2f8ce18](https://github.com/sliamh11/Deus/commit/2f8ce18a45ebf174f4618983086031fdbb28adf1))
+* **evolution:** lower auto-optimize threshold, optimize all modules ([#391](https://github.com/sliamh11/Deus/issues/391)) ([18ff414](https://github.com/sliamh11/Deus/commit/18ff414e86bc85bff87e3bf8014386ff00492645))
+* **hooks:** prevent compress gate from blocking repeatedly ([#397](https://github.com/sliamh11/Deus/issues/397)) ([ca4ce8e](https://github.com/sliamh11/Deus/commit/ca4ce8efce22f68e0a81d51704ff516bd47e7749))
+* **hooks:** standards_pack.py resolver references non-existent mt.EXTERNAL_DIR ([#402](https://github.com/sliamh11/Deus/issues/402)) ([9a3a32d](https://github.com/sliamh11/Deus/commit/9a3a32d32811abeb261807658c65059b4735d080))
+* **hooks:** use decision:block for Stop hook compress gate ([#398](https://github.com/sliamh11/Deus/issues/398)) ([5bc561e](https://github.com/sliamh11/Deus/commit/5bc561e18efc7ef1c178e1d42070473d6cafd0ac))
+* **hooks:** use declarative message for compress gate block ([#399](https://github.com/sliamh11/Deus/issues/399)) ([a169040](https://github.com/sliamh11/Deus/commit/a1690408f7dba1e7cf647c5cbecc6445174f2a41))
+* **hooks:** use valid Stop hook output schema for compress gate ([1ff9543](https://github.com/sliamh11/Deus/commit/1ff95434acc5e86ccc179e0f97298cbb14b87b27))
+* **wardens:** close TRIVIAL-bypass hole with bg-session gate and audit log ([#407](https://github.com/sliamh11/Deus/issues/407)) ([fd3a603](https://github.com/sliamh11/Deus/commit/fd3a6032fb180a43335899d18acef9285bb40830))
+
 ## [1.13.0](https://github.com/sliamh11/Deus/compare/v1.12.0...v1.13.0) (2026-05-13)
 
 
