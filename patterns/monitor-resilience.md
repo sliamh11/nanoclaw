@@ -46,10 +46,15 @@ states = {}
 while True:
     all_green = True
     for pr in prs:
-        raw = subprocess.check_output(
-            ["gh", "pr", "view", str(pr), "--json", "headRefOid,statusCheckRollup"],
-            text=True
-        )
+        try:
+            raw = subprocess.check_output(
+                ["gh", "pr", "view", str(pr), "--json", "headRefOid,statusCheckRollup"],
+                text=True, stderr=subprocess.PIPE
+            )
+        except subprocess.CalledProcessError as e:
+            print(f"PR #{pr}: gh error (skipping): {e.stderr or e}", flush=True)
+            all_green = False
+            continue
         data = json.loads(raw)
         checks = data.get("statusCheckRollup") or []
         conclusions = [c.get("conclusion", "") for c in checks]
@@ -57,8 +62,10 @@ while True:
             status = "PENDING"
         elif all(c == "SUCCESS" for c in conclusions):
             status = "GREEN"
-        elif any(c in ("FAILURE", "CANCELLED") for c in conclusions):
+        elif any(c in ("FAILURE", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED") for c in conclusions):
             status = "FAILED"
+        elif any(c in ("SKIPPED", "NEUTRAL") for c in conclusions):
+            status = "PENDING"  # treat skip/neutral as still-pending
         else:
             status = "PENDING"
 
@@ -80,8 +87,11 @@ PYEOF
 ## Backup poll (required for high-stakes monitors)
 
 For every high-stakes Monitor, launch an **independent backup poll** in a separate background
-session writing to a temp file. The backup uses a different cadence (3 minutes) so a Monitor
-silence and backup poll silence cannot mask each other through rate-limit synchronization.
+session writing to a temp file. The backup uses a 3-minute cadence: faster than 3 minutes gains
+little (CI state changes slowly) and costs more API calls; slower than 3 minutes grows the
+recovery window beyond 15 minutes. GitHub's authenticated API allows 5,000 req/hr; 3 PRs × 20
+calls/hr = 60 calls/hr — well under the ceiling. The different cadence (45s vs 180s) ensures
+Monitor silence and backup silence cannot synchronize through shared rate-limit windows.
 
 ```bash
 # Launch backup poll in a separate background session
@@ -90,6 +100,7 @@ cat > /tmp/monitor-backup-poll.sh << 'SHELLEOF'
 #!/bin/bash
 PR_NUMBERS="123 124 125"   # space-separated PR numbers
 BACKUP_FILE="/tmp/monitor-backup-$$.txt"  # PID-scoped to avoid cross-contamination
+echo "BACKUP_FILE=$BACKUP_FILE"          # print path so parent session can find it
 
 while true; do
     TIMESTAMP=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
@@ -102,7 +113,7 @@ while true; do
                 2>/dev/null || echo "PR#$pr ERROR")
             echo "$STATE"
         done
-    } > "$BACKUP_FILE"
+    } > "$BACKUP_FILE.tmp" && mv "$BACKUP_FILE.tmp" "$BACKUP_FILE"
     sleep 180
 done
 SHELLEOF
@@ -119,25 +130,35 @@ run_in_background: true
 
 ## Silence detection (10-minute threshold)
 
-If the Monitor has emitted **zero events for 10 minutes**, assume it is silent and read the
-backup file:
+If the Monitor has emitted **zero events for 10 minutes**, assume it is silent. Read the backup
+file — the script prints its path on startup (`BACKUP_FILE=...`); if you missed it, use
+`ls -t /tmp/monitor-backup-*.txt | head -1` to find the newest one:
 
 ```bash
-cat /tmp/monitor-backup-*.txt  # read the PID-scoped backup file
+cat /tmp/monitor-backup-<pid>.txt  # replace <pid> with the backup poll's PID
 ```
 
 10 minutes bounds the wait to ≤15 minutes (10 min detection + 5 min recovery) while avoiding
 false alarms during slow CI (5-8 minutes per job). See RETRO-2026-05-16-07 for the incident
 that established this threshold.
 
+**Why backup-poll instead of retry-with-timeout:** A timeout on the Monitor process only
+detects total silence. The backup poll surfaces current PR state independently — it works for
+partial delivery degradation too (some events arrive, the terminal event is dropped). Retry
+would just re-run the same Monitor with the same failure modes.
+
 **Recovery action:**
 
-1. Read `/tmp/monitor-backup-<pid>.txt` — the backup poll should have current state.
-2. If the backup shows all targets are terminal (green/merged/failed): act on that state and
-   kill the monitor process. Do not wait for the Monitor to confirm.
-3. If the backup file is stale or missing: surface to the user with the last known state and
-   the monitor's silence duration. Do not merge silently.
-4. Log the discrepancy: `echo "Monitor silent for >10m at $(date -u '+%Y-%m-%dT%H:%M:%SZ')" >> /tmp/monitor-silence.log`
+1. Read the backup file — the backup poll should have current state.
+2. If the backup shows all targets are **green/merged**: proceed with the originally planned
+   action (merge, release, etc.). Kill the monitor process. Do not wait for Monitor to confirm.
+3. If the backup shows any target is **FAILED**: surface to the user immediately with the
+   specific PR numbers and failure state. Do not proceed with the merge/release. The backup
+   poll's `2>/dev/null || echo "PR#$pr ERROR"` distinguishes network errors from actual CI
+   failures — treat `ERROR` as unknown (surface to user), treat `FAILURE` as definitive.
+4. If the backup file is stale (older than 5 minutes) or missing: surface to the user with
+   the last known state and the monitor's silence duration. Do not merge silently.
+5. Log the discrepancy: `echo "Monitor silent for >10m at $(date -u '+%Y-%m-%dT%H:%M:%SZ')" >> /tmp/monitor-silence.log`
 
 ## Anti-patterns
 
