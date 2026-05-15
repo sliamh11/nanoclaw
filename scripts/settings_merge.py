@@ -1,10 +1,16 @@
 #!/usr/bin/env python3
 """
-Locked read-merge-write for ~/.claude/settings.json.
+Locked read-write primitives for ~/.claude/settings.json.
 
-Acquires an exclusive flock, reads the current file, deep-merges changes
-(hooks and permission arrays are appended with dedup, never replaced),
-and writes atomically via a temp file + os.replace.
+Two public functions share the same flock + atomic-temp-replace machinery:
+
+* merge_settings(path, changes) — deep-merges changes into the current JSON.
+  Hooks and permission arrays are appended with dedup, never replaced.
+  Use for additive concurrent writes (e.g. hook installers).
+
+* rewrite_settings(path, transform_fn) — calls transform_fn(current) and
+  writes the result verbatim (no merging).  Arrays are replaced, not appended.
+  Use when you need to rewrite existing values in place (e.g. path renaming).
 """
 
 from __future__ import annotations
@@ -16,7 +22,7 @@ import sys
 import tempfile
 import threading
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 _DEFAULT_PATH = Path("~/.claude/settings.json").expanduser()
 # flock is per-process; this lock serializes threads within the same process.
@@ -70,8 +76,16 @@ def _deep_merge(
     return result
 
 
-def merge_settings(path: Path, changes: dict[str, Any]) -> dict[str, Any]:
-    """Acquire flock, read current JSON, deep-merge changes, atomic write."""
+def _locked_read_write(
+    path: Path,
+    compute: Callable[[dict[str, Any]], dict[str, Any]],
+) -> dict[str, Any]:
+    """Acquire flock, read current JSON, apply compute(), atomic write.
+
+    Internal shared primitive used by merge_settings and rewrite_settings.
+    compute receives the current dict (empty if file absent/empty) and must
+    return the dict to be written back.
+    """
     if sys.platform == "win32":
         raise NotImplementedError("settings_merge requires fcntl (macOS/Linux)")
 
@@ -93,9 +107,9 @@ def merge_settings(path: Path, changes: dict[str, Any]) -> dict[str, Any]:
             if raw.strip():
                 current = json.loads(raw)
 
-            merged = _deep_merge(current, changes)
+            result = compute(current)
 
-            text = json.dumps(merged, indent=2, ensure_ascii=False) + "\n"
+            text = json.dumps(result, indent=2, ensure_ascii=False) + "\n"
             tmp_path: Path | None = None
             try:
                 with tempfile.NamedTemporaryFile(
@@ -112,16 +126,99 @@ def merge_settings(path: Path, changes: dict[str, Any]) -> dict[str, Any]:
         finally:
             os.close(fd)
 
-    return merged
+    return result
+
+
+def merge_settings(path: Path, changes: dict[str, Any]) -> dict[str, Any]:
+    """Acquire flock, read current JSON, deep-merge changes, atomic write.
+
+    Hooks and permission arrays are appended with dedup, never replaced.
+    Use for additive concurrent writes (e.g. hook installers).
+    """
+    return _locked_read_write(path, lambda current: _deep_merge(current, changes))
+
+
+def rewrite_settings(
+    path: Path,
+    transform_fn: Callable[[dict[str, Any]], dict[str, Any]],
+) -> dict[str, Any]:
+    """Acquire flock, read current JSON, apply transform_fn(), atomic write.
+
+    Unlike merge_settings, the result of transform_fn is written verbatim —
+    arrays are replaced, not appended.  Use when you need to rewrite existing
+    values in place (e.g. substituting old paths with new paths after a rename).
+
+    transform_fn receives the current dict and must return the new dict to
+    write.  If it raises, the file is left untouched.
+    """
+    return _locked_read_write(path, transform_fn)
 
 
 if __name__ == "__main__":
     import argparse
 
-    parser = argparse.ArgumentParser(description="Merge changes into settings.json")
-    parser.add_argument("--path", type=Path, default=_DEFAULT_PATH)
+    parser = argparse.ArgumentParser(description="Read-lock-write helpers for settings.json")
+    parser.add_argument("--path", type=Path, default=_DEFAULT_PATH,
+                        help="Path to settings.json (default: ~/.claude/settings.json)")
+    sub = parser.add_subparsers(dest="cmd")
+
+    # python3 settings_merge.py [--path <p>] merge   — reads JSON changes from stdin
+    sub.add_parser("merge", help="Deep-merge JSON from stdin into settings.json")
+
+    # python3 settings_merge.py [--path <p>] rewrite — substitutes strings via env vars
+    #
+    # For shell callers: pass substitution pairs via environment variables:
+    #   SETTINGS_SUBST_0_OLD=<old>  SETTINGS_SUBST_0_NEW=<new>
+    #   SETTINGS_SUBST_1_OLD=<old>  SETTINGS_SUBST_1_NEW=<new>  ...
+    #
+    # Substitution is applied to the JSON text, so every string value in the
+    # document (including values inside arrays and nested objects) is updated.
+    # Variables are passed through the environment rather than interpolated into
+    # Python source so that paths containing special characters are handled safely.
+    sub.add_parser(
+        "rewrite",
+        help="Rewrite settings.json by substituting string values. "
+             "Reads substitution pairs from env vars "
+             "SETTINGS_SUBST_<N>_OLD / SETTINGS_SUBST_<N>_NEW (N=0,1,...).",
+    )
+
     args = parser.parse_args()
 
-    changes = json.load(sys.stdin)
-    result = merge_settings(args.path, changes)
-    print(json.dumps(result, indent=2))
+    if args.cmd == "merge" or args.cmd is None:
+        # Legacy behaviour: read JSON changes from stdin, deep-merge.
+        changes = json.load(sys.stdin)
+        result = merge_settings(args.path, changes)
+        print(json.dumps(result, indent=2))
+
+    elif args.cmd == "rewrite":
+        # Collect substitution pairs from env: SETTINGS_SUBST_0_OLD / SETTINGS_SUBST_0_NEW …
+        pairs: list[tuple[str, str]] = []
+        i = 0
+        while True:
+            old = os.environ.get(f"SETTINGS_SUBST_{i}_OLD")
+            new = os.environ.get(f"SETTINGS_SUBST_{i}_NEW")
+            if old is None and new is None:
+                break
+            if old is None or new is None:
+                sys.exit(
+                    f"Error: SETTINGS_SUBST_{i}_OLD and SETTINGS_SUBST_{i}_NEW "
+                    "must both be set."
+                )
+            pairs.append((old, new))
+            i += 1
+
+        if not pairs:
+            sys.exit(
+                "Error: no substitution pairs found. "
+                "Set SETTINGS_SUBST_0_OLD / SETTINGS_SUBST_0_NEW (and _1_, _2_, …)."
+            )
+
+        def _subst_transform(data: dict[str, Any]) -> dict[str, Any]:
+            """Apply all substitution pairs to the JSON-encoded document."""
+            text = json.dumps(data, ensure_ascii=False)
+            for old, new in pairs:
+                text = text.replace(old, new)
+            return json.loads(text)  # type: ignore[return-value]
+
+        result = rewrite_settings(args.path, _subst_transform)
+        print(json.dumps(result, indent=2))
