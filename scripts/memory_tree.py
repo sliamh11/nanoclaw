@@ -1344,6 +1344,19 @@ def retrieve(
             for (other_id,) in forward + backward:
                 if other_id in expanded:
                     continue
+                # `exclude_kinds` must apply to graph-expansion neighbors too.
+                # `node_lookup` is the union of all nodes that already passed
+                # both filters above: orphan-exclusion (L1230 SQL `WHERE
+                # orphaned_at IS NULL`) AND kind-exclusion (L1236 Python
+                # check). A neighbor's `other_id` not being in `node_lookup`
+                # therefore means it's either orphaned OR has an excluded
+                # kind — skip both at the loop top to keep the contract
+                # uniform across phases. Without this guard `see_also` /
+                # `alias_of` edges silently re-inject excluded-kind atoms
+                # (e.g. `kind: standard` neighbors of methodology seeds,
+                # surfaced empirically in M4-prereq #417).
+                if other_id not in node_lookup:
+                    continue
                 nrow = db.execute(
                     "SELECT path, title FROM nodes WHERE id = ? AND orphaned_at IS NULL",
                     (other_id,),

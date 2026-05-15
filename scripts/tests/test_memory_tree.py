@@ -1788,6 +1788,67 @@ class TestAtomKind:
         assert "ek_know" in returned_ids
         assert "ek_std" not in returned_ids
 
+    def test_retrieve_excludes_standard_atoms_through_see_also_expansion(
+        self, tmp_db, stub_embed,
+    ):
+        """Graph expansion must honor `exclude_kinds`.
+
+        Regression test for the M4-prereq #417 finding: a methodology-kind
+        seed atom with a `see_also` edge to a `kind: standard` neighbor
+        would silently re-inject the standard atom into top-K results when
+        callers passed `exclude_kinds={"standard"}`. The cosine filter at
+        line 1236 protected Phase 1, but Phase 2 graph expansion
+        (memory_tree.py:1326-1369) was unfiltered.
+        """
+        # Methodology-kind seed atom — the cosine match target.
+        mt.upsert_node(
+            tmp_db,
+            node_id="seek_meth",
+            path="atoms/methodology.md",
+            title="Methodology Seed",
+            description="rules about workflow methodology for development tasks",
+            level=0,
+            node_type="atom",
+            embedding=stub_embed("rules about workflow methodology for development tasks"),
+            content_hash_val="h_seek_meth",
+            atom_kind="knowledge",  # non-standard, eligible under default filter
+        )
+        # Standard-kind neighbor reachable via `see_also` — must NOT leak.
+        mt.upsert_node(
+            tmp_db,
+            node_id="seek_std",
+            path="atoms/standard.md",
+            title="Standard Neighbor",
+            description="unrelated cooking text that would not cosine-match the query",
+            level=0,
+            node_type="atom",
+            embedding=stub_embed("unrelated cooking text that would not cosine-match the query"),
+            content_hash_val="h_seek_std",
+            atom_kind="standard",
+        )
+        mt.upsert_edge(tmp_db, src="seek_meth", dst="seek_std", kind="see_also")
+        # `use_see_also=True` is the retrieve() default. Set explicitly here
+        # so the regression intent is visible: this test fails without the
+        # graph-expansion guard. `low_threshold=0.0` forces Phase 2 to run.
+        result = mt.retrieve(
+            tmp_db, "rules about workflow methodology",
+            k=5,
+            use_see_also=True,
+            low_threshold=0.0,
+            use_abstain=False,
+            use_fts=False,
+            use_approach_angles=False,
+            exclude_kinds={"standard"},
+        )
+        returned_ids = {r["id"] for r in result["results"]}
+        assert "seek_meth" in returned_ids, (
+            "methodology seed should pass the cosine filter and surface"
+        )
+        assert "seek_std" not in returned_ids, (
+            "kind: standard neighbor must not leak through see_also expansion "
+            "when exclude_kinds={'standard'}"
+        )
+
     def test_parse_frontmatter_maps_kind_to_atom_kind(self):
         fm = mt.parse_frontmatter(
             "---\nid: xyz\nkind: standard\ndescription: test\n---\n"
