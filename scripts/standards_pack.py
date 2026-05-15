@@ -29,8 +29,10 @@ def _default_auto_mem_dir() -> Path:
         candidate = Path(os.path.expanduser(f"~/.claude/projects/{encoded}/memory"))
         if candidate.is_dir():
             return candidate
-    # 3. Legacy literal default — same path memory_indexer.py:4172 hardcodes.
-    legacy = Path(os.path.expanduser("~/.claude/projects/-Users-liam10play-deus/memory"))
+    # 3. Derive from this script's filesystem location (repo_root/scripts/standards_pack.py).
+    repo_root = Path(__file__).resolve().parent.parent
+    encoded = repo_root.as_posix().replace("/", "-")
+    legacy = Path(os.path.expanduser(f"~/.claude/projects/{encoded}/memory"))
     if legacy.is_dir():
         return legacy
     # 4. Final fallback (will trigger fail-loud warning in load_standards).
