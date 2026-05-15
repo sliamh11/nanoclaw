@@ -46,7 +46,14 @@ CACHE_PATH = Path(os.environ.get(
     os.path.expanduser("~/.deus/standards_pack_cache.json"),
 ))
 
-TOKEN_BUDGET = int(os.environ.get("DEUS_STANDARDS_TOKEN_BUDGET", "800"))
+# Cap on the total tokens of `kind: standard` atom one-liners injected as
+# always-on context at SessionStart. On overrun, atoms are dropped in
+# directory-sort order and a stderr WARN is emitted — silent drops have
+# historically lost non-negotiable methodology rules.
+#
+# Not to be confused with `memory_tree.py:ROOT_TOKEN_BUDGET` — that caps
+# MEMORY_TREE.md size for the navigation root, a different system.
+TOKEN_BUDGET = int(os.environ.get("DEUS_STANDARDS_TOKEN_BUDGET", "1200"))
 
 _FM_RE = re.compile(r"^---\s*\n(.*?\n)---\s*\n", re.DOTALL)
 
@@ -121,13 +128,37 @@ def load_standards(auto_mem_dir: Path | None = None, token_budget: int = TOKEN_B
         if name:
             atoms.append((name, desc))
 
-    for name, desc in atoms:
+    dropped: list[str] = []
+    dropped_tokens = 0
+    truncated_at: int | None = None
+    for idx, (name, desc) in enumerate(atoms):
         oneliner = f"- {name}: {desc}" if desc else f"- {name}"
         cost = _token_estimate(oneliner)
         if total_tokens + cost > token_budget:
+            truncated_at = idx
             break
         lines.append(oneliner)
         total_tokens += cost
+
+    if truncated_at is not None:
+        # Collect every atom that didn't make it in (not just the first overrun).
+        # Second pass over the already-built `atoms` list keeps the include set
+        # exactly what the original first-fit loop produced — we only iterate
+        # past the cutoff to report names.
+        for name, desc in atoms[truncated_at:]:
+            oneliner = f"- {name}: {desc}" if desc else f"- {name}"
+            dropped.append(name)
+            dropped_tokens += _token_estimate(oneliner)
+        # Fail-loud: silent drops previously hid the loss of non-negotiable
+        # methodology rules (e.g. `feedback_warden_loop`). Emit to stderr so
+        # the hook output stays JSON-clean on stdout.
+        print(
+            f"[standards_pack] WARN: budget exceeded — dropped {len(dropped)} atom(s) "
+            f"totalling {dropped_tokens} tokens: {', '.join(dropped)}. "
+            f"Raise DEUS_STANDARDS_TOKEN_BUDGET (current: {token_budget}) or "
+            f"reduce atom count.",
+            file=sys.stderr,
+        )
 
     if not lines:
         # Fail-loud: dir exists but no kind=standard atoms found. Likely classification gap.
@@ -154,6 +185,8 @@ def load_standards(auto_mem_dir: Path | None = None, token_budget: int = TOKEN_B
             "context": context,
             "atom_count": len(lines),
             "tokens": total_tokens,
+            "dropped": dropped,
+            "dropped_tokens": dropped_tokens,
         }))
     except OSError:
         pass

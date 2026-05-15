@@ -1834,3 +1834,52 @@ class TestStandardsPack:
         assert result != ""
         lines = [l for l in result.split("\n") if l.startswith("- ")]
         assert len(lines) < 20
+
+    def test_load_standards_warns_and_records_on_truncation(
+        self, tmp_path: Path, capsys, monkeypatch
+    ):
+        """Fail-loud on budget overrun. Cache records dropped atoms + over-by tokens."""
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+        import standards_pack as sp
+
+        # Isolated cache path so we don't clobber the user's real cache.
+        cache_file = tmp_path / "cache.json"
+        monkeypatch.setattr(sp, "CACHE_PATH", cache_file)
+
+        for i in range(20):
+            (tmp_path / f"atom{i:02d}.md").write_text(
+                f"---\nname: Rule {i}\ndescription: {'word ' * 50}\nkind: standard\n---\n"
+            )
+        sp.load_standards(tmp_path, token_budget=100)
+
+        captured = capsys.readouterr()
+        assert "budget exceeded" in captured.err
+        assert "dropped" in captured.err.lower()
+        assert "totalling" in captured.err
+
+        cache = json.loads(cache_file.read_text())
+        assert isinstance(cache.get("dropped"), list)
+        assert len(cache["dropped"]) > 0
+        assert cache["dropped_tokens"] > 0
+
+    def test_load_standards_no_warn_when_under_budget(
+        self, tmp_path: Path, capsys, monkeypatch
+    ):
+        """No stderr noise + empty `dropped` field when everything fits."""
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+        import standards_pack as sp
+
+        cache_file = tmp_path / "cache.json"
+        monkeypatch.setattr(sp, "CACHE_PATH", cache_file)
+
+        (tmp_path / "atom1.md").write_text(
+            "---\nname: Rule One\ndescription: short\nkind: standard\n---\n"
+        )
+        sp.load_standards(tmp_path, token_budget=10_000)
+
+        captured = capsys.readouterr()
+        assert "budget exceeded" not in captured.err
+
+        cache = json.loads(cache_file.read_text())
+        assert cache["dropped"] == []
+        assert cache["dropped_tokens"] == 0

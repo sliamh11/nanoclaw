@@ -77,6 +77,11 @@ DEFAULT_LOW_THRESHOLD = float(os.environ.get("DEUS_TREE_LOW", str(_DEFAULTS["low
 DEFAULT_ABSTAIN_THRESHOLD = float(os.environ.get("DEUS_TREE_ABSTAIN", str(_DEFAULTS["abstain"])))
 DEFAULT_TOP_K = 5
 NEIGHBOR_HOPS = 1
+# Cap on the size of MEMORY_TREE.md (the navigation root of the vault).
+# Enforced by the `check` CLI verifier only — overrun reports a check failure,
+# it does not truncate at runtime. Different system from
+# `standards_pack.py:TOKEN_BUDGET`, which caps the always-on atom one-liner
+# pack injected at SessionStart.
 ROOT_TOKEN_BUDGET = 800  # MEMORY_TREE.md cold-start cap
 
 NODE_TYPES_TRACKED = {"memory-tree-root", "persona-index", "persona-node", "project-node", "infra-node",
