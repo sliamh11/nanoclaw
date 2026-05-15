@@ -1191,3 +1191,152 @@ def test_mark_verified_creates_marker(tmp_path):
 
     verdicts = json.loads((repo / ".claude" / ".warden-verdicts.json").read_text())
     assert verdicts["verification-gate"]["verdict"] == "SHIP"
+
+
+# ── _sync_atom_kinds_on_init tests ────────────────────────────────────────────
+
+def test_sync_atom_kinds_on_init_skips_when_env_unset(tmp_path, monkeypatch):
+    """No subprocess is spawned when DEUS_AUTO_MEMORY_DIR is unset."""
+    hooks = load_hooks()
+    repo = git_repo(tmp_path)
+    monkeypatch.delenv("DEUS_AUTO_MEMORY_DIR", raising=False)
+
+    calls = []
+
+    def fake_run(*args, **kwargs):
+        calls.append(args)
+        raise AssertionError("subprocess.run should not be called")
+
+    monkeypatch.setattr(hooks.subprocess, "run", fake_run)
+    hooks._sync_atom_kinds_on_init(repo)
+
+    assert calls == []
+
+
+def test_sync_atom_kinds_on_init_skips_when_script_missing(tmp_path, monkeypatch):
+    """No subprocess is spawned when memory_tree.py does not exist in repo."""
+    hooks = load_hooks()
+    repo = git_repo(tmp_path)
+    # Point to a real dir but with no memory_tree.py script
+    monkeypatch.setenv("DEUS_AUTO_MEMORY_DIR", str(tmp_path / "atoms"))
+    # Ensure repo has no scripts/memory_tree.py
+    # (git_repo creates a bare repo in tmp_path/repo — no scripts dir)
+
+    calls = []
+
+    def fake_run(*args, **kwargs):
+        calls.append(args)
+        raise AssertionError("subprocess.run should not be called")
+
+    monkeypatch.setattr(hooks.subprocess, "run", fake_run)
+    hooks._sync_atom_kinds_on_init(repo)
+
+    assert calls == []
+
+
+def test_sync_atom_kinds_on_init_skips_when_db_missing(tmp_path, monkeypatch):
+    """No subprocess is spawned when the DB file does not yet exist."""
+    hooks = load_hooks()
+    repo = git_repo(tmp_path)
+
+    # Create a fake memory_tree.py so the script-existence check passes
+    scripts_dir = repo / "scripts"
+    scripts_dir.mkdir()
+    (scripts_dir / "memory_tree.py").write_text("# stub")
+
+    atoms_dir = tmp_path / "atoms"
+    atoms_dir.mkdir()
+    monkeypatch.setenv("DEUS_AUTO_MEMORY_DIR", str(atoms_dir))
+    # Point DB to a path that does not exist
+    monkeypatch.setenv("DEUS_MEMORY_TREE_DB", str(tmp_path / "nonexistent.db"))
+
+    calls = []
+
+    def fake_run(*args, **kwargs):
+        calls.append(args)
+        raise AssertionError("subprocess.run should not be called")
+
+    monkeypatch.setattr(hooks.subprocess, "run", fake_run)
+    hooks._sync_atom_kinds_on_init(repo)
+
+    assert calls == []
+
+
+def test_sync_atom_kinds_on_init_reports_fixed_atoms(tmp_path, monkeypatch, capsys):
+    """Stderr message emitted when sync reports stale atoms were fixed."""
+    hooks = load_hooks()
+    repo = git_repo(tmp_path)
+
+    scripts_dir = repo / "scripts"
+    scripts_dir.mkdir()
+    (scripts_dir / "memory_tree.py").write_text("# stub")
+
+    atoms_dir = tmp_path / "atoms"
+    atoms_dir.mkdir()
+    db_path = tmp_path / "memory_tree.db"
+    db_path.touch()
+
+    monkeypatch.setenv("DEUS_AUTO_MEMORY_DIR", str(atoms_dir))
+    monkeypatch.setenv("DEUS_MEMORY_TREE_DB", str(db_path))
+
+    fake_output = json.dumps({
+        "fixed": [["stale_atom.md", "knowledge", "standard"]],
+        "unchanged": 5,
+        "missing_in_db": [],
+        "no_kind_in_file": [],
+        "read_errors": [],
+    })
+
+    class FakeResult:
+        returncode = 0
+        stdout = fake_output
+        stderr = ""
+
+    monkeypatch.setattr(hooks.subprocess, "run", lambda *a, **kw: FakeResult())
+    hooks._sync_atom_kinds_on_init(repo)
+
+    captured = capsys.readouterr()
+    assert "stale_atom.md" in captured.err
+    assert "1" in captured.err
+
+
+def test_sync_atom_kinds_on_init_silent_on_subprocess_error(tmp_path, monkeypatch, capsys):
+    """Subprocess failure is caught; stderr warning emitted; no exception raised."""
+    hooks = load_hooks()
+    repo = git_repo(tmp_path)
+
+    scripts_dir = repo / "scripts"
+    scripts_dir.mkdir()
+    (scripts_dir / "memory_tree.py").write_text("# stub")
+
+    atoms_dir = tmp_path / "atoms"
+    atoms_dir.mkdir()
+    db_path = tmp_path / "memory_tree.db"
+    db_path.touch()
+
+    monkeypatch.setenv("DEUS_AUTO_MEMORY_DIR", str(atoms_dir))
+    monkeypatch.setenv("DEUS_MEMORY_TREE_DB", str(db_path))
+
+    def broken_run(*args, **kwargs):
+        raise OSError("no such file")
+
+    monkeypatch.setattr(hooks.subprocess, "run", broken_run)
+    # Must not raise
+    hooks._sync_atom_kinds_on_init(repo)
+
+    captured = capsys.readouterr()
+    assert "sync-atom-kinds failed" in captured.err
+
+
+def test_run_session_init_still_clears_markers_with_sync(tmp_path, monkeypatch):
+    """run_session_init returns 0 and clears markers even when sync runs."""
+    hooks = load_hooks()
+    repo = git_repo(tmp_path)
+    marker = repo / ".claude" / ".plan-reviewed"
+    marker.touch()
+
+    # Disable sync by leaving DEUS_AUTO_MEMORY_DIR unset
+    monkeypatch.delenv("DEUS_AUTO_MEMORY_DIR", raising=False)
+
+    assert hooks.run_session_init(repo) == 0
+    assert not marker.exists()

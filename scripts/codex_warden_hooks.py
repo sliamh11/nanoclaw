@@ -406,6 +406,70 @@ def approve_admin_merge(command: str, repo_root: Path) -> int:
     return 0
 
 
+def _sync_atom_kinds_on_init(repo_root: Path) -> None:
+    """Best-effort sync of DB atom_kind from on-disk frontmatter.
+
+    Runs ``memory_tree.py sync-atom-kinds`` at SessionStart so that any
+    kind-field mutations made outside the current session (e.g. via
+    ``migrate_atom_tiers.py --apply`` or direct frontmatter edits) are
+    propagated to the DB before the first retrieval.  Failures are logged
+    to stderr and never block startup — the sync is opportunistic.
+
+    Skips silently when:
+    - ``DEUS_AUTO_MEMORY_DIR`` is unset (memory layer not configured)
+    - the ``memory_tree.py`` script is absent (optional dependency)
+    - the DB file does not yet exist (first-run / cold environment)
+    """
+    ext_dir = os.environ.get("DEUS_AUTO_MEMORY_DIR")
+    if not ext_dir:
+        return
+
+    tree = repo_root / "scripts" / "memory_tree.py"
+    if not tree.exists():
+        return
+
+    db_path = Path(
+        os.environ.get("DEUS_MEMORY_TREE_DB", "~/.deus/memory_tree.db")
+    ).expanduser()
+    if not db_path.exists():
+        return
+
+    try:
+        result = subprocess.run(
+            [sys.executable, str(tree), "sync-atom-kinds", "--json"],
+            cwd=repo_root,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=10,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        print(f"[session-init] sync-atom-kinds failed: {exc}", file=sys.stderr)
+        return
+
+    if result.returncode != 0:
+        print(
+            f"[session-init] sync-atom-kinds exited {result.returncode}: "
+            f"{result.stderr.strip()}",
+            file=sys.stderr,
+        )
+        return
+
+    try:
+        data = json.loads(result.stdout)
+    except (json.JSONDecodeError, ValueError):
+        return
+
+    fixed = data.get("fixed", [])
+    if fixed:
+        print(
+            f"[session-init] sync-atom-kinds: reconciled {len(fixed)} stale atom_kind "
+            f"value(s) — {', '.join(name for name, *_ in fixed)}",
+            file=sys.stderr,
+        )
+
+
 def run_session_init(repo_root: Path) -> int:
     for name in (
         ".plan-reviewed",
@@ -415,6 +479,7 @@ def run_session_init(repo_root: Path) -> int:
         ".admin-merge-approved",
     ):
         _marker(repo_root, name).unlink(missing_ok=True)
+    _sync_atom_kinds_on_init(repo_root)
     return 0
 
 
