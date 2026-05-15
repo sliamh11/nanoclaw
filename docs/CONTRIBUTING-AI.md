@@ -8,7 +8,8 @@ These rules apply to any AI agent (Claude Code, Deus, or other) developing in th
 2. Branch naming: `feat/...`, `fix/...`, `docs/...`, `refactor/...`, `chore/...`, `ci/...`, `test/...`, `perf/...`
 3. Verify the working tree is clean before creating a branch (`git status`).
 4. After implementation: run `npm run build` and `npm test`. Both must pass before committing.
-5. Create a PR targeting `main`. Wait for CI to pass before requesting merge.
+5. Before pushing, run `npm run drift-check` to catch pattern drift early. The `pre-push` hook (`.husky/pre-push`) runs this automatically against the merge-base of your branch and `origin/main`.
+6. Create a PR targeting `main`. Wait for CI to pass before requesting merge.
 
 ## PR Scope and Squashing
 
