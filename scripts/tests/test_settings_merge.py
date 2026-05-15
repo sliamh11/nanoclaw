@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import subprocess
 import sys
 import threading
 from pathlib import Path
+from typing import Any
 from unittest.mock import patch
 
 import pytest
@@ -180,3 +182,103 @@ def test_atomic_write_crash_leaves_file_consistent(tmp_path):
     assert settings.read_text(encoding="utf-8") == original_text
     temps = list(tmp_path.glob("settings_merge_*"))
     assert not temps, f"orphaned temp files: {temps}"
+
+
+# ── rewrite_settings unit tests ──────────────────────────────────────────────
+
+
+def test_rewrite_basic_transform(tmp_path):
+    """rewrite_settings applies transform verbatim and persists the result."""
+    settings = tmp_path / "s.json"
+    _write_settings(settings, {"model": "opus", "env": {"PATH": "/old/dir/bin"}})
+
+    def swap_model(data: dict[str, Any]) -> dict[str, Any]:
+        data["model"] = "sonnet"
+        return data
+
+    result = SM.rewrite_settings(settings, swap_model)
+
+    assert result["model"] == "sonnet"
+    assert result["env"] == {"PATH": "/old/dir/bin"}
+    assert _read_settings(settings) == result
+
+
+def test_rewrite_replaces_arrays_not_appends(tmp_path):
+    """rewrite_settings replaces hook arrays instead of appending like merge_settings."""
+    settings = tmp_path / "s.json"
+    old_hook = {"type": "command", "command": "python3 /old/path/hook.py"}
+    _write_settings(settings, {"hooks": {"Stop": [old_hook]}})
+
+    def substitute_path(data: dict[str, Any]) -> dict[str, Any]:
+        # Simulate path substitution: replace /old/path with /new/path throughout
+        text = json.dumps(data, ensure_ascii=False)
+        text = text.replace("/old/path", "/new/path")
+        return json.loads(text)
+
+    result = SM.rewrite_settings(settings, substitute_path)
+
+    stop_hooks = result["hooks"]["Stop"]
+    # Must have exactly one entry — the rewritten one, not old+new appended
+    assert len(stop_hooks) == 1
+    assert stop_hooks[0]["command"] == "python3 /new/path/hook.py"
+    # Original path must not appear
+    assert "/old/path" not in json.dumps(result)
+
+
+def test_rewrite_crash_leaves_file_consistent(tmp_path):
+    """rewrite_settings leaves the file untouched if os.replace fails."""
+    settings = tmp_path / "s.json"
+    original = {"model": "opus", "hooks": {"Stop": []}}
+    _write_settings(settings, original)
+
+    original_text = settings.read_text(encoding="utf-8")
+
+    with patch.object(SM.os, "replace", side_effect=OSError("simulated crash")):
+        with pytest.raises(OSError, match="simulated crash"):
+            SM.rewrite_settings(settings, lambda d: {**d, "model": "sonnet"})
+
+    assert settings.read_text(encoding="utf-8") == original_text
+    temps = list(tmp_path.glob("settings_merge_*"))
+    assert not temps, f"orphaned temp files: {temps}"
+
+
+# ── rewrite CLI integration test ─────────────────────────────────────────────
+
+
+def test_rewrite_cli_env_substitution(tmp_path):
+    """End-to-end: env-var-driven CLI path applies substitutions via subprocess."""
+    settings = tmp_path / "s.json"
+    _write_settings(settings, {
+        "model": "opus",
+        "hooks": {
+            "Stop": [{"type": "command", "command": "python3 /Users/alice/nanoclaw/hook.py"}]
+        },
+        "permissions": {
+            "allow": ["Read(/Users/alice/nanoclaw/*)"]
+        },
+    })
+
+    import os as _os
+    env = {
+        **_os.environ,
+        "SETTINGS_SUBST_0_OLD": "/Users/alice/nanoclaw",
+        "SETTINGS_SUBST_0_NEW": "/Users/alice/deus",
+    }
+
+    proc = subprocess.run(
+        [sys.executable, str(SCRIPT), "--path", str(settings), "rewrite"],
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+
+    assert proc.returncode == 0, f"CLI failed: {proc.stderr}"
+
+    final = _read_settings(settings)
+    # Original path must be fully replaced
+    assert "/Users/alice/nanoclaw" not in json.dumps(final)
+    # New path must appear in all relevant values
+    assert final["hooks"]["Stop"][0]["command"] == "python3 /Users/alice/deus/hook.py"
+    assert final["permissions"]["allow"] == ["Read(/Users/alice/deus/*)"]
+    # Non-path fields unchanged
+    assert final["model"] == "opus"
