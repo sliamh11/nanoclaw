@@ -3,10 +3,14 @@
 
 Scans auto-memory atoms for kind=standard, formats them as condensed
 one-liners, and emits as additionalContext with directive framing.
-Cached by directory mtime to avoid re-scanning 130+ files on every session.
+Cached by content-hash signature (SHA-256 over all .md files in the
+auto-memory dir) so frontmatter edits invalidate the cache. Directory
+mtime is unreliable because POSIX `stat.st_mtime` does not update on
+file-content changes of existing directory members on macOS or ext4.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -86,11 +90,25 @@ def _token_estimate(text: str) -> int:
     return int(len(text.split()) * 1.3)
 
 
-def _dir_mtime(d: Path) -> float:
-    try:
-        return d.stat().st_mtime
-    except OSError:
-        return 0.0
+def _content_signature(d: Path) -> str:
+    """SHA-256 over every .md file's name + bytes, in sorted order.
+
+    Cost: ~3-5ms over ~140 atom files at ~5KB avg on Apple Silicon.
+    Rationale for hashing content (vs. cheaper mtime) is in the module
+    docstring.
+    """
+    h = hashlib.sha256()
+    for f in sorted(d.glob("*.md")):
+        h.update(f.name.encode("utf-8"))
+        h.update(b"\x00")
+        try:
+            h.update(f.read_bytes())
+        except OSError:
+            # File vanished mid-scan — skip silently. Next call will
+            # see a consistent post-vanish state and rebuild from that.
+            continue
+        h.update(b"\x00")
+    return h.hexdigest()
 
 
 def load_standards(auto_mem_dir: Path | None = None, token_budget: int = TOKEN_BUDGET) -> str:
@@ -106,11 +124,13 @@ def load_standards(auto_mem_dir: Path | None = None, token_budget: int = TOKEN_B
         )
         return ""
 
-    mtime = _dir_mtime(d)
+    sig = _content_signature(d)
     if CACHE_PATH.exists():
         try:
             cached = json.loads(CACHE_PATH.read_text())
-            if cached.get("mtime") == mtime and cached.get("budget") == token_budget:
+            # Pre-M0.5 caches stored "mtime" instead of "signature"; the
+            # missing-key compare returns None != sig and rebuilds cleanly.
+            if cached.get("signature") == sig and cached.get("budget") == token_budget:
                 return cached.get("context", "")
         except (json.JSONDecodeError, OSError):
             pass
@@ -180,7 +200,7 @@ def load_standards(auto_mem_dir: Path | None = None, token_budget: int = TOKEN_B
     try:
         CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
         CACHE_PATH.write_text(json.dumps({
-            "mtime": mtime,
+            "signature": sig,
             "budget": token_budget,
             "context": context,
             "atom_count": len(lines),

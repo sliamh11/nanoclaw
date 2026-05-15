@@ -1883,3 +1883,35 @@ class TestStandardsPack:
         cache = json.loads(cache_file.read_text())
         assert cache["dropped"] == []
         assert cache["dropped_tokens"] == 0
+
+    def test_load_standards_cache_invalidates_on_content_edit(
+        self, tmp_path: Path, monkeypatch
+    ):
+        """Content edit (no create/delete) must invalidate the cache.
+
+        Regression test for the macOS/ext4 mtime bug surfaced post-PR #413:
+        directory `st_mtime` does not update on content changes of existing
+        files, so a cache key based on `_dir_mtime` returned stale results
+        when atoms were edited in place (e.g., adding a `priority:` field
+        via `sed -i` for M2).
+        """
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+        import standards_pack as sp
+
+        cache_file = tmp_path / "cache.json"
+        monkeypatch.setattr(sp, "CACHE_PATH", cache_file)
+
+        atom = tmp_path / "atom1.md"
+        atom.write_text(
+            "---\nname: Rule One\ndescription: First version\nkind: standard\n---\n"
+        )
+        first = sp.load_standards(tmp_path, token_budget=10_000)
+        assert "First version" in first
+
+        # Edit the same file in place — no create/delete in the directory.
+        atom.write_text(
+            "---\nname: Rule One\ndescription: Second version\nkind: standard\n---\n"
+        )
+        second = sp.load_standards(tmp_path, token_budget=10_000)
+        assert "Second version" in second
+        assert "First version" not in second
