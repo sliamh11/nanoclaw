@@ -1915,3 +1915,127 @@ class TestStandardsPack:
         second = sp.load_standards(tmp_path, token_budget=10_000)
         assert "Second version" in second
         assert "First version" not in second
+
+    def test_priority_high_wins_over_alphabetical_under_budget_pressure(
+        self, tmp_path: Path, capsys, monkeypatch
+    ):
+        """`priority: high` atom is packed first even when its filename sorts last.
+
+        Under budget pressure that admits only one atom, the high-priority
+        atom must win over the med-priority one regardless of alphabetical
+        order. This verifies priority sort overrides filename sort within
+        the budget pass.
+        """
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+        import standards_pack as sp
+
+        cache_file = tmp_path / "cache.json"
+        monkeypatch.setattr(sp, "CACHE_PATH", cache_file)
+
+        # a_med.md sorts first alphabetically; z_high.md sorts last.
+        # With alphabetical-only ordering, a_med would win.
+        # Each oneliner is roughly 12 tokens (~9 words × 1.3) so budget=15
+        # admits exactly one and forces the other to drop.
+        (tmp_path / "a_med.md").write_text(
+            "---\nname: MedRule\ndescription: medium priority rule with extra words\n"
+            "kind: standard\n---\n"
+        )
+        (tmp_path / "z_high.md").write_text(
+            "---\nname: HighRule\ndescription: high priority rule with extra words\n"
+            "kind: standard\npriority: high\n---\n"
+        )
+
+        result = sp.load_standards(tmp_path, token_budget=15)
+
+        assert "HighRule" in result, "high-priority atom must be included"
+        assert "MedRule" not in result, "med-priority atom must drop under budget"
+
+        cache = json.loads(cache_file.read_text())
+        # High atom went in; med atom got dropped. No high-priority loss.
+        assert cache["dropped_high"] == [], (
+            f"no high-priority drops expected, got {cache['dropped_high']}"
+        )
+        assert "MedRule" in cache["dropped"]
+
+    def test_priority_high_overflow_critical_warn(
+        self, tmp_path: Path, capsys, monkeypatch
+    ):
+        """CRITICAL stderr + dropped_high cache field when high atom exceeds budget alone.
+
+        Inclusion of `priority: high` is NOT unconditionally guaranteed by
+        design — see docs/decisions/standards-pack-priority.md. When a high
+        atom can't fit, the loudness contract is: ordinary WARN (existing)
+        PLUS additive CRITICAL message naming the lost atoms.
+        """
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+        import standards_pack as sp
+
+        cache_file = tmp_path / "cache.json"
+        monkeypatch.setattr(sp, "CACHE_PATH", cache_file)
+
+        # Two high-priority atoms. The first fits (~10 tokens), the second
+        # exceeds the remaining budget — exercises the dropped-high path
+        # while keeping `lines` non-empty so cache writes.
+        (tmp_path / "a_high.md").write_text(
+            "---\nname: SmallHigh\ndescription: small high priority rule\n"
+            "kind: standard\npriority: high\n---\n"
+        )
+        (tmp_path / "z_huge_high.md").write_text(
+            f"---\nname: HugeHigh\ndescription: {'word ' * 50}\n"
+            "kind: standard\npriority: high\n---\n"
+        )
+        sp.load_standards(tmp_path, token_budget=15)
+
+        captured = capsys.readouterr()
+        assert "budget exceeded" in captured.err, "ordinary WARN must fire"
+        assert "CRITICAL" in captured.err, "CRITICAL must fire on high drop"
+        assert "non-negotiable rules lost" in captured.err
+        assert "HugeHigh" in captured.err
+
+        cache = json.loads(cache_file.read_text())
+        assert cache["dropped_high"] == ["HugeHigh"]
+        assert "HugeHigh" in cache["dropped"]
+        # SmallHigh fit; only HugeHigh dropped.
+        assert "SmallHigh" not in cache["dropped"]
+
+    def test_priority_default_is_med(
+        self, tmp_path: Path, capsys, monkeypatch
+    ):
+        """Atoms without `priority:` field behave as before (filename sort).
+
+        Backward-compatibility test: all atoms in the wild lack the new field
+        until the host-local tagging step runs. Without `priority:`, every
+        atom defaults to med (rank 1) so `(rank, filename)` sort collapses
+        to pure filename order — production parity with pre-M2 behavior.
+        """
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+        import standards_pack as sp
+
+        cache_file = tmp_path / "cache.json"
+        monkeypatch.setattr(sp, "CACHE_PATH", cache_file)
+
+        # Three atoms, no priority field anywhere.
+        (tmp_path / "atom_b.md").write_text(
+            "---\nname: RuleB\ndescription: rule b\nkind: standard\n---\n"
+        )
+        (tmp_path / "atom_a.md").write_text(
+            "---\nname: RuleA\ndescription: rule a\nkind: standard\n---\n"
+        )
+        (tmp_path / "atom_c.md").write_text(
+            "---\nname: RuleC\ndescription: rule c\nkind: standard\n---\n"
+        )
+        result = sp.load_standards(tmp_path, token_budget=10_000)
+
+        captured = capsys.readouterr()
+        # No unknown-priority WARN should fire (the field is absent, not invalid).
+        assert "unknown priority" not in captured.err
+
+        # Order must be alphabetical (atom_a, atom_b, atom_c → RuleA, RuleB, RuleC).
+        # Find the positions of each name in the result.
+        pos_a = result.find("RuleA")
+        pos_b = result.find("RuleB")
+        pos_c = result.find("RuleC")
+        assert pos_a >= 0 and pos_b >= 0 and pos_c >= 0
+        assert pos_a < pos_b < pos_c, (
+            f"expected alphabetical order; positions: A={pos_a} B={pos_b} C={pos_c}"
+        )

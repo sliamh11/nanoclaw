@@ -70,6 +70,35 @@ def _parse_kind(content: str) -> str | None:
     return km.group(1).strip() if km else None
 
 
+# Priority is declarative. `priority: high` requires a citation to
+# .claude/rules/core-behavioral-rules.md per docs/decisions/standards-pack-priority.md.
+_PRIORITY_RANK = {"high": 0, "med": 1, "low": 2}
+
+
+def _parse_priority(content: str, filename: str = "") -> int:
+    """Return priority rank: 0=high, 1=med (default), 2=low.
+
+    Unknown values emit a stderr WARN naming the file and default to med.
+    Atoms without a `priority:` field behave as med (rank 1) — the contract
+    is "explicit declaration, otherwise medium."
+    """
+    m = _FM_RE.match(content)
+    if not m:
+        return _PRIORITY_RANK["med"]
+    pm = re.search(r"^priority:\s*(.+)$", m.group(1), re.MULTILINE)
+    if not pm:
+        return _PRIORITY_RANK["med"]
+    val = pm.group(1).strip().lower()
+    if val in _PRIORITY_RANK:
+        return _PRIORITY_RANK[val]
+    print(
+        f"[standards_pack] WARN: unknown priority '{val}' in {filename} "
+        "— defaulting to 'med'. Expected: high | med | low.",
+        file=sys.stderr,
+    )
+    return _PRIORITY_RANK["med"]
+
+
 def _parse_name_desc(content: str) -> tuple[str, str]:
     m = _FM_RE.match(content)
     if not m:
@@ -138,20 +167,29 @@ def load_standards(auto_mem_dir: Path | None = None, token_budget: int = TOKEN_B
     lines: list[str] = []
     total_tokens = 0
 
-    atoms: list[tuple[str, str]] = []
+    # Tuple shape: (priority_rank, filename, name, desc).
+    # Natural tuple sort orders by (priority_rank, filename) — name/desc are
+    # never compared when rank or filename differ. Priority sort puts `high`
+    # atoms first; alphabetical filename is the stable tiebreaker within tier.
+    atoms: list[tuple[int, str, str, str]] = []
     for f in sorted(d.glob("*.md")):
         content = f.read_text(encoding="utf-8", errors="replace")
         kind = _parse_kind(content)
         if kind != "standard":
             continue
         name, desc = _parse_name_desc(content)
-        if name:
-            atoms.append((name, desc))
+        if not name:
+            continue
+        priority_rank = _parse_priority(content, filename=f.name)
+        atoms.append((priority_rank, f.name, name, desc))
+
+    atoms.sort()
 
     dropped: list[str] = []
+    dropped_high: list[str] = []
     dropped_tokens = 0
     truncated_at: int | None = None
-    for idx, (name, desc) in enumerate(atoms):
+    for idx, (_priority_rank, _filename, name, desc) in enumerate(atoms):
         oneliner = f"- {name}: {desc}" if desc else f"- {name}"
         cost = _token_estimate(oneliner)
         if total_tokens + cost > token_budget:
@@ -163,12 +201,14 @@ def load_standards(auto_mem_dir: Path | None = None, token_budget: int = TOKEN_B
     if truncated_at is not None:
         # Collect every atom that didn't make it in (not just the first overrun).
         # Second pass over the already-built `atoms` list keeps the include set
-        # exactly what the original first-fit loop produced — we only iterate
-        # past the cutoff to report names.
-        for name, desc in atoms[truncated_at:]:
+        # exactly what the first-fit loop produced — we only iterate past the
+        # cutoff to report names.
+        for priority_rank, _filename, name, desc in atoms[truncated_at:]:
             oneliner = f"- {name}: {desc}" if desc else f"- {name}"
             dropped.append(name)
             dropped_tokens += _token_estimate(oneliner)
+            if priority_rank == _PRIORITY_RANK["high"]:
+                dropped_high.append(name)
         # Fail-loud: silent drops previously hid the loss of non-negotiable
         # methodology rules (e.g. `feedback_warden_loop`). Emit to stderr so
         # the hook output stays JSON-clean on stdout.
@@ -179,6 +219,15 @@ def load_standards(auto_mem_dir: Path | None = None, token_budget: int = TOKEN_B
             f"reduce atom count.",
             file=sys.stderr,
         )
+        # Additive CRITICAL emit when high-priority atoms are dropped.
+        # See docs/decisions/standards-pack-priority.md — inclusion is NOT
+        # unconditionally guaranteed; this is the loudness contract on overflow.
+        if dropped_high:
+            print(
+                f"[standards_pack] CRITICAL: priority=high atom(s) dropped — "
+                f"non-negotiable rules lost! Names: {', '.join(dropped_high)}",
+                file=sys.stderr,
+            )
 
     if not lines:
         # Fail-loud: dir exists but no kind=standard atoms found. Likely classification gap.
@@ -207,6 +256,7 @@ def load_standards(auto_mem_dir: Path | None = None, token_budget: int = TOKEN_B
             "tokens": total_tokens,
             "dropped": dropped,
             "dropped_tokens": dropped_tokens,
+            "dropped_high": dropped_high,
         }))
     except OSError:
         pass
