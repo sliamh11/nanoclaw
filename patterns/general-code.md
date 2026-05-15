@@ -90,3 +90,4 @@ These apply regardless of which pattern file was loaded. Every contributor — h
 - Don't skip pre-commit hooks (`--no-verify`)
 - Don't force-push to shared branches
 - Each PR must contain a single logical change; squash fixup commits before merging
+- Before pushing, run `npm run drift-check` to catch pattern drift before CI does. The `pre-push` hook enforces this automatically.
