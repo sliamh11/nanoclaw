@@ -4278,3 +4278,52 @@ def test_entity_overlap_boost_surfaces_entity_atom(mi, fresh_vault, monkeypatch,
     mi.cmd_query("ollama embedding model", top=5)
     output = capsys.readouterr().out
     assert "Ollama" in output
+
+
+# ── promote_atoms: auto-classification via classify_atom ─────────────────────
+
+def _insert_promotable_atom(db, chunk, category="fact", confidence=0.8, corroborations=5):
+    """Insert a DB row that qualifies for promotion."""
+    db.execute(
+        "INSERT INTO entries (path, date, chunk, type, category, confidence, corroborations) "
+        "VALUES (?, ?, ?, 'atom', ?, ?, ?)",
+        ("test.md", "2026-01-01", chunk, category, confidence, corroborations),
+    )
+    db.commit()
+
+
+def test_promote_atoms_default_kind_knowledge(mi, tmp_path):
+    db = mi.open_db()
+    _insert_promotable_atom(db, "Python dict lookup is O(1)")
+    auto_mem = tmp_path / "auto_mem"
+    promoted = mi.promote_atoms(db, auto_mem)
+    assert len(promoted) == 1
+    content = Path(promoted[0]).read_text()
+    assert "kind: knowledge" in content
+    db.close()
+
+
+def test_promote_atoms_classifies_methodology_as_standard(mi, tmp_path):
+    db = mi.open_db()
+    _insert_promotable_atom(
+        db,
+        "Always evaluate execution strategy and verify predictions before testing",
+    )
+    auto_mem = tmp_path / "auto_mem"
+    promoted = mi.promote_atoms(db, auto_mem)
+    assert len(promoted) == 1
+    content = Path(promoted[0]).read_text()
+    assert "kind: standard" in content
+    db.close()
+
+
+def test_promote_atoms_classifier_failure_graceful(mi, tmp_path, monkeypatch):
+    db = mi.open_db()
+    _insert_promotable_atom(db, "Some generic fact about testing")
+    monkeypatch.setitem(sys.modules, "migrate_atom_tiers", None)
+    auto_mem = tmp_path / "auto_mem"
+    promoted = mi.promote_atoms(db, auto_mem)
+    assert len(promoted) == 1
+    content = Path(promoted[0]).read_text()
+    assert "kind: knowledge" in content
+    db.close()

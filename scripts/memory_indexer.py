@@ -3025,6 +3025,19 @@ def promote_atoms(
         )
 
         filepath.write_text(content, encoding="utf-8")
+        # lazy: migrate_atom_tiers is an optional migration script, not a core dep
+        try:
+            from migrate_atom_tiers import classify_atom
+        except ImportError:
+            classify_atom = None  # type: ignore[assignment]
+        if classify_atom is not None:
+            try:
+                classified_kind, _reason = classify_atom(filepath)
+                if classified_kind != "knowledge":
+                    content = content.replace("kind: knowledge\n", f"kind: {classified_kind}\n", 1)
+                    filepath.write_text(content, encoding="utf-8")
+            except Exception as exc:
+                print(f"  WARN: classify_atom failed for {filepath}: {exc}", file=sys.stderr)
         db.execute(
             "UPDATE entries SET promoted_at = ? WHERE id = ?",
             (now, entry_id),
