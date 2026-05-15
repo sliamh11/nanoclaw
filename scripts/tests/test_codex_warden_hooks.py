@@ -124,6 +124,104 @@ def test_plan_review_gate_allows_after_marker(tmp_path, capsys):
     assert capsys.readouterr().out == ""
 
 
+def test_plan_review_gate_blocks_gitignored_target_without_marker(tmp_path, capsys):
+    """Regression: gitignored Edit targets no longer bypass the gate.
+
+    Prior to this fix, `_managed_paths` returned an empty `paths` list when
+    every event-path was filtered (e.g., by `.gitignore`), and the gate
+    short-circuited with `if not paths: return 0`. Now the gate fires
+    regardless of post-filter path emptiness, as long as cwd is inside a
+    worktree and the marker is absent.
+
+    Note: hooks return rc=0 on deny too — the deny decision is communicated
+    via JSON on stdout, not via exit code. `rc == 0` is consistent with both
+    pass-through and BLOCK; the `permissionDecision` field distinguishes them.
+
+    Transitive proof that `_warden_enabled` is True for bare `git_repo`:
+    `test_plan_review_gate_blocks_apply_patch_without_marker` (above) also
+    uses a bare git_repo and reaches the BLOCK path. If the warden were
+    disabled, both tests would silently return 0 with no deny JSON, and
+    the deny-assertion would fail.
+    """
+    hooks = load_hooks()
+    repo = git_repo(tmp_path)
+    (repo / "src").mkdir()
+    # Pattern matches *.local.json. The file at src/app.local.json is then
+    # gitignored, so _managed_paths filters it out.
+    (repo / ".gitignore").write_text("*.local.json\n", encoding="utf-8")
+    (repo / "src" / "app.local.json").write_text("{}\n", encoding="utf-8")
+    # No `.warden-verdicts.json` (so the no-marker else-branch fires).
+
+    rc = hooks.run_plan_review_gate(apply_patch_event(repo, "src/app.local.json"), repo)
+
+    assert rc == 0
+    output = json.loads(capsys.readouterr().out)
+    specific = output["hookSpecificOutput"]
+    assert specific["hookEventName"] == "PreToolUse"
+    assert specific["permissionDecision"] == "deny"
+    reason = specific["permissionDecisionReason"]
+    assert "no plan-reviewer approval marker" in reason
+    # The new hint surfaces the empty-paths case to the agent.
+    # `filtered target` hint surfaces the empty-paths block (vs the
+    # normal "Targets:" listing when paths survive filtering).
+    assert "filtered target" in reason
+
+
+def test_plan_review_gate_blocks_worktree_excluded_target_without_marker(tmp_path, capsys):
+    """Regression: edits inside .claude/worktrees/ no longer bypass the gate.
+
+    This is the actual session-bug scenario — subagent worktree edits at
+    `.claude/worktrees/<name>/...` were being filtered by `_is_excluded`
+    (which rejects paths under `marker_dir/worktrees`), causing
+    `_managed_paths` to return empty `paths` and the gate to short-circuit.
+    Fixed by re-ordering: marker check first, worktree-presence second,
+    then BLOCK regardless of post-filter path emptiness.
+    """
+    hooks = load_hooks()
+    repo = git_repo(tmp_path)
+    (repo / ".claude" / "worktrees" / "foo" / "src").mkdir(parents=True)
+    (repo / ".claude" / "worktrees" / "foo" / "src" / "file.ts").write_text(
+        "old\n", encoding="utf-8",
+    )
+    # No `.warden-verdicts.json` (so the no-marker else-branch fires).
+
+    rc = hooks.run_plan_review_gate(
+        apply_patch_event(repo, ".claude/worktrees/foo/src/file.ts"),
+        repo,
+    )
+
+    assert rc == 0
+    output = json.loads(capsys.readouterr().out)
+    specific = output["hookSpecificOutput"]
+    assert specific["hookEventName"] == "PreToolUse"
+    assert specific["permissionDecision"] == "deny"
+    reason = specific["permissionDecisionReason"]
+    assert "no plan-reviewer approval marker" in reason
+    # `filtered target` hint surfaces the empty-paths block (vs the
+    # normal "Targets:" listing when paths survive filtering).
+    assert "filtered target" in reason
+
+
+def test_plan_review_gate_returns_zero_outside_worktree(tmp_path, capsys):
+    """Event from cwd outside any git worktree → gate passes silently.
+
+    Pins the non-worktree early-exit. Without this, the empty-paths fix
+    could regress in the other direction (firing the gate everywhere).
+    """
+    hooks = load_hooks()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    # NOT a git repo. `_managed_paths` returns (None, []) and the gate
+    # short-circuits with return 0. No `.plan-reviewed` marker required.
+
+    event = apply_patch_event(outside, "any/path.ts")
+
+    rc = hooks.run_plan_review_gate(event, outside)
+
+    assert rc == 0
+    assert capsys.readouterr().out == ""
+
+
 def test_code_review_gate_blocks_git_commit_without_marker(tmp_path, capsys):
     hooks = load_hooks()
     repo = git_repo(tmp_path)

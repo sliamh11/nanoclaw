@@ -667,11 +667,24 @@ def run_plan_review_gate(event: dict[str, Any], repo_root: Path) -> int:
     ):
         return 0
 
-    _, paths = _managed_paths(event, repo_root)
-    if not paths or _marker(repo_root, ".plan-reviewed").exists():
+    # Marker check first — cheapest, satisfies the gate before any
+    # subprocess work in `_managed_paths`.
+    if _marker(repo_root, ".plan-reviewed").exists():
         return 0
 
-    target_list = "\n".join(f"  - {path}" for path in paths[:5])
+    # `_managed_paths` returns `(None, [])` outside every worktree;
+    # otherwise `(worktree, paths_after_filtering)`. Empty `paths` after
+    # filtering must NOT bypass the gate (the pre-fix `not paths` short-
+    # circuit was the ExitPlanMode enforcement gap).
+    worktree, paths = _managed_paths(event, repo_root)
+    if worktree is None:
+        return 0
+
+    # BLOCK regardless of `paths` emptiness — filter hit ≠ outside-worktree.
+    if paths:
+        target_list = "\n".join(f"  - {path}" for path in paths[:5])
+    else:
+        target_list = "  - (filtered target — gate still applies)"
     mark_cmd = (
         f"  python3 {shlex.quote(str(_active_script_path(repo_root)))} "
         f"mark plan-reviewed SHIP \"reason\""
