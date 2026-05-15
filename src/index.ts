@@ -52,6 +52,7 @@ import { logger } from './logger.js';
 import { initRuntimeRegistry } from './agent-runtimes/registry.js';
 import { createClaudeRuntime } from './agent-runtimes/claude-backend.js';
 import { createOpenAIRuntime } from './agent-runtimes/openai-backend.js';
+import { startGcalSync, stopGcalSync } from './cache/gcal-sync.js';
 
 export { getAvailableGroups } from './router-state.js';
 
@@ -85,6 +86,9 @@ async function main(): Promise<void> {
     PROXY_BIND_HOST,
   );
 
+  // Start gcal sync daemon (no-op if credentials not configured)
+  startGcalSync();
+
   const channels: Channel[] = [];
   const queue = new GroupQueue();
 
@@ -110,6 +114,7 @@ async function main(): Promise<void> {
   // Graceful shutdown handlers
   const shutdown = async (signal: string) => {
     logger.info({ signal }, 'Shutdown signal received');
+    stopGcalSync();
     proxyServer.close();
     toolProxyServer.close();
     await queue.shutdown(10000);
