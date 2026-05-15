@@ -109,6 +109,7 @@ deus.db
 eval/.report.json
 eval/.quality_bench_results*.json
 scripts/bench/results/
+scripts/bench/rule_following_judge_cache.json
 
 # Fine-tune artifacts
 finetune/data/
