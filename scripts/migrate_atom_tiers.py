@@ -33,6 +33,18 @@ STANDARD_NAMES = {
     "feedback_security_first.md",
     "feedback_dev_workflow.md",
     "feedback_socratic_mindset.md",
+    "feedback_data_integrity.md",
+    "feedback_default_sonnet.md",
+    "feedback_wait_for_approval.md",
+    "feedback_cross_platform_default.md",
+    "feedback_chat_english_only.md",
+    "feedback_no_merge_failed_tests.md",
+    "feedback_evaluate_alternatives.md",
+    "feedback_no_duplication.md",
+    "feedback_no_speculative_hardening.md",
+    "feedback_quality_over_speed.md",
+    "feedback_search_memory_first.md",
+    "feedback_warden_loop.md",
 }
 
 _FM_RE = re.compile(r"^---\s*\n(.*?\n)---\s*\n", re.DOTALL)

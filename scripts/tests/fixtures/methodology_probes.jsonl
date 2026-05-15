@@ -1,40 +1,40 @@
 {"query": "run deus sweep for performance regressions", "expected_path": "auto-memory/feedback_parallel_background.md", "tag": "methodology", "tier1_should_cover": true}
-{"query": "implement the new feature for telegram channels", "expected_path": "auto-memory/feedback_deep_research_first.md", "tag": "methodology", "tier1_should_cover": true}
-{"query": "fix the bug in auth token refresh", "expected_path": "auto-memory/feedback_diagnosis_before_treatment.md", "tag": "methodology", "tier1_should_cover": true}
-{"query": "commit these changes to the branch", "expected_path": "auto-memory/feedback_one_concern_per_branch.md", "tag": "methodology", "tier1_should_cover": true}
-{"query": "deploy the new version to production", "expected_path": "auto-memory/feedback_security_audit.md", "tag": "methodology", "tier1_should_cover": true}
+{"query": "implement the new feature for telegram channels", "expected_path": "auto-memory/feedback_deep_research_workflow.md", "tag": "methodology", "tier1_should_cover": true}
+{"query": "fix the bug in auth token refresh", "expected_path": "auto-memory/feedback_debugging_methodology.md", "tag": "methodology", "tier1_should_cover": true}
+{"query": "commit these changes to the branch", "expected_path": "auto-memory/feedback_scope_commits_by_concern.md", "tag": "methodology", "tier1_should_cover": true}
+{"query": "deploy the new version to production", "expected_path": "auto-memory/feedback_security_first.md", "tag": "methodology", "tier1_should_cover": true}
 {"query": "refactor the router module to be cleaner", "expected_path": "auto-memory/feedback_evaluate_alternatives.md", "tag": "methodology", "tier1_should_cover": true}
 {"query": "add error handling for edge cases", "expected_path": "auto-memory/feedback_no_speculative_hardening.md", "tag": "methodology", "tier1_should_cover": true}
-{"query": "optimize the embedding query latency", "expected_path": "auto-memory/feedback_check_production_logs.md", "tag": "methodology", "tier1_should_cover": true}
+{"query": "optimize the embedding query latency", "expected_path": "auto-memory/feedback_check_real_logs_first.md", "tag": "methodology", "tier1_should_cover": true}
 {"query": "start working on the calendar integration", "expected_path": "auto-memory/feedback_search_memory_first.md", "tag": "methodology", "tier1_should_cover": true}
-{"query": "merge the PR after checks pass", "expected_path": "auto-memory/feedback_never_merge_failing_ci.md", "tag": "methodology", "tier1_should_cover": true}
+{"query": "merge the PR after checks pass", "expected_path": "auto-memory/feedback_no_merge_failed_tests.md", "tag": "methodology", "tier1_should_cover": true}
 {"query": "run the background jobs in parallel", "expected_path": "auto-memory/feedback_parallel_background.md", "tag": "methodology", "tier1_should_cover": true}
 {"query": "write a quick fix for the flaky test", "expected_path": "auto-memory/feedback_quality_over_speed.md", "tag": "methodology", "tier1_should_cover": true}
 {"query": "push the hotfix directly to main", "expected_path": "auto-memory/feedback_branch_workflow.md", "tag": "methodology", "tier1_should_cover": true}
 {"query": "delete the unused config files", "expected_path": "auto-memory/feedback_data_integrity.md", "tag": "methodology", "tier1_should_cover": true}
 {"query": "review the code changes before shipping", "expected_path": "auto-memory/feedback_warden_loop.md", "tag": "methodology", "tier1_should_cover": true}
-{"query": "tell the user what the error probably means", "expected_path": "auto-memory/feedback_never_speculate.md", "tag": "methodology", "tier1_should_cover": true}
+{"query": "tell the user what the error probably means", "expected_path": "auto-memory/feedback_no_speculation.md", "tag": "methodology", "tier1_should_cover": true}
 {"query": "add a caching layer to speed things up", "expected_path": "auto-memory/feedback_no_speculative_hardening.md", "tag": "methodology", "tier1_should_cover": true}
 {"query": "update the shared config in both places", "expected_path": "auto-memory/feedback_no_duplication.md", "tag": "methodology", "tier1_should_cover": true}
 {"query": "spin up a subagent for this task", "expected_path": "auto-memory/feedback_default_sonnet.md", "tag": "methodology", "tier1_should_cover": true}
-{"query": "save the user credentials securely", "expected_path": "auto-memory/feedback_security_audit.md", "tag": "methodology", "tier1_should_cover": true}
-{"query": "build the docker container with latest changes", "expected_path": "auto-memory/feedback_cross_platform.md", "tag": "methodology", "tier1_should_cover": true}
+{"query": "save the user credentials securely", "expected_path": "auto-memory/feedback_security_first.md", "tag": "methodology", "tier1_should_cover": true}
+{"query": "build the docker container with latest changes", "expected_path": "auto-memory/feedback_cross_platform_default.md", "tag": "methodology", "tier1_should_cover": true}
 {"query": "implement the abstraction for multiple backends", "expected_path": "auto-memory/feedback_evaluate_alternatives.md", "tag": "methodology", "tier1_should_cover": true}
 {"query": "check if the vault has info on this topic", "expected_path": "auto-memory/feedback_search_memory_first.md", "tag": "methodology", "tier1_should_cover": true}
-{"query": "amend the last commit with these fixes", "expected_path": "auto-memory/feedback_one_concern_per_branch.md", "tag": "methodology", "tier1_should_cover": true}
+{"query": "amend the last commit with these fixes", "expected_path": "auto-memory/feedback_scope_commits_by_concern.md", "tag": "methodology", "tier1_should_cover": true}
 {"query": "process the batch job overnight", "expected_path": "auto-memory/feedback_parallel_background.md", "tag": "methodology", "tier1_should_cover": true}
 {"query": "clean up the orphaned database entries", "expected_path": "auto-memory/feedback_data_integrity.md", "tag": "methodology", "tier1_should_cover": true}
-{"query": "respond to the user in their language", "expected_path": "auto-memory/feedback_english_only.md", "tag": "methodology", "tier1_should_cover": true}
+{"query": "respond to the user in their language", "expected_path": "auto-memory/feedback_chat_english_only.md", "tag": "methodology", "tier1_should_cover": true}
 {"query": "use opus for this complex analysis", "expected_path": "auto-memory/feedback_default_sonnet.md", "tag": "methodology", "tier1_should_cover": true}
 {"query": "ship the feature without full test coverage", "expected_path": "auto-memory/feedback_quality_over_speed.md", "tag": "methodology", "tier1_should_cover": true}
-{"query": "predict if the migration will break anything", "expected_path": "auto-memory/feedback_predict_before_running.md", "tag": "methodology", "tier1_should_cover": true}
-{"query": "run expensive embeddings on the full corpus", "expected_path": "auto-memory/feedback_predict_before_running.md", "tag": "methodology", "tier1_should_cover": true}
+{"query": "predict if the migration will break anything", "expected_path": "auto-memory/feedback_predict_before_testing.md", "tag": "methodology", "tier1_should_cover": true}
+{"query": "run expensive embeddings on the full corpus", "expected_path": "auto-memory/feedback_predict_before_testing.md", "tag": "methodology", "tier1_should_cover": true}
 {"query": "go ahead and execute the plan now", "expected_path": "auto-memory/feedback_wait_for_approval.md", "tag": "methodology", "tier1_should_cover": true}
-{"query": "bundle the telegram fix with the slack refactor", "expected_path": "auto-memory/feedback_one_concern_per_branch.md", "tag": "methodology", "tier1_should_cover": true}
+{"query": "bundle the telegram fix with the slack refactor", "expected_path": "auto-memory/feedback_scope_commits_by_concern.md", "tag": "methodology", "tier1_should_cover": true}
 {"query": "add defensive checks for future edge cases", "expected_path": "auto-memory/feedback_no_speculative_hardening.md", "tag": "methodology", "tier1_should_cover": true}
 {"query": "skip the review since it is a small change", "expected_path": "auto-memory/feedback_warden_loop.md", "tag": "methodology", "tier1_should_cover": true}
 {"query": "overwrite the old config with new defaults", "expected_path": "auto-memory/feedback_data_integrity.md", "tag": "methodology", "tier1_should_cover": true}
-{"query": "assume the function is safe and call it directly", "expected_path": "auto-memory/feedback_never_speculate.md", "tag": "methodology", "tier1_should_cover": true}
+{"query": "assume the function is safe and call it directly", "expected_path": "auto-memory/feedback_no_speculation.md", "tag": "methodology", "tier1_should_cover": true}
 {"query": "checkout main to test something quickly", "expected_path": "auto-memory/feedback_branch_workflow.md", "tag": "methodology", "tier1_should_cover": true}
 {"query": "rewrite the module from scratch for clarity", "expected_path": "auto-memory/feedback_evaluate_alternatives.md", "tag": "methodology", "tier1_should_cover": true}
 {"query": "copy the validation logic into both handlers", "expected_path": "auto-memory/feedback_no_duplication.md", "tag": "methodology", "tier1_should_cover": true}
