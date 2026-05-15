@@ -375,6 +375,147 @@ def _is_admin_merge_command(command: str) -> bool:
     return False
 
 
+def _extract_pr_ref(command: str) -> str | None:
+    """Return the PR number, URL, or branch from a ``gh pr merge`` command.
+
+    Scans past flags so ``gh pr merge --squash 294`` is handled correctly.
+    """
+    _FLAGS_WITH_VALUE = frozenset({
+        "-R", "--repo", "-t", "--subject-body",
+        "--match-head-commit", "--author",
+        "-b", "--body", "-F", "--body-file", "-A", "--author-email",
+    })
+    tokens = _shell_tokens(command)
+    for index, token in enumerate(tokens):
+        if not _is_gh_executable(token):
+            continue
+        command_index = _gh_command_index_after_global_flags(tokens, index)
+        if tokens[command_index : command_index + 2] != ["pr", "merge"]:
+            continue
+        i = command_index + 2
+        while i < len(tokens):
+            tok = tokens[i]
+            if not tok.startswith("-"):
+                return tok
+            if "=" in tok:
+                i += 1
+                continue
+            if tok in _FLAGS_WITH_VALUE:
+                i += 2
+                continue
+            i += 1
+        return None
+    return None
+
+
+_CI_STATUS_GREEN = "green"
+_CI_STATUS_RED = "red"
+_CI_STATUS_PENDING = "pending"
+_CI_STATUS_NO_CHECKS = "no-checks"
+_CI_STATUS_ERROR = "error"
+
+# Bucket values returned by ``gh pr checks --json bucket``
+_BUCKET_PASS = frozenset({"pass", "skipping"})
+_BUCKET_PENDING = frozenset({"pending"})
+_BUCKET_FAIL = frozenset({"fail", "cancel"})
+
+
+def _check_ci_status(pr_ref: str, timeout: int = 3) -> tuple[str, str]:
+    """Query CI status for *pr_ref* via ``gh pr checks``.
+
+    Returns a ``(status, message)`` pair where status is one of
+    ``_CI_STATUS_*`` constants.  Failure to query defaults to
+    ``_CI_STATUS_ERROR`` so the gate blocks rather than falls open.
+    """
+    try:
+        result = subprocess.run(
+            ["gh", "pr", "checks", pr_ref, "--json", "bucket,name"],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=timeout,
+            check=False,
+        )
+    except FileNotFoundError:
+        return _CI_STATUS_ERROR, "gh CLI not found; cannot verify CI status"
+    except subprocess.TimeoutExpired:
+        return _CI_STATUS_ERROR, f"gh pr checks timed out after {timeout}s"
+    except OSError as exc:
+        return _CI_STATUS_ERROR, f"gh pr checks failed: {exc}"
+
+    if result.returncode not in (0, 1, 8):
+        # Exit code 1 = some checks failed (still parseable).
+        # Exit code 8 = checks pending (still parseable).
+        # Other codes indicate auth / network errors.
+        stderr_snippet = result.stderr.strip()[:200]
+        return _CI_STATUS_ERROR, f"gh pr checks exited {result.returncode}: {stderr_snippet}"
+
+    raw = result.stdout.strip()
+    if not raw:
+        return _CI_STATUS_NO_CHECKS, "no checks found for this PR"
+
+    try:
+        checks = json.loads(raw)
+    except json.JSONDecodeError:
+        return _CI_STATUS_ERROR, "gh pr checks returned unparseable output"
+
+    if not isinstance(checks, list):
+        return _CI_STATUS_ERROR, "gh pr checks returned unexpected JSON shape"
+
+    if not checks:
+        return _CI_STATUS_NO_CHECKS, "no checks found for this PR"
+
+    buckets = {str(c.get("bucket", "")) for c in checks if isinstance(c, dict)}
+    failed = [
+        str(c.get("name", "?"))
+        for c in checks
+        if isinstance(c, dict) and str(c.get("bucket", "")) in _BUCKET_FAIL
+    ]
+    pending = [
+        str(c.get("name", "?"))
+        for c in checks
+        if isinstance(c, dict) and str(c.get("bucket", "")) in _BUCKET_PENDING
+    ]
+
+    if failed:
+        names = ", ".join(failed[:5])
+        return _CI_STATUS_RED, f"failing checks: {names}"
+    if pending:
+        names = ", ".join(pending[:5])
+        return _CI_STATUS_PENDING, f"pending checks: {names}"
+    if buckets <= _BUCKET_PASS:
+        return _CI_STATUS_GREEN, "all checks passed"
+
+    unknown = buckets - _BUCKET_PASS - _BUCKET_PENDING - _BUCKET_FAIL
+    return _CI_STATUS_ERROR, f"unknown check buckets: {', '.join(sorted(unknown))}"
+
+
+def _ci_block_reason(pr_ref: str, status: str, detail: str) -> str | None:
+    """Return a block reason string if CI is not green, else ``None``."""
+    if status == _CI_STATUS_GREEN:
+        return None
+    if status == _CI_STATUS_NO_CHECKS:
+        return None
+    if status == _CI_STATUS_RED:
+        return (
+            f"[admin-merge-gate] CI is red — autonomy grant is conditional on green. "
+            f"Run `gh pr checks {pr_ref}` first.\n\n"
+            f"Detail: {detail}"
+        )
+    if status == _CI_STATUS_PENDING:
+        return (
+            f"[admin-merge-gate] CI is pending — autonomy grant is conditional on green. "
+            f"Run `gh pr checks {pr_ref}` first.\n\n"
+            f"Detail: {detail}"
+        )
+    # _CI_STATUS_ERROR — fail closed
+    return (
+        f"[admin-merge-gate] CI status could not be verified — blocking as a precaution. "
+        f"Run `gh pr checks {pr_ref}` manually to confirm green, then retry.\n\n"
+        f"Detail: {detail}"
+    )
+
+
 def _admin_merge_marker(repo_root: Path) -> Path:
     return _marker(repo_root, ".admin-merge-approved")
 
@@ -387,6 +528,15 @@ def _active_script_path(repo_root: Path) -> Path:
 
 
 def approve_admin_merge(command: str, repo_root: Path) -> int:
+    pr_ref = _extract_pr_ref(command)
+    # Current-branch merges (no ref) pass ``gh pr checks`` the branch name
+    check_ref = pr_ref or "HEAD"
+    status, detail = _check_ci_status(check_ref)
+    block = _ci_block_reason(check_ref, status, detail)
+    if block:
+        print(block, file=sys.stderr)
+        return 1
+
     marker = _admin_merge_marker(repo_root)
     marker.parent.mkdir(parents=True, exist_ok=True)
     marker.write_text(
@@ -654,6 +804,14 @@ def run_admin_merge_gate(event: dict[str, Any], repo_root: Path) -> int:
     tool_input = event.get("tool_input")
     command = tool_input.get("command") if isinstance(tool_input, dict) else ""
     if not isinstance(command, str) or not _is_admin_merge_command(command):
+        return 0
+
+    pr_ref = _extract_pr_ref(command)
+    check_ref = pr_ref or "HEAD"
+    ci_status, ci_detail = _check_ci_status(check_ref)
+    ci_block = _ci_block_reason(check_ref, ci_status, ci_detail)
+    if ci_block:
+        _block_pre_tool(ci_block)
         return 0
 
     marker = _admin_merge_marker(repo_root)

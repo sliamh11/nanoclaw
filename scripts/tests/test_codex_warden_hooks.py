@@ -1340,3 +1340,364 @@ def test_run_session_init_still_clears_markers_with_sync(tmp_path, monkeypatch):
 
     assert hooks.run_session_init(repo) == 0
     assert not marker.exists()
+
+
+# ── CI status helper (_check_ci_status) ─────────────────────────────────────
+
+
+_REAL_SUBPROCESS_RUN = subprocess.run
+
+
+def _make_gh_run(checks: list[dict] | None = None, returncode: int = 0, stderr: str = ""):
+    """Return a fake ``subprocess.run`` that intercepts ``gh pr checks`` calls.
+
+    All other subprocess calls (e.g. ``git init``) are forwarded to the real
+    ``subprocess.run`` so that test fixtures still work correctly.
+    """
+
+    def fake_run(cmd, *args, **kwargs):
+        # Intercept only ``gh pr checks`` invocations
+        if (
+            isinstance(cmd, (list, tuple))
+            and len(cmd) >= 3
+            and str(cmd[0]).endswith("gh")
+            and cmd[1] == "pr"
+            and cmd[2] == "checks"
+        ):
+            stdout = json.dumps(checks) if checks is not None else ""
+            return subprocess.CompletedProcess(cmd, returncode, stdout=stdout, stderr=stderr)
+        return _REAL_SUBPROCESS_RUN(cmd, *args, **kwargs)
+
+    return fake_run
+
+
+def test_check_ci_status_green(monkeypatch):
+    hooks = load_hooks()
+    monkeypatch.setattr(
+        hooks.subprocess,
+        "run",
+        _make_gh_run([{"bucket": "pass", "name": "ci"}, {"bucket": "skipping", "name": "opt"}]),
+    )
+
+    status, detail = hooks._check_ci_status("123")
+    assert status == hooks._CI_STATUS_GREEN
+    assert "passed" in detail
+
+
+def test_check_ci_status_red(monkeypatch):
+    hooks = load_hooks()
+    monkeypatch.setattr(
+        hooks.subprocess,
+        "run",
+        _make_gh_run(
+            [{"bucket": "fail", "name": "test-linux"}, {"bucket": "pass", "name": "lint"}],
+            returncode=1,
+        ),
+    )
+
+    status, detail = hooks._check_ci_status("123")
+    assert status == hooks._CI_STATUS_RED
+    assert "test-linux" in detail
+
+
+def test_check_ci_status_pending(monkeypatch):
+    hooks = load_hooks()
+    monkeypatch.setattr(
+        hooks.subprocess,
+        "run",
+        _make_gh_run(
+            [{"bucket": "pending", "name": "slow-check"}, {"bucket": "pass", "name": "lint"}],
+            returncode=8,
+        ),
+    )
+
+    status, detail = hooks._check_ci_status("123")
+    assert status == hooks._CI_STATUS_PENDING
+    assert "slow-check" in detail
+
+
+def test_check_ci_status_no_checks_empty_list(monkeypatch):
+    hooks = load_hooks()
+    monkeypatch.setattr(hooks.subprocess, "run", _make_gh_run([]))
+
+    status, _ = hooks._check_ci_status("123")
+    assert status == hooks._CI_STATUS_NO_CHECKS
+
+
+def test_check_ci_status_no_checks_empty_output(monkeypatch):
+    hooks = load_hooks()
+    monkeypatch.setattr(hooks.subprocess, "run", _make_gh_run(None))
+
+    status, _ = hooks._check_ci_status("123")
+    assert status == hooks._CI_STATUS_NO_CHECKS
+
+
+def test_check_ci_status_gh_not_found(monkeypatch):
+    hooks = load_hooks()
+
+    def raise_file_not_found(*args, **kwargs):
+        raise FileNotFoundError("gh not found")
+
+    monkeypatch.setattr(hooks.subprocess, "run", raise_file_not_found)
+
+    status, detail = hooks._check_ci_status("123")
+    assert status == hooks._CI_STATUS_ERROR
+    assert "gh CLI not found" in detail
+
+
+def test_check_ci_status_timeout(monkeypatch):
+    hooks = load_hooks()
+
+    def raise_timeout(*args, **kwargs):
+        raise subprocess.TimeoutExpired(cmd="gh", timeout=3)
+
+    monkeypatch.setattr(hooks.subprocess, "run", raise_timeout)
+
+    status, detail = hooks._check_ci_status("123", timeout=3)
+    assert status == hooks._CI_STATUS_ERROR
+    assert "timed out" in detail
+
+
+def test_check_ci_status_malformed_json(monkeypatch):
+    hooks = load_hooks()
+
+    def fake_run(*args, **kwargs):
+        return subprocess.CompletedProcess(args[0], 0, stdout="not-json", stderr="")
+
+    monkeypatch.setattr(hooks.subprocess, "run", fake_run)
+
+    status, detail = hooks._check_ci_status("123")
+    assert status == hooks._CI_STATUS_ERROR
+    assert "unparseable" in detail
+
+
+def test_check_ci_status_bad_exit_code(monkeypatch):
+    hooks = load_hooks()
+    monkeypatch.setattr(
+        hooks.subprocess, "run", _make_gh_run(None, returncode=2, stderr="auth error")
+    )
+
+    status, detail = hooks._check_ci_status("123")
+    assert status == hooks._CI_STATUS_ERROR
+    assert "2" in detail
+
+
+# ── _extract_pr_ref ──────────────────────────────────────────────────────────
+
+
+def test_extract_pr_ref_plain_number():
+    hooks = load_hooks()
+    assert hooks._extract_pr_ref("gh pr merge 294 --squash --admin") == "294"
+
+
+def test_extract_pr_ref_with_repo_flag():
+    hooks = load_hooks()
+    assert hooks._extract_pr_ref("gh --repo owner/repo pr merge 295 --admin") == "295"
+
+
+def test_extract_pr_ref_with_short_repo_flag():
+    hooks = load_hooks()
+    assert hooks._extract_pr_ref("gh -R owner/repo pr merge 296 --squash --admin") == "296"
+
+
+def test_extract_pr_ref_no_ref_returns_none():
+    hooks = load_hooks()
+    # --admin flag before any positional arg
+    assert hooks._extract_pr_ref("gh pr merge --admin") is None
+
+
+def test_extract_pr_ref_flags_before_positional():
+    hooks = load_hooks()
+    assert hooks._extract_pr_ref("gh pr merge --squash 294") == "294"
+
+
+def test_extract_pr_ref_admin_before_positional():
+    hooks = load_hooks()
+    assert hooks._extract_pr_ref("gh pr merge --admin 294") == "294"
+
+
+def test_extract_pr_ref_flag_with_value_before_positional():
+    hooks = load_hooks()
+    assert hooks._extract_pr_ref("gh pr merge -R owner/repo 295 --admin") == "295"
+
+
+def test_extract_pr_ref_body_flag_before_positional():
+    hooks = load_hooks()
+    assert hooks._extract_pr_ref('gh pr merge --squash -b "fix: blah" 294') == "294"
+
+
+# ── CI gate integration: run_admin_merge_gate ────────────────────────────────
+
+
+def test_admin_merge_gate_blocks_when_ci_red(monkeypatch, tmp_path, capsys):
+    hooks = load_hooks()
+    repo = git_repo(tmp_path)
+    monkeypatch.setattr(
+        hooks.subprocess,
+        "run",
+        _make_gh_run([{"bucket": "fail", "name": "ci"}], returncode=1),
+    )
+
+    rc = hooks.run_admin_merge_gate(
+        bash_event(repo, "gh pr merge 294 --squash --admin"), repo
+    )
+
+    assert rc == 0
+    output = json.loads(capsys.readouterr().out)
+    reason = output["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "CI is red" in reason
+    assert "gh pr checks 294" in reason
+
+
+def test_admin_merge_gate_blocks_when_ci_pending(monkeypatch, tmp_path, capsys):
+    hooks = load_hooks()
+    repo = git_repo(tmp_path)
+    monkeypatch.setattr(
+        hooks.subprocess,
+        "run",
+        _make_gh_run([{"bucket": "pending", "name": "slow"}], returncode=8),
+    )
+
+    rc = hooks.run_admin_merge_gate(
+        bash_event(repo, "gh pr merge 294 --squash --admin"), repo
+    )
+
+    assert rc == 0
+    output = json.loads(capsys.readouterr().out)
+    reason = output["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "CI is pending" in reason
+
+
+def test_admin_merge_gate_blocks_when_ci_unverifiable(monkeypatch, tmp_path, capsys):
+    hooks = load_hooks()
+    repo = git_repo(tmp_path)
+
+    def raise_for_gh(cmd, *args, **kwargs):
+        if (
+            isinstance(cmd, (list, tuple))
+            and len(cmd) >= 3
+            and str(cmd[0]).endswith("gh")
+            and cmd[1] == "pr"
+            and cmd[2] == "checks"
+        ):
+            raise FileNotFoundError("gh not found")
+        return _REAL_SUBPROCESS_RUN(cmd, *args, **kwargs)
+
+    monkeypatch.setattr(hooks.subprocess, "run", raise_for_gh)
+
+    rc = hooks.run_admin_merge_gate(
+        bash_event(repo, "gh pr merge 294 --squash --admin"), repo
+    )
+
+    assert rc == 0
+    output = json.loads(capsys.readouterr().out)
+    reason = output["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "could not be verified" in reason
+
+
+def test_admin_merge_gate_allows_when_ci_green_with_approval(monkeypatch, tmp_path, capsys):
+    hooks = load_hooks()
+    repo = git_repo(tmp_path)
+    command = "gh pr merge 294 --squash --admin"
+    monkeypatch.setattr(
+        hooks.subprocess,
+        "run",
+        _make_gh_run([{"bucket": "pass", "name": "ci"}]),
+    )
+
+    marker = repo / ".claude" / ".admin-merge-approved"
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text(
+        json.dumps({"command_hash": hooks._command_hash(command), "command": command}),
+        encoding="utf-8",
+    )
+
+    rc = hooks.run_admin_merge_gate(bash_event(repo, command), repo)
+
+    assert rc == 0
+    # Marker consumed, no denial
+    assert not marker.exists()
+    out = capsys.readouterr().out
+    assert "permissionDecision" not in out
+
+
+def test_admin_merge_gate_allows_when_ci_green_no_approval_still_blocks(
+    monkeypatch, tmp_path, capsys
+):
+    """Green CI but no approval marker → still blocked (for approval), not for CI."""
+    hooks = load_hooks()
+    repo = git_repo(tmp_path)
+    monkeypatch.setattr(
+        hooks.subprocess,
+        "run",
+        _make_gh_run([{"bucket": "pass", "name": "ci"}]),
+    )
+
+    rc = hooks.run_admin_merge_gate(
+        bash_event(repo, "gh pr merge 294 --squash --admin"), repo
+    )
+
+    assert rc == 0
+    output = json.loads(capsys.readouterr().out)
+    reason = output["hookSpecificOutput"]["permissionDecisionReason"]
+    # Should block for approval, NOT for CI
+    assert "fresh explicit approval" in reason
+    assert "CI is red" not in reason
+    assert "CI is pending" not in reason
+
+
+def test_admin_merge_gate_allows_when_no_checks(monkeypatch, tmp_path, capsys):
+    """PRs with no checks configured should not be blocked by CI gate."""
+    hooks = load_hooks()
+    repo = git_repo(tmp_path)
+    command = "gh pr merge 294 --squash --admin"
+    monkeypatch.setattr(hooks.subprocess, "run", _make_gh_run([]))
+
+    marker = repo / ".claude" / ".admin-merge-approved"
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text(
+        json.dumps({"command_hash": hooks._command_hash(command), "command": command}),
+        encoding="utf-8",
+    )
+
+    rc = hooks.run_admin_merge_gate(bash_event(repo, command), repo)
+
+    assert rc == 0
+    assert not marker.exists()
+    out = capsys.readouterr().out
+    assert "permissionDecision" not in out
+
+
+# ── CI gate integration: approve_admin_merge ─────────────────────────────────
+
+
+def test_approve_admin_merge_blocked_when_ci_red(monkeypatch, tmp_path, capsys):
+    hooks = load_hooks()
+    repo = git_repo(tmp_path)
+    monkeypatch.setattr(
+        hooks.subprocess,
+        "run",
+        _make_gh_run([{"bucket": "fail", "name": "ci"}], returncode=1),
+    )
+
+    rc = hooks.approve_admin_merge("gh pr merge 294 --squash --admin", repo)
+
+    assert rc == 1
+    assert not (repo / ".claude" / ".admin-merge-approved").exists()
+
+
+def test_approve_admin_merge_succeeds_when_ci_green(monkeypatch, tmp_path, capsys):
+    hooks = load_hooks()
+    repo = git_repo(tmp_path)
+    monkeypatch.setattr(
+        hooks.subprocess,
+        "run",
+        _make_gh_run([{"bucket": "pass", "name": "ci"}]),
+    )
+
+    rc = hooks.approve_admin_merge("gh pr merge 294 --squash --admin", repo)
+
+    assert rc == 0
+    assert (repo / ".claude" / ".admin-merge-approved").exists()
+    out = capsys.readouterr().out
+    assert "Approved" in out
