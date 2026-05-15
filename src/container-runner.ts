@@ -22,6 +22,7 @@ import {
   DEUS_OPENAI_MODEL,
   IDLE_TIMEOUT,
   TIMEZONE,
+  TOOL_PROXY_PORT,
 } from './config.js';
 import { getOrCreateGroupToken } from './group-tokens.js';
 import { resolveGroupFolderPath, resolveGroupIpcPath } from './group-folder.js';
@@ -88,6 +89,12 @@ function buildContainerArgs(
   // Pass host timezone so container's local time matches the user's
   args.push('-e', `TZ=${TIMEZONE}`);
   args.push('-e', `DEUS_PROXY_TOKEN=${getOrCreateGroupToken(group?.folder)}`);
+  // Tool proxy URL — containers call host CLIs through this endpoint.
+  // Uses CONTAINER_HOST_GATEWAY so the URL resolves to the host from inside the container.
+  args.push(
+    '-e',
+    `DEUS_TOOL_PROXY_URL=http://${CONTAINER_HOST_GATEWAY}:${TOOL_PROXY_PORT}`,
+  );
   if (DEUS_CONTEXT_FILE_MAX_CHARS) {
     args.push(
       '-e',
