@@ -1876,6 +1876,115 @@ def reindex_external(
     return counts
 
 
+def sync_atom_kinds(
+    db: sqlite3.Connection,
+    external_dir: Path,
+    *,
+    apply: bool = True,
+) -> dict[str, Any]:
+    """Sync DB ``atom_kind`` to match on-disk frontmatter ``kind:``.
+
+    Lightweight reconciliation: parses ``kind:`` from each atom's
+    frontmatter and ``UPDATE``s the DB row where mismatched. Does NOT
+    re-embed (cheap relative to :func:`reindex_external`). Use when a
+    frontmatter edit to ``kind:`` needs to propagate to ``retrieve()``'s
+    ``exclude_kinds`` filter without the overhead of a full reindex pass.
+
+    Skips ``ARCHIVE``/``.git`` directories and ``MEMORY.md`` to match
+    :func:`reindex_external`'s pre-walk skip block. File-read errors are
+    caught and surfaced via the ``read_errors`` bucket rather than
+    aborting the whole sync (a single unreadable atom shouldn't stop
+    reconciliation of the others).
+
+    Args:
+        db: open SQLite connection.
+        external_dir: auto-memory directory root.
+        apply: when True (default), execute the ``UPDATE``s and commit;
+               when False, populate the ``fixed`` bucket with intent
+               only, leaving the DB unchanged.
+
+    Returns:
+        ``{"fixed": [(rel_path, old_kind, new_kind), ...],
+           "unchanged": int,
+           "missing_in_db": [rel_path, ...],
+           "no_kind_in_file": [rel_path, ...],
+           "read_errors": [rel_path, ...]}``
+
+        ``missing_in_db`` may include atoms whose ``description`` field
+        was empty at indexing time — :func:`reindex_external`'s
+        description-guard skips those during the initial walk, leaving
+        them with no DB row. These are legitimate non-rows, not a sync
+        gap — informational only.
+    """
+    external_dir = external_dir.expanduser().resolve()
+    if not external_dir.is_dir():
+        raise FileNotFoundError(
+            f"auto-memory dir not found: {external_dir}"
+        )
+
+    skip_dirs = {"ARCHIVE", ".git"}
+    result: dict[str, Any] = {
+        "fixed": [],
+        "unchanged": 0,
+        "missing_in_db": [],
+        "no_kind_in_file": [],
+        "read_errors": [],
+    }
+
+    for p in sorted(external_dir.rglob("*.md")):
+        try:
+            rel_to_ext = p.relative_to(external_dir)
+        except ValueError:
+            continue
+        if any(part in skip_dirs for part in rel_to_ext.parts):
+            continue
+        if p.name == "MEMORY.md":
+            continue
+
+        rel_str = str(rel_to_ext)
+        try:
+            content = p.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            result["read_errors"].append(rel_str)
+            continue
+
+        fm = parse_frontmatter(content)
+        file_kind = fm.get("atom_kind")
+        if not file_kind:
+            result["no_kind_in_file"].append(rel_str)
+            continue
+
+        db_path = f"{EXTERNAL_NAMESPACE}{rel_str}"
+        row = db.execute(
+            "SELECT atom_kind FROM nodes WHERE path = ?",
+            (db_path,),
+        ).fetchone()
+        if row is None:
+            result["missing_in_db"].append(rel_str)
+            continue
+
+        db_kind = row[0]
+        if db_kind == file_kind:
+            result["unchanged"] += 1
+            continue
+
+        result["fixed"].append((rel_str, db_kind, file_kind))
+        if apply:
+            db.execute(
+                "UPDATE nodes SET atom_kind = ? WHERE path = ?",
+                (file_kind, db_path),
+            )
+
+    if apply and result["fixed"]:
+        db.commit()
+        _emit_audit({
+            "action": "sync_atom_kinds",
+            "dir": str(external_dir),
+            "fixed_count": len(result["fixed"]),
+        })
+    return result
+
+
 # ── Manifest ─────────────────────────────────────────────────────────────────
 
 # Grouping map: node type → human-readable category for the manifest.
@@ -2845,6 +2954,17 @@ def main(argv: list[str] | None = None) -> int:
     p_ext.add_argument("--skip-embed", action="store_true", help="Skip embedding API calls")
     p_ext.add_argument("--json", action="store_true")
 
+    p_sync = sub.add_parser(
+        "sync-atom-kinds",
+        help="Refresh DB atom_kind from on-disk frontmatter (lightweight, no re-embed)",
+    )
+    p_sync.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Report what would change without writing to the DB",
+    )
+    p_sync.add_argument("--json", action="store_true")
+
     p_angles = sub.add_parser("backfill-angles", help="Generate approach-angle embeddings for all nodes")
     p_angles.add_argument("--limit", type=int, help="Process at most N nodes")
     p_angles.add_argument("--regenerate", action="store_true", help="Force regeneration even for fresh nodes")
@@ -2988,6 +3108,35 @@ def main(argv: list[str] | None = None) -> int:
                 f"id_written={counts['id_written']} "
                 f"skipped={counts['skipped']}"
             )
+        return 0
+
+    if args.cmd == "sync-atom-kinds":
+        ext_dir = os.environ.get(EXTERNAL_DIR_ENV)
+        if not ext_dir:
+            print(f"ABORT: {EXTERNAL_DIR_ENV} not set", file=sys.stderr)
+            return 2
+        try:
+            result = sync_atom_kinds(
+                db, Path(ext_dir), apply=not args.dry_run,
+            )
+        except FileNotFoundError as exc:
+            print(f"ABORT: {exc}", file=sys.stderr)
+            return 2
+        if args.json:
+            print(json.dumps(result, indent=2, default=str))
+        else:
+            prefix = "[dry-run] " if args.dry_run else ""
+            print(
+                f"{prefix}sync-atom-kinds: "
+                f"fixed={len(result['fixed'])} "
+                f"unchanged={result['unchanged']} "
+                f"missing_in_db={len(result['missing_in_db'])} "
+                f"no_kind_in_file={len(result['no_kind_in_file'])} "
+                f"read_errors={len(result['read_errors'])}"
+            )
+            for (name, old, new) in result["fixed"]:
+                arrow = "→" if not args.dry_run else "would →"
+                print(f"  {name}: {old!r} {arrow} {new!r}")
         return 0
 
     if args.cmd == "backfill-angles":
