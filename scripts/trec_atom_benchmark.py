@@ -279,6 +279,18 @@ JUDGE_PROMPT = (
     "Respond with ONLY a single digit: 0, 1, or 2"
 )
 
+JUDGE_BATCH_PROMPT = (
+    "You are a relevance judge for a personal knowledge retrieval system.\n\n"
+    "Given a user query and multiple stored facts, rate each fact's relevance:\n"
+    "- 2: Directly answers or is essential context for the query\n"
+    "- 1: Tangentially related, might be useful background\n"
+    "- 0: Irrelevant to the query\n\n"
+    "User query: {query}\n\n"
+    "Facts:\n{facts}\n\n"
+    "Return a JSON object with key \"scores\": an array of integers (0, 1, or 2), "
+    "one per fact in order."
+)
+
 
 OLLAMA_URL = "http://localhost:11434/api/generate"
 
@@ -309,6 +321,32 @@ def _judge_ollama(prompt: str, model: str) -> int | None:
         return None
 
 
+def _judge_gemini_batch(client, model, query, atoms, genai_types):
+    """Judge all atoms for one query in a single Gemini call with JSON output."""
+    facts = "\n".join(f"[{i}] {a}" for i, a in enumerate(atoms))
+    prompt = JUDGE_BATCH_PROMPT.format(query=query, facts=facts)
+    resp = client.models.generate_content(
+        model=model,
+        contents=prompt,
+        config=genai_types.GenerateContentConfig(
+            temperature=0.0,
+            max_output_tokens=max(64, len(atoms) * 8),
+            response_mime_type="application/json",
+        ),
+    )
+    text = (resp.text or "").strip()
+    if not text:
+        return None
+    parsed = json.loads(text)
+    scores = parsed.get("scores", parsed) if isinstance(parsed, dict) else parsed
+    if not isinstance(scores, list) or len(scores) < 1:
+        return None
+    result = [s if s in (0, 1, 2) else 0 for s in scores[:len(atoms)]]
+    while len(result) < len(atoms):
+        result.append(None)
+    return result
+
+
 def stage_judge(judge: str = "gemini", judge_model: str = "gemma4:e4b", fresh: bool = False):
     """LLM-judge each (query, atom) pair blind."""
     print(f"Stage 3: Judging (query, atom) pairs with {judge}...", file=sys.stderr)
@@ -335,8 +373,10 @@ def stage_judge(judge: str = "gemini", judge_model: str = "gemma4:e4b", fresh: b
         from google.genai import types as genai_types
         from evolution.config import load_api_key, GEN_MODELS
         client = genai.Client(api_key=load_api_key())
+        exhausted_models: set[str] = set()
     else:
         client = None
+        exhausted_models = set()
 
     cached_hits = 0
     api_calls = 0
@@ -345,22 +385,122 @@ def stage_judge(judge: str = "gemini", judge_model: str = "gemma4:e4b", fresh: b
 
     for pi, pool_entry in enumerate(pooled):
         query = pool_entry["query"]
-        for atom_entry in pool_entry["atoms"]:
-            atom_text = atom_entry["chunk"]
-            cache_key = hashlib.sha256(f"{query}|||{atom_text}".encode()).hexdigest()[:24]
 
-            if cache_key in cache:
-                atom_entry["relevance"] = cache[cache_key]
-                cached_hits += 1
-                continue
+        if judge == "gemini":
+            # Batched: judge all uncached atoms for this query in one call
+            uncached = []
+            for atom_entry in pool_entry["atoms"]:
+                atom_text = atom_entry["chunk"]
+                ck = hashlib.sha256(f"{query}|||{atom_text}".encode()).hexdigest()[:24]
+                if ck in cache:
+                    atom_entry["relevance"] = cache[ck]
+                    cached_hits += 1
+                else:
+                    uncached.append((atom_entry, atom_text, ck))
 
-            prompt = JUDGE_PROMPT.format(query=query, atom=atom_text)
-            score = None
+            if uncached:
+                atom_texts = [t for _, t, _ in uncached]
+                scores = None
+                for model in GEN_MODELS:
+                    if model in exhausted_models:
+                        continue
+                    try:
+                        scores = _judge_gemini_batch(
+                            client, model, query, atom_texts, genai_types,
+                        )
+                        api_calls += 1
+                        time.sleep(4)
+                        break
+                    except Exception as e:
+                        if "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e):
+                            if "PerDay" in str(e):
+                                exhausted_models.add(model)
+                                print(f"  {model} daily quota exhausted, skipping", file=sys.stderr)
+                            else:
+                                delay = 45
+                                m = re.search(r"retryDelay.*?([\d.]+)s", str(e))
+                                if m:
+                                    delay = int(float(m.group(1))) + 2
+                                print(f"  RPM limit hit on {model}, waiting {delay}s...", file=sys.stderr)
+                                time.sleep(delay)
+                            continue
+                        errors += 1
+                        break
 
-            if judge == "ollama":
+                if scores:
+                    consecutive_errors = 0
+                    retry_singles = []
+                    for (atom_entry, atom_text, ck), s in zip(uncached, scores):
+                        if s is not None:
+                            atom_entry["relevance"] = s
+                            cache[ck] = s
+                        else:
+                            retry_singles.append((atom_entry, atom_text, ck))
+                    uncached = retry_singles
+
+                if uncached:
+                    # Batch failed — fall back to single-call per atom
+                    for atom_entry, atom_text, ck in uncached:
+                        prompt = JUDGE_PROMPT.format(query=query, atom=atom_text)
+                        score = None
+                        for model in GEN_MODELS:
+                            if model in exhausted_models:
+                                continue
+                            try:
+                                resp = client.models.generate_content(
+                                    model=model,
+                                    contents=prompt,
+                                    config=genai_types.GenerateContentConfig(
+                                        temperature=0.0,
+                                        max_output_tokens=8,
+                                    ),
+                                )
+                                text = (resp.text or "").strip()
+                                if not text:
+                                    continue
+                                score = int(text) if text in ("0", "1", "2") else 0
+                                api_calls += 1
+                                time.sleep(4)
+                                break
+                            except Exception as e:
+                                if "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e):
+                                    if "PerDay" in str(e):
+                                        exhausted_models.add(model)
+                                    else:
+                                        delay = 45
+                                        m = re.search(r"retryDelay.*?([\d.]+)s", str(e))
+                                        if m:
+                                            delay = int(float(m.group(1))) + 2
+                                        time.sleep(delay)
+                                    continue
+                                errors += 1
+                                break
+                        if score is not None:
+                            atom_entry["relevance"] = score
+                            cache[ck] = score
+                        else:
+                            errors += 1
+
+                cache_path.write_text(json.dumps(cache))
+
+        else:
+            # Ollama: single-call per atom (local, no rate limit concern)
+            for atom_entry in pool_entry["atoms"]:
+                atom_text = atom_entry["chunk"]
+                cache_key = hashlib.sha256(f"{query}|||{atom_text}".encode()).hexdigest()[:24]
+
+                if cache_key in cache:
+                    atom_entry["relevance"] = cache[cache_key]
+                    cached_hits += 1
+                    continue
+
+                prompt = JUDGE_PROMPT.format(query=query, atom=atom_text)
                 score = _judge_ollama(prompt, judge_model)
                 if score is not None:
                     api_calls += 1
+                    consecutive_errors = 0
+                    atom_entry["relevance"] = score
+                    cache[cache_key] = score
                 else:
                     errors += 1
                     consecutive_errors += 1
@@ -368,44 +508,9 @@ def stage_judge(judge: str = "gemini", judge_model: str = "gemma4:e4b", fresh: b
                         wait = min(60, consecutive_errors * 10)
                         print(f"  Ollama errors ({consecutive_errors}x), waiting {wait}s...", file=sys.stderr)
                         time.sleep(wait)
-                    continue
-            else:
-                for model in GEN_MODELS:
-                    try:
-                        resp = client.models.generate_content(
-                            model=model,
-                            contents=prompt,
-                            config=genai_types.GenerateContentConfig(
-                                temperature=0.0,
-                                max_output_tokens=4,
-                            ),
-                        )
-                        text = resp.text.strip()
-                        score = int(text) if text in ("0", "1", "2") else 0
-                        api_calls += 1
-                        break
-                    except Exception as e:
-                        if "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e):
-                            time.sleep(2)
-                            continue
-                        errors += 1
-                        break
 
-                if score is None:
-                    errors += 1
-                    consecutive_errors += 1
-                    if consecutive_errors >= 3:
-                        wait = min(60, consecutive_errors * 10)
-                        print(f"  Rate limited ({consecutive_errors}x), waiting {wait}s...", file=sys.stderr)
-                        time.sleep(wait)
-                    continue
-
-            consecutive_errors = 0
-            atom_entry["relevance"] = score
-            cache[cache_key] = score
-
-            if (api_calls + cached_hits) % 50 == 0:
-                cache_path.write_text(json.dumps(cache))
+                if (api_calls + cached_hits) % 50 == 0:
+                    cache_path.write_text(json.dumps(cache))
 
         if (pi + 1) % 10 == 0:
             print(f"  {pi+1}/{len(pooled)} queries judged ({api_calls} API calls, {cached_hits} cached, {errors} errors)", file=sys.stderr)
