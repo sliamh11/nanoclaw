@@ -59,6 +59,11 @@
           },
           {
             "type": "command",
+            "command": "bash -c '\"${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/warden-shim.sh\" verification-gate'",
+            "timeout": 5
+          },
+          {
+            "type": "command",
             "command": "bash -c '\"${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/warden-shim.sh\" admin-merge-gate'",
             "timeout": 5
           }
@@ -83,6 +88,11 @@
             "type": "command",
             "command": "bash -c '\"${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/warden-shim.sh\" path-leak-detector'",
             "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "bash -c '\"${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/warden-shim.sh\" verification-invalidator'",
+            "timeout": 3
           }
         ]
       },

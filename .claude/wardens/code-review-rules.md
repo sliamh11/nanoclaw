@@ -145,3 +145,17 @@
 **Check:** Shell injection (user input interpolated into `exec`/`child_process.spawn` without sanitization), SQL injection (string concat into queries vs parameterized), path traversal (user input concatenated into file paths without basename/normalize), XSS (user input rendered without escaping), SSRF (user-controllable URLs fetched server-side without host allowlist).
 **Rule:** No classic OWASP vectors. Parameterize queries, escape output, normalize paths, allowlist hosts for user-controlled URLs.
 **Cite:** system-prompt "Be careful not to introduce security vulnerabilities" rule; `feedback_security_first`
+
+## hook-schema-source-of-truth
+**Severity:** blocking
+**Applies when:** Diff modifies hook output schema (any return shape from Stop/PreToolUse/PostToolUse/SessionStart hooks).
+**Check:** Does the commit message cite a source of truth (Claude Code binary string extraction, SDK source path, or official doc URL)?
+**Rule:** Hook schema changes require a verifiable source-of-truth citation in the commit message. Derivation-from-assumption is rejected.
+**Cite:** `feedback_hook_schema_source_of_truth`
+
+## hook-pr-smoke-test
+**Severity:** blocking
+**Applies when:** Diff modifies a hook script (Stop/PreToolUse/PostToolUse/SessionStart category).
+**Check:** Does the PR body include evidence of a real-session smoke test (session log link, `claude logs <id>` output, or transcript excerpt)?
+**Rule:** Hook-touching PRs require documented real-session smoke test before marked done. Synthetic tests alone are insufficient.
+**Cite:** `feedback_hook_pr_smoke_test`

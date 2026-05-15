@@ -14,16 +14,29 @@ import sys
 from pathlib import Path
 
 def _default_auto_mem_dir() -> Path:
+    # 1. Explicit env override wins (matches memory_tree.EXTERNAL_DIR_ENV).
     env = os.environ.get("DEUS_AUTO_MEMORY_DIR")
     if env:
         return Path(env)
-    try:
-        _scripts = Path(__file__).resolve().parent
-        sys.path.insert(0, str(_scripts))
-        import memory_tree as mt
-        return Path(mt.EXTERNAL_DIR)
-    except Exception:
-        return Path(os.path.expanduser("~/.deus/auto-memory"))
+    # 2. Derive the per-project auto-memory dir from CLAUDE_PROJECT_DIR.
+    #    Mirrors memory_indexer.py promotion target (~/.claude/projects/<encoded>/memory).
+    #    Encoding: leading '-' + slashes replaced with '-'.
+    project_dir = os.environ.get("CLAUDE_PROJECT_DIR")
+    if project_dir:
+        encoded = project_dir.replace("/", "-")
+        if not encoded.startswith("-"):
+            encoded = "-" + encoded
+        candidate = Path(os.path.expanduser(f"~/.claude/projects/{encoded}/memory"))
+        if candidate.is_dir():
+            return candidate
+    # 3. Derive from this script's filesystem location (repo_root/scripts/standards_pack.py).
+    repo_root = Path(__file__).resolve().parent.parent
+    encoded = repo_root.as_posix().replace("/", "-")
+    legacy = Path(os.path.expanduser(f"~/.claude/projects/{encoded}/memory"))
+    if legacy.is_dir():
+        return legacy
+    # 4. Final fallback (will trigger fail-loud warning in load_standards).
+    return Path(os.path.expanduser("~/.deus/auto-memory"))
 
 
 AUTO_MEM_DIR = _default_auto_mem_dir()
@@ -77,6 +90,13 @@ def load_standards(auto_mem_dir: Path | None = None, token_budget: int = TOKEN_B
     """Load kind=standard atoms as condensed one-liners within token budget."""
     d = auto_mem_dir or AUTO_MEM_DIR
     if not d.is_dir():
+        # Fail-loud to stderr (never stdout — would pollute the JSON hook output).
+        # Helps catch the silent-empty-pack failure mode that masked PR #380's gap.
+        print(
+            f"[standards_pack] WARN: auto-memory dir not found: {d}. "
+            "Standards pack will be empty. Check DEUS_AUTO_MEMORY_DIR or CLAUDE_PROJECT_DIR.",
+            file=sys.stderr,
+        )
         return ""
 
     mtime = _dir_mtime(d)
@@ -110,6 +130,13 @@ def load_standards(auto_mem_dir: Path | None = None, token_budget: int = TOKEN_B
         total_tokens += cost
 
     if not lines:
+        # Fail-loud: dir exists but no kind=standard atoms found. Likely classification gap.
+        print(
+            f"[standards_pack] WARN: 0 kind=standard atoms in {d} "
+            f"(scanned {sum(1 for _ in d.glob('*.md'))} .md files). "
+            "Standards pack will be empty.",
+            file=sys.stderr,
+        )
         return ""
 
     context = (

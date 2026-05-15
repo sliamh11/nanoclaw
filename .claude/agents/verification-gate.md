@@ -28,12 +28,14 @@ You receive a description of what's being claimed. Your job:
 
 ## Output format
 
+Use the standard Warden verdict header so the verdict-tracker can parse it.
+
 ```
-## Verification: CONFIRMED | FAILED | PARTIAL
+## Verdict: SHIP | REVISE | BLOCK
 
 Claims checked:
-- "tests pass" → `cargo test` → 130/130 pass ✓
-- "builds clean" → `cargo build` → 0 warnings ✓
+- "tests pass" → `npm test` → 42/42 pass ✓
+- "builds clean" → `npm run build` → 0 warnings ✓
 - "no regressions" → NOT VERIFIED (no regression test run) ✗
 
 Evidence:
@@ -42,6 +44,9 @@ Evidence:
 Missing verification:
 - [list any claims that couldn't be verified]
 ```
+
+Mapping: all claims verified with evidence = SHIP. Any claim unverified or
+failed = REVISE. Fundamental gap (wrong feature, missing core requirement) = BLOCK.
 
 ## Red flags you catch
 

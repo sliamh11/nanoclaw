@@ -51,6 +51,7 @@ HOOK_SPECS: tuple[HookSpec, ...] = (
         "Invalidating Deus plan review",
     ),
     HookSpec("PreToolUse", "Bash", "code-review-gate", 5, "Checking Deus code review"),
+    HookSpec("PreToolUse", "Bash", "verification-gate", 5, "Checking Deus verification"),
     HookSpec(
         "PreToolUse",
         "Bash",
@@ -71,6 +72,13 @@ HOOK_SPECS: tuple[HookSpec, ...] = (
         "code-review-invalidator",
         3,
         "Invalidating Deus code review",
+    ),
+    HookSpec(
+        "PostToolUse",
+        "Edit|Write|MultiEdit|apply_patch",
+        "verification-invalidator",
+        3,
+        "Invalidating Deus verification",
     ),
     HookSpec(
         "PostToolUse",
@@ -255,7 +263,7 @@ def _is_excluded(path: Path, marker_dir: Path) -> bool:
     if "/.claude/projects/" in path_text and "/memory/" in path_text:
         return True
 
-    marker_names = {".plan-reviewed", ".code-reviewed", ".threat-modeled"}
+    marker_names = {".plan-reviewed", ".code-reviewed", ".threat-modeled", ".verified"}
     return _is_relative_to(path, marker_dir) and path.name in marker_names
 
 
@@ -403,6 +411,7 @@ def run_session_init(repo_root: Path) -> int:
         ".plan-reviewed",
         ".code-reviewed",
         ".threat-modeled",
+        ".verified",
         ".admin-merge-approved",
     ):
         _marker(repo_root, name).unlink(missing_ok=True)
@@ -516,6 +525,59 @@ def run_code_review_gate(event: dict[str, Any], repo_root: Path) -> int:
             f"mark code-reviewed TRIVIAL \"reason\""
         )
     _block_pre_tool(reason)
+    return 0
+
+
+def run_verification_gate(event: dict[str, Any], repo_root: Path) -> int:
+    config = _wardens_config(repo_root)
+    if not _warden_enabled(config, "verification-gate"):
+        return 0
+
+    cwd = Path(str(event.get("cwd") or os.getcwd())).resolve(strict=False)
+    if _worktree_for_cwd(cwd, repo_root) is None:
+        return 0
+
+    tool_input = event.get("tool_input")
+    command = tool_input.get("command") if isinstance(tool_input, dict) else ""
+    if not isinstance(command, str) or not GIT_COMMIT_RE.search(command):
+        return 0
+    if _marker(repo_root, ".verified").exists():
+        return 0
+
+    mark_cmd = (
+        f"  python3 {shlex.quote(str(_active_script_path(repo_root)))} "
+        f"mark verified SHIP \"reason\""
+    )
+
+    if _last_verdict_is_blocking(repo_root, "verification-gate"):
+        last = _last_verdict(repo_root, "verification-gate")
+        reason = (
+            f"[verification-gate] BLOCKED: last verification-gate verdict was {last}.\n\n"
+            "Re-run the verification-gate after fixing the issues. Trivial bypass is "
+            f"not permitted after {last} — no exceptions.\n\n"
+            f"After SHIP:\n{mark_cmd}"
+        )
+    else:
+        reason = (
+            "[verification-gate] BLOCKED: no verification-gate approval marker.\n\n"
+            "Before committing Deus changes, run the verification-gate Warden "
+            "(subagent_type=\"verification-gate\") and wait for VERDICT: SHIP. "
+            "The verification-gate confirms all task requirements were actually "
+            "implemented with evidence. Pass the plan from .claude/.plan-reviewed "
+            "(if present) or the commit message as requirements context.\n\n"
+            f"After SHIP:\n{mark_cmd}\n\n"
+            "Trivial-commit bypass (typos, deps, config-only):\n"
+            f"  python3 {shlex.quote(str(_active_script_path(repo_root)))} "
+            f"mark verified TRIVIAL \"reason\""
+        )
+    _block_pre_tool(reason)
+    return 0
+
+
+def run_verification_invalidator(event: dict[str, Any], repo_root: Path) -> int:
+    _, paths = _managed_paths(event, repo_root)
+    if paths:
+        _marker(repo_root, ".verified").unlink(missing_ok=True)
     return 0
 
 
@@ -959,6 +1021,43 @@ def _audit_log_path(repo_root: Path) -> Path:
     return repo_root / ".claude" / ".warden-log"
 
 
+def _bypass_log_path() -> Path:
+    override = os.environ.get("DEUS_WARDEN_BYPASS_LOG")
+    if override:
+        return Path(override)
+    return Path.home() / ".claude" / ".warden-bypass-log"
+
+
+def _write_bypass_log(
+    warden: str,
+    verdict: str,
+    session_type: str,
+    reason: str,
+    cwd: Path,
+) -> None:
+    try:
+        diff_stats = _git(cwd, "diff", "--stat", "HEAD")
+        entry = {
+            "timestamp": dt.datetime.now(dt.UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "warden": warden,
+            "verdict": verdict,
+            "session_type": session_type,
+            "reason": reason,
+            "cwd": str(cwd),
+            "diff_stats": diff_stats,
+        }
+        path = _bypass_log_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(entry, separators=(",", ":")) + "\n")
+    except OSError:
+        _debug("bypass log write failed")
+
+
+def _is_bg_session() -> bool:
+    return bool(os.environ.get("CLAUDE_JOB_DIR"))
+
+
 def _read_verdicts(repo_root: Path) -> dict[str, Any]:
     path = _verdicts_path(repo_root)
     if not path.exists():
@@ -1003,7 +1102,7 @@ VERDICT_RE = re.compile(
     re.MULTILINE,
 )
 
-WARDEN_SUBAGENT_TYPES = frozenset({"plan-reviewer", "code-reviewer", "threat-modeler"})
+WARDEN_SUBAGENT_TYPES = frozenset({"plan-reviewer", "code-reviewer", "threat-modeler", "verification-gate"})
 
 
 def run_verdict_tracker(event: dict[str, Any], repo_root: Path) -> int:
@@ -1039,10 +1138,12 @@ RUNNERS = {
     "plan-review-gate": run_plan_review_gate,
     "plan-mode-invalidator": run_plan_mode_invalidator,
     "code-review-gate": run_code_review_gate,
+    "verification-gate": run_verification_gate,
     "admin-merge-gate": run_admin_merge_gate,
     "stop-checkpoint": run_stop_checkpoint,
     "memory-tree-hook": run_memory_tree_hook,
     "code-review-invalidator": run_code_review_invalidator,
+    "verification-invalidator": run_verification_invalidator,
     "threat-model-gate": run_threat_model_gate,
     "path-leak-detector": run_path_leak_detector,
     "catchup-freshness": run_catchup_freshness,
@@ -1056,6 +1157,7 @@ MARKER_NAMES = {
     "plan-reviewed": "plan-reviewer",
     "code-reviewed": "code-reviewer",
     "threat-modeled": "threat-modeler",
+    "verified": "verification-gate",
 }
 
 
@@ -1069,17 +1171,32 @@ def mark_warden(marker_name: str, verdict: str, reason: str, repo_root: Path) ->
         print(f"Invalid verdict: {verdict}. Must be SHIP or TRIVIAL.", file=sys.stderr)
         return 1
 
+    bg = _is_bg_session()
+    session_type = "bg" if bg else "interactive"
+
+    if verdict == "TRIVIAL" and bg:
+        _write_bypass_log(warden, "REFUSED", "bg", reason, repo_root)
+        print(
+            "[warden-mark] BLOCKED: TRIVIAL bypass is not permitted in background sessions.\n"
+            "Background sessions must run the full warden and get SHIP.",
+            file=sys.stderr,
+        )
+        return 2
+
     if verdict == "TRIVIAL" and _last_verdict_is_blocking(repo_root, warden):
         last = _last_verdict(repo_root, warden)
         if last:
+            _write_bypass_log(warden, "REFUSED", session_type, reason, repo_root)
             print(
                 f"[warden-mark] BLOCKED: last {warden} verdict was {last}.\n"
-                f"Re-run the warden and get SHIP — trivial bypass is not permitted after {last}.",
+                "Re-run the warden and get SHIP — trivial bypass is not permitted after REVISE or BLOCK.",
                 file=sys.stderr,
             )
             return 2
 
     _write_verdict(repo_root, warden, verdict, reason, source="mark")
+    if verdict == "TRIVIAL":
+        _write_bypass_log(warden, "TRIVIAL", session_type, reason, repo_root)
     _marker(repo_root, f".{marker_name}").parent.mkdir(parents=True, exist_ok=True)
     _marker(repo_root, f".{marker_name}").touch()
     print(f"[warden-mark] {marker_name} marked as {verdict}: {reason}")

@@ -904,10 +904,12 @@ def test_mark_creates_marker_and_audit_log(tmp_path):
     assert "SHIP" in log
 
 
-def test_mark_blocks_trivial_after_revise(tmp_path):
+def test_mark_blocks_trivial_after_revise(tmp_path, monkeypatch):
     hooks = load_hooks()
     repo = git_repo(tmp_path)
     (repo / ".claude" / "wardens").mkdir(parents=True)
+    monkeypatch.setenv("DEUS_WARDEN_BYPASS_LOG", str(tmp_path / "bypass.jsonl"))
+    monkeypatch.delenv("CLAUDE_JOB_DIR", raising=False)
 
     hooks._write_verdict(repo, "code-reviewer", "REVISE", "issues found", "agent")
 
@@ -1015,3 +1017,177 @@ def test_code_review_gate_shows_revise_escalation(tmp_path, capsys):
     out = capsys.readouterr().out
     assert "REVISE" in out
     assert "Trivial-commit bypass" not in out
+
+
+# ── TRIVIAL bypass enforcement (B + C + D) ──────────────────────────────────
+
+
+def test_mark_blocks_trivial_after_block(tmp_path, monkeypatch):
+    hooks = load_hooks()
+    repo = git_repo(tmp_path)
+    (repo / ".claude" / "wardens").mkdir(parents=True)
+    monkeypatch.setenv("DEUS_WARDEN_BYPASS_LOG", str(tmp_path / "bypass.jsonl"))
+    monkeypatch.delenv("CLAUDE_JOB_DIR", raising=False)
+
+    hooks._write_verdict(repo, "code-reviewer", "BLOCK", "critical issues", "agent")
+
+    result = hooks.mark_warden("code-reviewed", "TRIVIAL", "just a typo", repo)
+    assert result == 2
+    assert not (repo / ".claude" / ".code-reviewed").exists()
+
+
+def test_mark_blocks_trivial_in_bg_session(tmp_path, monkeypatch):
+    hooks = load_hooks()
+    repo = git_repo(tmp_path)
+    (repo / ".claude" / "wardens").mkdir(parents=True)
+    monkeypatch.setenv("DEUS_WARDEN_BYPASS_LOG", str(tmp_path / "bypass.jsonl"))
+    monkeypatch.setenv("CLAUDE_JOB_DIR", str(tmp_path / "job"))
+
+    hooks._write_verdict(repo, "plan-reviewer", "SHIP", "all good", "agent")
+
+    result = hooks.mark_warden("plan-reviewed", "TRIVIAL", "just a comment fix", repo)
+    assert result == 2
+    assert not (repo / ".claude" / ".plan-reviewed").exists()
+
+
+def test_mark_allows_trivial_interactive_no_prior_verdict(tmp_path, monkeypatch):
+    hooks = load_hooks()
+    repo = git_repo(tmp_path)
+    (repo / ".claude" / "wardens").mkdir(parents=True)
+    monkeypatch.setenv("DEUS_WARDEN_BYPASS_LOG", str(tmp_path / "bypass.jsonl"))
+    monkeypatch.delenv("CLAUDE_JOB_DIR", raising=False)
+
+    result = hooks.mark_warden("plan-reviewed", "TRIVIAL", "typo fix", repo)
+    assert result == 0
+    assert (repo / ".claude" / ".plan-reviewed").exists()
+
+
+def test_mark_allows_trivial_interactive_after_ship(tmp_path, monkeypatch):
+    hooks = load_hooks()
+    repo = git_repo(tmp_path)
+    (repo / ".claude" / "wardens").mkdir(parents=True)
+    monkeypatch.setenv("DEUS_WARDEN_BYPASS_LOG", str(tmp_path / "bypass.jsonl"))
+    monkeypatch.delenv("CLAUDE_JOB_DIR", raising=False)
+
+    hooks._write_verdict(repo, "plan-reviewer", "SHIP", "all good", "agent")
+
+    result = hooks.mark_warden("plan-reviewed", "TRIVIAL", "typo fix", repo)
+    assert result == 0
+    assert (repo / ".claude" / ".plan-reviewed").exists()
+
+
+def test_bypass_log_written_on_trivial_success(tmp_path, monkeypatch):
+    hooks = load_hooks()
+    repo = git_repo(tmp_path)
+    (repo / ".claude" / "wardens").mkdir(parents=True)
+    log_path = tmp_path / "bypass.jsonl"
+    monkeypatch.setenv("DEUS_WARDEN_BYPASS_LOG", str(log_path))
+    monkeypatch.delenv("CLAUDE_JOB_DIR", raising=False)
+
+    hooks.mark_warden("code-reviewed", "TRIVIAL", "just a typo", repo)
+
+    assert log_path.exists()
+    entry = json.loads(log_path.read_text(encoding="utf-8").strip())
+    assert entry["warden"] == "code-reviewer"
+    assert entry["verdict"] == "TRIVIAL"
+    assert entry["session_type"] == "interactive"
+    assert entry["reason"] == "just a typo"
+    assert "timestamp" in entry
+    assert "cwd" in entry
+    assert "diff_stats" in entry
+
+
+def test_bypass_log_written_on_trivial_refusal(tmp_path, monkeypatch):
+    hooks = load_hooks()
+    repo = git_repo(tmp_path)
+    (repo / ".claude" / "wardens").mkdir(parents=True)
+    log_path = tmp_path / "bypass.jsonl"
+    monkeypatch.setenv("DEUS_WARDEN_BYPASS_LOG", str(log_path))
+    monkeypatch.delenv("CLAUDE_JOB_DIR", raising=False)
+
+    hooks._write_verdict(repo, "code-reviewer", "REVISE", "issues", "agent")
+    hooks.mark_warden("code-reviewed", "TRIVIAL", "just a typo", repo)
+
+    assert log_path.exists()
+    entry = json.loads(log_path.read_text(encoding="utf-8").strip())
+    assert entry["warden"] == "code-reviewer"
+    assert entry["verdict"] == "REFUSED"
+    assert entry["session_type"] == "interactive"
+
+
+# ── Verification gate ────────────────────────────────────────────────────────
+
+
+def test_verification_gate_blocks_git_commit_without_marker(tmp_path, capsys):
+    hooks = load_hooks()
+    repo = git_repo(tmp_path)
+
+    rc = hooks.run_verification_gate(bash_event(repo, "git commit -m test"), repo)
+
+    assert rc == 0
+    output = json.loads(capsys.readouterr().out)
+    reason = output["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "verification-gate" in reason
+
+
+def test_verification_gate_allows_after_marker(tmp_path, capsys):
+    hooks = load_hooks()
+    repo = git_repo(tmp_path)
+    (repo / ".claude" / ".verified").touch()
+
+    rc = hooks.run_verification_gate(bash_event(repo, "git commit -m test"), repo)
+
+    assert rc == 0
+    assert capsys.readouterr().out == ""
+
+
+def test_verification_gate_shows_revise_escalation(tmp_path, capsys):
+    hooks = load_hooks()
+    repo = git_repo(tmp_path)
+    (repo / ".claude" / "wardens").mkdir(parents=True)
+
+    hooks._write_verdict(repo, "verification-gate", "REVISE", "incomplete", "agent")
+
+    event = bash_event(repo, "git commit -m test")
+    hooks.run_verification_gate(event, repo)
+    out = capsys.readouterr().out
+    assert "REVISE" in out
+    assert "Trivial-commit bypass" not in out
+
+
+def test_verification_invalidator_clears_marker_after_edit(tmp_path):
+    hooks = load_hooks()
+    repo = git_repo(tmp_path)
+    (repo / "src").mkdir()
+    (repo / "src" / "app.ts").write_text("old\n", encoding="utf-8")
+    marker = repo / ".claude" / ".verified"
+    marker.touch()
+
+    rc = hooks.run_verification_invalidator(apply_patch_event(repo, "src/app.ts"), repo)
+
+    assert rc == 0
+    assert not marker.exists()
+
+
+def test_session_init_clears_verified_marker(tmp_path):
+    hooks = load_hooks()
+    repo = git_repo(tmp_path)
+    marker = repo / ".claude" / ".verified"
+    marker.touch()
+
+    assert hooks.run_session_init(repo) == 0
+
+    assert not marker.exists()
+
+
+def test_mark_verified_creates_marker(tmp_path):
+    hooks = load_hooks()
+    repo = git_repo(tmp_path)
+    (repo / ".claude" / "wardens").mkdir(parents=True)
+
+    result = hooks.mark_warden("verified", "SHIP", "all claims verified", repo)
+    assert result == 0
+    assert (repo / ".claude" / ".verified").exists()
+
+    verdicts = json.loads((repo / ".claude" / ".warden-verdicts.json").read_text())
+    assert verdicts["verification-gate"]["verdict"] == "SHIP"
