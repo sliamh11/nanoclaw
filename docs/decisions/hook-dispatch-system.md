@@ -2,6 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2026-05-14
+**Scope:** `src/message-orchestrator.ts`, `.claude/hooks/`, `scripts/codex_warden_hooks.py`
 **Wardens consulted:** Brainstormer (2 rounds), Architecture Snapshot, Threat Modeler (BLOCK), Plan Agent, Advisor
 
 ## Context
