@@ -15,7 +15,12 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import pino from 'pino';
-import { registerCommonTools } from '@deus-ai/channel-core';
+import {
+  mcpError,
+  McpErrorCode,
+  mcpResponse,
+  registerCommonTools,
+} from '@deus-ai/channel-core';
 import { z } from 'zod';
 
 import { GmailProvider } from './gmail.js';
@@ -40,12 +45,22 @@ registerCommonTools(server, provider);
 server.tool(
   'read_email',
   'Read a full email by message ID',
-  { message_id: z.string() },
+  {
+    message_id: z.string(),
+    compact: z.boolean().optional(),
+    select: z.string().optional(),
+  },
   async (args) => {
-    const email = await provider.readEmail(args.message_id);
-    return {
-      content: [{ type: 'text' as const, text: JSON.stringify(email) }],
-    };
+    try {
+      const email = await provider.readEmail(args.message_id);
+      return mcpResponse(email, { compact: args.compact, select: args.select });
+    } catch (err: unknown) {
+      return mcpError(
+        McpErrorCode.API_ERROR,
+        err instanceof Error ? err.message : String(err),
+        'gmail.read_email',
+      );
+    }
   },
 );
 
@@ -69,15 +84,26 @@ server.tool(
   {
     query: z.string(),
     max_results: z.number().optional(),
+    compact: z.boolean().optional(),
+    select: z.string().optional(),
   },
   async (args) => {
-    const results = await provider.searchEmails(
-      args.query,
-      args.max_results ?? 10,
-    );
-    return {
-      content: [{ type: 'text' as const, text: JSON.stringify(results) }],
-    };
+    try {
+      const results = await provider.searchEmails(
+        args.query,
+        args.max_results ?? 10,
+      );
+      return mcpResponse(results, {
+        compact: args.compact,
+        select: args.select,
+      });
+    } catch (err: unknown) {
+      return mcpError(
+        McpErrorCode.API_ERROR,
+        err instanceof Error ? err.message : String(err),
+        'gmail.search_emails',
+      );
+    }
   },
 );
 
@@ -90,15 +116,20 @@ server.tool(
     body: z.string(),
   },
   async (args) => {
-    const draftId = await provider.draftEmail(args.to, args.subject, args.body);
-    return {
-      content: [
-        {
-          type: 'text' as const,
-          text: JSON.stringify({ draft_id: draftId }),
-        },
-      ],
-    };
+    try {
+      const draftId = await provider.draftEmail(
+        args.to,
+        args.subject,
+        args.body,
+      );
+      return mcpResponse({ draft_id: draftId });
+    } catch (err: unknown) {
+      return mcpError(
+        McpErrorCode.API_ERROR,
+        err instanceof Error ? err.message : String(err),
+        'gmail.draft_email',
+      );
+    }
   },
 );
 

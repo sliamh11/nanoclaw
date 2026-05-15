@@ -2,6 +2,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 
 import { MessageBuffer } from './message-buffer.js';
+import { mcpError, McpErrorCode, mcpResponse } from './response.js';
 import type {
   ChannelProvider,
   IncomingMessage,
@@ -97,8 +98,8 @@ export function registerCommonTools(
   server.tool(
     'get_status',
     'Get connection status and channel info',
-    {},
-    async () => {
+    { compact: z.boolean().optional(), select: z.string().optional() },
+    async (args) => {
       // If the provider is still connecting, wait briefly for it to be ready
       if (!provider.isConnected() && provider.waitForReady) {
         await Promise.race([
@@ -107,24 +108,32 @@ export function registerCommonTools(
         ]);
       }
       const status = provider.getStatus();
-      return {
-        content: [{ type: 'text' as const, text: JSON.stringify(status) }],
-      };
+      return mcpResponse(status, {
+        compact: args.compact,
+        select: args.select,
+      });
     },
   );
 
-  server.tool('list_chats', 'List known chats and groups', {}, async () => {
-    const chats = provider.listChats ? await provider.listChats() : [];
-    return {
-      content: [{ type: 'text' as const, text: JSON.stringify(chats) }],
-    };
-  });
+  server.tool(
+    'list_chats',
+    'List known chats and groups',
+    { compact: z.boolean().optional(), select: z.string().optional() },
+    async (args) => {
+      const chats = provider.listChats ? await provider.listChats() : [];
+      return mcpResponse(chats, { compact: args.compact, select: args.select });
+    },
+  );
 
   server.tool(
     'sync_groups',
     'Refresh group and chat metadata from the platform',
-    { force: z.boolean().optional() },
-    async () => {
+    {
+      force: z.boolean().optional(),
+      compact: z.boolean().optional(),
+      select: z.string().optional(),
+    },
+    async (args) => {
       if (!provider.isConnected() && provider.waitForReady) {
         await Promise.race([
           provider.waitForReady(),
@@ -132,9 +141,10 @@ export function registerCommonTools(
         ]);
       }
       const groups = provider.syncGroups ? await provider.syncGroups() : [];
-      return {
-        content: [{ type: 'text' as const, text: JSON.stringify(groups) }],
-      };
+      return mcpResponse(groups, {
+        compact: args.compact,
+        select: args.select,
+      });
     },
   );
 
@@ -143,12 +153,17 @@ export function registerCommonTools(
   server.tool(
     'get_new_messages',
     'Poll for incoming messages since the last call. Use the returned cursor for subsequent calls.',
-    { since_cursor: z.string().optional() },
+    {
+      since_cursor: z.string().optional(),
+      compact: z.boolean().optional(),
+      select: z.string().optional(),
+    },
     async (args) => {
       const result = buffer.getSince(args.since_cursor);
-      return {
-        content: [{ type: 'text' as const, text: JSON.stringify(result) }],
-      };
+      return mcpResponse(result, {
+        compact: args.compact,
+        select: args.select,
+      });
     },
   );
 
@@ -158,19 +173,11 @@ export function registerCommonTools(
     try {
       await provider.connect();
     } catch (err: unknown) {
-      return {
-        content: [
-          {
-            type: 'text' as const,
-            text: JSON.stringify({
-              error: 'connect failed',
-              detail: err instanceof Error ? err.message : String(err),
-              source: `${provider.name}.connect-tool`,
-            }),
-          },
-        ],
-        isError: true,
-      };
+      return mcpError(
+        McpErrorCode.API_ERROR,
+        err instanceof Error ? err.message : String(err),
+        `${provider.name}.connect`,
+      );
     }
     return { content: [{ type: 'text' as const, text: 'Connected.' }] };
   });
@@ -183,19 +190,11 @@ export function registerCommonTools(
       try {
         await provider.disconnect();
       } catch (err: unknown) {
-        return {
-          content: [
-            {
-              type: 'text' as const,
-              text: JSON.stringify({
-                error: 'disconnect failed',
-                detail: err instanceof Error ? err.message : String(err),
-                source: `${provider.name}.disconnect-tool`,
-              }),
-            },
-          ],
-          isError: true,
-        };
+        return mcpError(
+          McpErrorCode.API_ERROR,
+          err instanceof Error ? err.message : String(err),
+          `${provider.name}.disconnect`,
+        );
       }
       return { content: [{ type: 'text' as const, text: 'Disconnected.' }] };
     },

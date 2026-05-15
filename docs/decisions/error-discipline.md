@@ -243,3 +243,4 @@ See `src/errors/index.ts` for the full API and `src/errors/index.test.ts` for ex
 - Joyent "Error Handling in Node.js" (still the canonical taxonomy reference)
 - PR #101 — platform-abstraction-layer ADR (same "centralize the missing primitive" pattern)
 - TrueCourse session log: `Session-Logs/2026-04-19/truecourse-scan-error-discipline-plan.md`
+- [printing-press-adoption.md](printing-press-adoption.md) — Python exit-code taxonomy extending this ADR's "what should the caller do?" principle to subprocess callers

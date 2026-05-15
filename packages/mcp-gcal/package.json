@@ -1,7 +1,7 @@
 {
   "name": "@deus-ai/gcal-mcp",
   "version": "1.0.0",
-  "description": "Google Calendar MCP server — exposes calendar tools for any MCP client",
+  "description": "Google Calendar MCP server \u2014 exposes calendar tools for any MCP client",
   "type": "module",
   "main": "dist/index.js",
   "bin": {
@@ -17,7 +17,8 @@
     "google-auth-library": "^9.15.1",
     "googleapis": "^146.0.0",
     "pino": "^10.3.1",
-    "zod": "^4.3.6"
+    "zod": "^4.3.6",
+    "@deus-ai/channel-core": "file:../mcp-channel-core"
   },
   "devDependencies": {
     "@types/node": "^22.10.7",

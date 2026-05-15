@@ -32,6 +32,8 @@ _scripts_dir = str(Path(__file__).resolve().parent)
 if _scripts_dir not in sys.path:
     sys.path.insert(0, _scripts_dir)
 from _time import local_now, utc_now  # noqa: E402
+from _exit_codes import SUCCESS, ABSTAIN, USAGE_ERROR, NOT_FOUND, AUTH_ERROR, INTERNAL_ERROR
+from _agent_io import is_agent_context, compact_json, select_fields
 
 import sqlite_vec
 from google import genai
@@ -74,7 +76,7 @@ def _load_vault_path() -> Path:
         "Run `deus setup` or /setup in Claude Code to configure.",
         file=sys.stderr,
     )
-    sys.exit(1)
+    sys.exit(AUTH_ERROR)
 
 
 _vault_root = _load_vault_path()
@@ -144,7 +146,7 @@ def load_api_key() -> str:
         return _load_api_key()
     except RuntimeError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(AUTH_ERROR)
 
 
 def embed(text: str) -> list[float]:
@@ -648,7 +650,7 @@ def cmd_add(path_str: str, extract: bool = True):
     path = Path(path_str).expanduser().resolve()
     if not path.exists():
         print(f"ERROR: file not found: {path}", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(NOT_FOUND)
 
     db = open_db()
     # Soft-delete stale entries for this path (re-indexing)
@@ -697,7 +699,7 @@ def cmd_add_dir(dir_str: str, extract: bool = True):
     dir_path = Path(dir_str).expanduser().resolve()
     if not dir_path.is_dir():
         print(f"ERROR: directory not found: {dir_path}", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(NOT_FOUND)
 
     files = sorted(
         p for p in dir_path.rglob("*.md") if ".obsidian" not in str(p)
@@ -784,7 +786,7 @@ def cmd_recent(n: int = 3, days: bool = False, compact: bool = False):
     """
     if not VAULT_SESSION_LOGS.exists():
         print(f"ERROR: session logs not found at {VAULT_SESSION_LOGS}", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(NOT_FOUND)
 
     log_files = [f for f in VAULT_SESSION_LOGS.rglob("*.md") if ".obsidian" not in str(f)]
 
@@ -1172,14 +1174,16 @@ def cmd_query(query: str, top: int = 3, recency_boost: bool = False,
               show_source: bool = False, domain: str | None = None,
               intent: str | None = None, as_of: str | None = None,
               privacy: str | None = None,
-              allowed_privacy: list[str] | None = None):
+              allowed_privacy: list[str] | None = None,
+              json_output: bool = False, compact: bool = False,
+              select: str | None = None):
     db = open_db()
 
     # Check if anything is indexed
     count = db.execute("SELECT COUNT(*) FROM entries WHERE orphaned_at IS NULL").fetchone()[0]
     if count == 0:
         print("(index empty — run --rebuild first)", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(ABSTAIN)
 
     # Intent classification
     resolved_intent = intent or classify_query_intent(query)
@@ -1400,7 +1404,7 @@ def cmd_query(query: str, top: int = 3, recency_boost: bool = False,
                 existing_atom_ids.add(fts_id)
 
     if not seen and not atom_results:
-        sys.exit(1)  # trigger fallback in /resume
+        sys.exit(ABSTAIN)  # trigger fallback in /resume — callers check non-zero generically
 
     lines = []
 
@@ -1569,7 +1573,23 @@ def cmd_query(query: str, top: int = 3, recency_boost: bool = False,
                 f"Use --privacy sensitive to query them explicitly.)"
             )
 
-    print("\n".join(lines))
+    use_json = json_output or is_agent_context()
+    if use_json:
+        result = {"atoms": atom_results, "sessions": []}
+        if seen:
+            result["sessions"] = [
+                {"path": path, "title": meta.get("tldr", ""), "score": meta.get("score", 0)}
+                for path, meta in seen.items()
+            ]
+        if privacy_filtered:
+            result["privacy_filtered"] = privacy_filtered
+        if compact:
+            result = compact_json(result, long_fields=("text", "source_chunk", "body", "content"))
+        if select:
+            result = select_fields(result, select)
+        print(json.dumps(result))
+    else:
+        print("\n".join(lines))
 
     # Phase 4: log query for blind-spot analysis
     try:
@@ -1596,7 +1616,7 @@ def cmd_wander(seeds: list[str], steps: int = 3, top_k: int = 10, graph: bool = 
 
     if not VAULT_SESSION_LOGS.exists():
         print(f"ERROR: session logs not found at {VAULT_SESSION_LOGS}", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(NOT_FOUND)
 
     today = local_now().date()
 
@@ -3142,7 +3162,7 @@ def cmd_extract(session_path: str, no_contradict: bool = False):
     path = Path(session_path).expanduser().resolve()
     if not path.exists():
         print(f"ERROR: file not found: {path}", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(NOT_FOUND)
 
     content = path.read_text(encoding="utf-8")
 
@@ -3271,7 +3291,7 @@ def cmd_extract(session_path: str, no_contradict: bool = False):
 def cmd_rebuild():
     if not VAULT_SESSION_LOGS.exists():
         print(f"ERROR: session logs not found at {VAULT_SESSION_LOGS}", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(NOT_FOUND)
 
     # Tables that CAN be rebuilt from disk (session logs + atom .md files):
     rebuildable_tables = ["entries", "embeddings", "entries_fts", "entities",
@@ -3292,7 +3312,7 @@ def cmd_rebuild():
             print(f"ABORT: {DB_PATH} contains evolution tables {_tables & _evolution_tables}. "
                   f"Refusing to delete. Evolution data should be in DEUS_EVOLUTION_DB, not here.",
                   file=sys.stderr)
-            sys.exit(1)
+            sys.exit(INTERNAL_ERROR)
 
         # Always back up before rebuild
         import shutil
@@ -3783,7 +3803,7 @@ def cmd_invalidate(path_str: str, reason: str):
     row = db.execute("SELECT id FROM entries WHERE path = ? AND type = 'atom' AND orphaned_at IS NULL LIMIT 1", [str(path)]).fetchone()
     if not row:
         print(f"ERROR: no atom entry found for {path}", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(NOT_FOUND)
     invalidate_atom(db, row[0], reason)
 
 
@@ -3791,7 +3811,7 @@ def cmd_gaps(top: int = 10):
     """Identify knowledge gaps: high-frequency session topics with low atom coverage."""
     if not VAULT_SESSION_LOGS.exists():
         print(f"ERROR: session logs not found at {VAULT_SESSION_LOGS}", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(ABSTAIN)
 
     # 1. Count topic frequency across sessions
     session_topic_count: dict[str, int] = {}
@@ -3842,7 +3862,7 @@ def atom_benchmark(fixture_path: str, k: int = 5) -> dict:
     fixture = Path(fixture_path)
     if not fixture.exists():
         print(f"ERROR: fixture not found: {fixture}", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(INTERNAL_ERROR)
 
     queries = []
     with open(fixture, encoding="utf-8") as f:
@@ -4015,7 +4035,7 @@ def atom_benchmark(fixture_path: str, k: int = 5) -> dict:
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 
-def main():
+def main() -> int:
     parser = argparse.ArgumentParser(description="Deus memory indexer")
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--add", metavar="PATH", help="Index a single session log")
@@ -4089,6 +4109,10 @@ def main():
                         help="Boost recent results in --query (last 7d strong, 30d moderate)")
     parser.add_argument("--source", action="store_true",
                         help="Show source excerpt below each atom in --query results")
+    parser.add_argument("--json", action="store_true",
+                        help="Emit structured JSON (auto when DEUS_AGENT_NATIVE=1)")
+    parser.add_argument("--select", type=str, default=None,
+                        help="Comma-separated field paths to include in JSON output")
     parser.add_argument("--compact", action="store_true",
                         help="Compact output for --recent/--recent-days: truncate decisions, strip paths, "
                              "collapse cluster entries. Auto-triggered at >= 12 sessions.")
@@ -4227,12 +4251,16 @@ def main():
         cmd_query(args.query, top=args.top, recency_boost=args.recency_boost,
                   show_source=args.source, domain=args.domain,
                   intent=args.intent, as_of=args.as_of, privacy=args.privacy,
-                  allowed_privacy=ap)
+                  allowed_privacy=ap,
+                  json_output=args.json,
+                  compact=args.compact,
+                  select=getattr(args, 'select', None))
     elif args.rebuild:
         cmd_rebuild()
     elif args.extract:
         cmd_extract(args.extract, no_contradict=args.no_contradict)
+    return SUCCESS
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

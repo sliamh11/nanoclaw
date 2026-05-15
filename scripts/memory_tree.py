@@ -28,8 +28,9 @@ from pathlib import Path
 
 # Local helpers — _time.py lives next to this script.
 _SCRIPTS_DIR = Path(__file__).resolve().parent
-if str(_SCRIPTS_DIR) not in sys.path:
-    sys.path.insert(0, str(_SCRIPTS_DIR))
+sys.path.insert(0, str(_SCRIPTS_DIR))
+from _exit_codes import SUCCESS, ABSTAIN, USAGE_ERROR, NOT_FOUND, AUTH_ERROR, INTERNAL_ERROR
+from _agent_io import is_agent_context, compact_json, select_fields
 from _time import local_now, utc_now  # noqa: E402
 
 
@@ -2924,6 +2925,8 @@ def main(argv: list[str] | None = None) -> int:
         help="Comma-separated concept terms for FTS5 expansion (from session tracker)",
     )
     p_query.add_argument("--no-coherence", action="store_true", help="Disable coherence gate on gap abstain")
+    p_query.add_argument("--compact", action="store_true", help="Strip verbose fields for token efficiency")
+    p_query.add_argument("--select", type=str, default=None, help="Comma-separated field paths to include")
 
     p_reembed = sub.add_parser("reembed", help="Re-embed a single file")
     p_reembed.add_argument("path", help="Relative path from vault root")
@@ -3018,9 +3021,9 @@ def main(argv: list[str] | None = None) -> int:
             )
         except ValueError as exc:
             print(f"ABORT: {exc}", file=sys.stderr)
-            return 2
+            return USAGE_ERROR
         print(json.dumps(counts, indent=2))
-        return 0
+        return SUCCESS
 
     if args.cmd == "query":
         if args.policy:
@@ -3037,8 +3040,14 @@ def main(argv: list[str] | None = None) -> int:
                 concepts=concept_list,
                 use_coherence_gate=not args.no_coherence,
             )
-        if args.json:
-            print(json.dumps(result, indent=2))
+        use_json = args.json or is_agent_context()
+        if use_json:
+            output = result
+            if getattr(args, "compact", False):
+                output = compact_json(output, long_fields=("content", "body", "description"))
+            if getattr(args, "select", None):
+                output = select_fields(output, args.select)
+            print(json.dumps(output))
         else:
             for r in result["results"]:
                 route = r.get("route") or "policy"
@@ -3047,13 +3056,12 @@ def main(argv: list[str] | None = None) -> int:
             if "policy_trace" in result and result["policy_trace"]:
                 extra = f" policy={','.join(result['policy_trace'])}"
             print(f"— confidence={result['confidence']:.3f} fell_back={result['fell_back']}{extra}")
-        # Exit code: 0 when a usable result was surfaced, 1 on abstain.
-        return 0 if not result["fell_back"] else 1
+        return SUCCESS if not result["fell_back"] else ABSTAIN
 
     if args.cmd == "reembed":
         status = reembed_file(vault, args.path, db)
         print(status)
-        return 0
+        return SUCCESS
 
     if args.cmd == "check":
         if args.auto_fix:
@@ -3074,7 +3082,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"ok={report['ok']} nodes={report.get('nodes_active', 0)}")
             for issue in report["issues"]:
                 print(f"  - {issue}")
-        return 0 if report["ok"] else 1
+        return SUCCESS if report["ok"] else ABSTAIN
 
     if args.cmd == "graph":
         dot = render_graph(db, highlight=args.highlight)
@@ -3082,22 +3090,22 @@ def main(argv: list[str] | None = None) -> int:
             Path(args.output).write_text(dot)
         else:
             print(dot)
-        return 0
+        return SUCCESS
 
     if args.cmd == "manifest":
         print(generate_manifest(db))
-        return 0
+        return SUCCESS
 
     if args.cmd == "reindex-external":
         ext_dir = os.environ.get(EXTERNAL_DIR_ENV)
         if not ext_dir:
             print(f"ABORT: {EXTERNAL_DIR_ENV} not set", file=sys.stderr)
-            return 2
+            return USAGE_ERROR
         try:
             counts = reindex_external(db, Path(ext_dir), skip_embed=args.skip_embed)
         except (FileNotFoundError, ValueError) as exc:
             print(f"ABORT: {exc}", file=sys.stderr)
-            return 2
+            return USAGE_ERROR
         if args.json:
             print(json.dumps(counts, indent=2))
         else:
@@ -3108,20 +3116,20 @@ def main(argv: list[str] | None = None) -> int:
                 f"id_written={counts['id_written']} "
                 f"skipped={counts['skipped']}"
             )
-        return 0
+        return SUCCESS
 
     if args.cmd == "sync-atom-kinds":
         ext_dir = os.environ.get(EXTERNAL_DIR_ENV)
         if not ext_dir:
             print(f"ABORT: {EXTERNAL_DIR_ENV} not set", file=sys.stderr)
-            return 2
+            return USAGE_ERROR
         try:
             result = sync_atom_kinds(
                 db, Path(ext_dir), apply=not args.dry_run,
             )
         except FileNotFoundError as exc:
             print(f"ABORT: {exc}", file=sys.stderr)
-            return 2
+            return USAGE_ERROR
         if args.json:
             print(json.dumps(result, indent=2, default=str))
         else:
@@ -3137,7 +3145,7 @@ def main(argv: list[str] | None = None) -> int:
             for (name, old, new) in result["fixed"]:
                 arrow = "→" if not args.dry_run else "would →"
                 print(f"  {name}: {old!r} {arrow} {new!r}")
-        return 0
+        return SUCCESS
 
     if args.cmd == "backfill-angles":
         counts = backfill_approach_angles(
@@ -3151,7 +3159,7 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(counts, indent=2))
         else:
             print(f"Done: {counts['generated']} generated, {counts['skipped']} skipped, {counts['failed']} failed")
-        return 0
+        return SUCCESS
 
     if args.cmd == "backfill-entities":
         rows = db.execute(
@@ -3167,7 +3175,7 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(result, indent=2))
         else:
             print(f"Extracted entities for {count} nodes")
-        return 0
+        return SUCCESS
 
     if args.cmd == "sync-fts-angles":
         rows = db.execute(
@@ -3192,12 +3200,12 @@ def main(argv: list[str] | None = None) -> int:
             count += 1
         db.commit()
         print(f"Synced FTS5 with approach angles for {count} nodes")
-        return 0
+        return SUCCESS
 
     if args.cmd == "calibrate":
         data = [json.loads(l) for l in Path(args.labeled_jsonl).read_text().splitlines() if l.strip()]
         print(json.dumps(calibrate(db, data), indent=2))
-        return 0
+        return SUCCESS
 
     if args.cmd == "calibrate-sweep":
         data = [json.loads(l) for l in Path(args.dataset_jsonl).read_text().splitlines() if l.strip()]
@@ -3214,7 +3222,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Current: abstain={c['abstain_threshold']}, gap={c['gap_threshold']}, "
                   f"coverage={c['coverage_threshold']}, cap={c['content_cap']}")
             print(f"Searched {result['total_combos']} combos, {result['feasible_count']} feasible")
-        return 0
+        return SUCCESS
 
     if args.cmd == "benchmark":
         data = [json.loads(l) for l in Path(args.dataset_jsonl).read_text().splitlines() if l.strip()]
@@ -3225,7 +3233,7 @@ def main(argv: list[str] | None = None) -> int:
         else:
             report = benchmark(db, data, k=args.k, low_threshold=args.low, abstain_threshold=args.abstain, use_fts=not args.no_fts)
         print(json.dumps(report, indent=2))
-        return 0
+        return SUCCESS
 
     if args.cmd == "benchmark-tiered":
         data = [json.loads(l) for l in Path(args.dataset_jsonl).read_text().splitlines() if l.strip()]
@@ -3251,9 +3259,9 @@ def main(argv: list[str] | None = None) -> int:
                   f"tier2_tokens_avg={report['tier2_token_cost_avg']:.1f}")
             if report['abstain_accuracy'] is not None:
                 print(f"abstain_accuracy={report['abstain_accuracy']:.3f}")
-        return 0
+        return SUCCESS
 
-    return 1
+    return ABSTAIN
 
 
 if __name__ == "__main__":

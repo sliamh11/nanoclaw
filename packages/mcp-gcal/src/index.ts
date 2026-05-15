@@ -19,6 +19,7 @@ import pino from 'pino';
 import { z } from 'zod';
 
 import { GCalProvider } from './gcal.js';
+import { mcpError, McpErrorCode, mcpResponse } from '@deus-ai/channel-core';
 
 const logger = pino(
   { level: process.env.LOG_LEVEL || 'info' },
@@ -42,28 +43,45 @@ server.tool(
       .number()
       .optional()
       .describe('Number of days to look ahead (default: 7)'),
+    compact: z.boolean().optional(),
+    select: z.string().optional(),
   },
   async (args) => {
-    const events = await provider.listEvents(args.days ?? 7);
-    return {
-      content: [
-        { type: 'text' as const, text: JSON.stringify(events, null, 2) },
-      ],
-    };
+    try {
+      const events = await provider.listEvents(args.days ?? 7);
+      return mcpResponse(events, {
+        compact: args.compact,
+        select: args.select,
+      });
+    } catch (err: unknown) {
+      return mcpError(
+        McpErrorCode.API_ERROR,
+        err instanceof Error ? err.message : String(err),
+        'gcal.list_events',
+      );
+    }
   },
 );
 
 server.tool(
   'get_event',
   'Get a single calendar event by ID',
-  { event_id: z.string().describe('The event ID') },
+  {
+    event_id: z.string().describe('The event ID'),
+    compact: z.boolean().optional(),
+    select: z.string().optional(),
+  },
   async (args) => {
-    const event = await provider.getEvent(args.event_id);
-    return {
-      content: [
-        { type: 'text' as const, text: JSON.stringify(event, null, 2) },
-      ],
-    };
+    try {
+      const event = await provider.getEvent(args.event_id);
+      return mcpResponse(event, { compact: args.compact, select: args.select });
+    } catch (err: unknown) {
+      return mcpError(
+        McpErrorCode.API_ERROR,
+        err instanceof Error ? err.message : String(err),
+        'gcal.get_event',
+      );
+    }
   },
 );
 
@@ -78,20 +96,26 @@ server.tool(
     end: z.string().optional().describe('End time (default: start + 1 hour)'),
     description: z.string().optional().describe('Event description'),
     location: z.string().optional().describe('Event location'),
+    compact: z.boolean().optional(),
+    select: z.string().optional(),
   },
   async (args) => {
-    const event = await provider.createEvent({
-      title: args.title,
-      start: args.start,
-      end: args.end,
-      description: args.description,
-      location: args.location,
-    });
-    return {
-      content: [
-        { type: 'text' as const, text: JSON.stringify(event, null, 2) },
-      ],
-    };
+    try {
+      const event = await provider.createEvent({
+        title: args.title,
+        start: args.start,
+        end: args.end,
+        description: args.description,
+        location: args.location,
+      });
+      return mcpResponse(event, { compact: args.compact, select: args.select });
+    } catch (err: unknown) {
+      return mcpError(
+        McpErrorCode.API_ERROR,
+        err instanceof Error ? err.message : String(err),
+        'gcal.create_event',
+      );
+    }
   },
 );
 
@@ -105,20 +129,26 @@ server.tool(
     end: z.string().optional().describe('New end time (ISO 8601)'),
     description: z.string().optional().describe('New description'),
     location: z.string().optional().describe('New location'),
+    compact: z.boolean().optional(),
+    select: z.string().optional(),
   },
   async (args) => {
-    const event = await provider.updateEvent(args.event_id, {
-      title: args.title,
-      start: args.start,
-      end: args.end,
-      description: args.description,
-      location: args.location,
-    });
-    return {
-      content: [
-        { type: 'text' as const, text: JSON.stringify(event, null, 2) },
-      ],
-    };
+    try {
+      const event = await provider.updateEvent(args.event_id, {
+        title: args.title,
+        start: args.start,
+        end: args.end,
+        description: args.description,
+        location: args.location,
+      });
+      return mcpResponse(event, { compact: args.compact, select: args.select });
+    } catch (err: unknown) {
+      return mcpError(
+        McpErrorCode.API_ERROR,
+        err instanceof Error ? err.message : String(err),
+        'gcal.update_event',
+      );
+    }
   },
 );
 
@@ -127,12 +157,16 @@ server.tool(
   'Delete a calendar event',
   { event_id: z.string().describe('The event ID to delete') },
   async (args) => {
-    await provider.deleteEvent(args.event_id);
-    return {
-      content: [
-        { type: 'text' as const, text: `Deleted event ${args.event_id}` },
-      ],
-    };
+    try {
+      await provider.deleteEvent(args.event_id);
+      return mcpResponse({ deleted: args.event_id });
+    } catch (err: unknown) {
+      return mcpError(
+        McpErrorCode.API_ERROR,
+        err instanceof Error ? err.message : String(err),
+        'gcal.delete_event',
+      );
+    }
   },
 );
 
@@ -145,14 +179,23 @@ server.tool(
       .number()
       .optional()
       .describe('Number of days to search (default: 30)'),
+    compact: z.boolean().optional(),
+    select: z.string().optional(),
   },
   async (args) => {
-    const events = await provider.searchEvents(args.query, args.days ?? 30);
-    return {
-      content: [
-        { type: 'text' as const, text: JSON.stringify(events, null, 2) },
-      ],
-    };
+    try {
+      const events = await provider.searchEvents(args.query, args.days ?? 30);
+      return mcpResponse(events, {
+        compact: args.compact,
+        select: args.select,
+      });
+    } catch (err: unknown) {
+      return mcpError(
+        McpErrorCode.API_ERROR,
+        err instanceof Error ? err.message : String(err),
+        'gcal.search_events',
+      );
+    }
   },
 );
 
