@@ -27,11 +27,19 @@ _project_root = str(Path(__file__).resolve().parent.parent)
 if _project_root not in sys.path:
     sys.path.insert(0, _project_root)
 
-# Local helpers — _time.py lives next to this script.
+# Local helpers — _time.py and _agent_cli.py live next to this script.
 _scripts_dir = str(Path(__file__).resolve().parent)
 if _scripts_dir not in sys.path:
     sys.path.insert(0, _scripts_dir)
 from _time import local_now, utc_now  # noqa: E402
+from _agent_cli import (  # noqa: E402
+    EXIT_AUTH,
+    EXIT_INTERNAL,
+    EXIT_INTERRUPTED,
+    EXIT_NOT_FOUND,
+    EXIT_USAGE,
+    classify_exception,
+)
 
 import sqlite_vec
 from google import genai
@@ -74,7 +82,7 @@ def _load_vault_path() -> Path:
         "Run `deus setup` or /setup in Claude Code to configure.",
         file=sys.stderr,
     )
-    sys.exit(1)
+    sys.exit(EXIT_USAGE)  # UserError: missing required vault config
 
 
 _vault_root = _load_vault_path()
@@ -144,7 +152,8 @@ def load_api_key() -> str:
         return _load_api_key()
     except RuntimeError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
-        sys.exit(1)
+        # FatalError: missing API key / auth failure.
+        sys.exit(EXIT_AUTH)
 
 
 def embed(text: str) -> list[float]:
@@ -648,7 +657,8 @@ def cmd_add(path_str: str, extract: bool = True):
     path = Path(path_str).expanduser().resolve()
     if not path.exists():
         print(f"ERROR: file not found: {path}", file=sys.stderr)
-        sys.exit(1)
+        # UserError: path arg points to non-existent file.
+        sys.exit(EXIT_NOT_FOUND)
 
     db = open_db()
     # Soft-delete stale entries for this path (re-indexing)
@@ -697,7 +707,8 @@ def cmd_add_dir(dir_str: str, extract: bool = True):
     dir_path = Path(dir_str).expanduser().resolve()
     if not dir_path.is_dir():
         print(f"ERROR: directory not found: {dir_path}", file=sys.stderr)
-        sys.exit(1)
+        # UserError: path arg points to non-existent directory.
+        sys.exit(EXIT_NOT_FOUND)
 
     files = sorted(
         p for p in dir_path.rglob("*.md") if ".obsidian" not in str(p)
@@ -4015,7 +4026,38 @@ def atom_benchmark(fixture_path: str, k: int = 5) -> dict:
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 
-def main():
+
+def main() -> int:
+    """Top-level entry — wraps _main_impl with typed-exit-code error handling.
+
+    See ``docs/decisions/agent-native-cli-protocol.md`` for the exit-code
+    contract. Uncaught exceptions become EXIT_INTERNAL; KeyboardInterrupt
+    becomes EXIT_INTERRUPTED (130, POSIX); SystemExit propagates normally.
+
+    The legacy void-return _main_impl is wrapped here so the typed exit code
+    propagates to the shell via ``sys.exit(main())`` in the ``__main__``
+    block. Without this wrap, uncaught exceptions in _main_impl would crash
+    with Python's default exit code 1, and agents couldn't distinguish
+    internal-error from legacy soft-failure.
+    """
+    try:
+        _main_impl()
+        return 0
+    except SystemExit:
+        raise  # argparse / explicit sys.exit handled normally
+    except KeyboardInterrupt:
+        return EXIT_INTERRUPTED
+    except Exception as exc:  # noqa: BLE001 — top-level final guard
+        import traceback
+        print(
+            f"INTERNAL ERROR: {type(exc).__name__}: {exc}",
+            file=sys.stderr,
+        )
+        traceback.print_exc(file=sys.stderr)
+        return classify_exception(exc)
+
+
+def _main_impl():
     parser = argparse.ArgumentParser(description="Deus memory indexer")
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--add", metavar="PATH", help="Index a single session log")
@@ -4235,4 +4277,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

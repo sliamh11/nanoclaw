@@ -26,11 +26,19 @@ import time
 from datetime import datetime, timezone  # noqa: F401 -- timezone re-exported through _time
 from pathlib import Path
 
-# Local helpers — _time.py lives next to this script.
+# Local helpers — _time.py and _agent_cli.py live next to this script.
 _SCRIPTS_DIR = Path(__file__).resolve().parent
 if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
 from _time import local_now, utc_now  # noqa: E402
+from _agent_cli import (  # noqa: E402
+    EXIT_INTERNAL,
+    EXIT_INTERRUPTED,
+    EXIT_NOT_FOUND,
+    EXIT_USAGE,
+    classify_exception,
+    should_emit_json,
+)
 
 
 def _utc_iso() -> str:
@@ -2889,6 +2897,29 @@ def backfill_approach_angles(
 # ── CLI ───────────────────────────────────────────────────────────────────────
 
 def main(argv: list[str] | None = None) -> int:
+    """Top-level entry — wraps _main_impl with typed-exit-code error handling.
+
+    See ``docs/decisions/agent-native-cli-protocol.md`` for the exit-code
+    contract. Uncaught exceptions become EXIT_INTERNAL; KeyboardInterrupt
+    becomes EXIT_INTERRUPTED (130, POSIX); SystemExit propagates normally.
+    """
+    try:
+        return _main_impl(argv)
+    except SystemExit:
+        raise  # argparse / explicit sys.exit handled normally
+    except KeyboardInterrupt:
+        return EXIT_INTERRUPTED
+    except Exception as exc:  # noqa: BLE001 — top-level final guard
+        import traceback
+        print(
+            f"INTERNAL ERROR: {type(exc).__name__}: {exc}",
+            file=sys.stderr,
+        )
+        traceback.print_exc(file=sys.stderr)
+        return classify_exception(exc)
+
+
+def _main_impl(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="memory_tree", description=__doc__)
     sub = parser.add_subparsers(dest="cmd", required=True)
 
@@ -3018,7 +3049,7 @@ def main(argv: list[str] | None = None) -> int:
             )
         except ValueError as exc:
             print(f"ABORT: {exc}", file=sys.stderr)
-            return 2
+            return EXIT_USAGE
         print(json.dumps(counts, indent=2))
         return 0
 
@@ -3037,7 +3068,7 @@ def main(argv: list[str] | None = None) -> int:
                 concepts=concept_list,
                 use_coherence_gate=not args.no_coherence,
             )
-        if args.json:
+        if should_emit_json(args.json):
             print(json.dumps(result, indent=2))
         else:
             for r in result["results"]:
@@ -3058,7 +3089,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "check":
         if args.auto_fix:
             fix_counts = autofix_tree(db, vault)
-            if args.json:
+            if should_emit_json(args.json):
                 print(json.dumps(fix_counts, indent=2))
             else:
                 print(
@@ -3068,7 +3099,7 @@ def main(argv: list[str] | None = None) -> int:
                     f"skipped={fix_counts['skipped']}"
                 )
         report = check_tree(db, vault)
-        if args.json:
+        if should_emit_json(args.json):
             print(json.dumps(report, indent=2))
         else:
             print(f"ok={report['ok']} nodes={report.get('nodes_active', 0)}")
@@ -3092,13 +3123,18 @@ def main(argv: list[str] | None = None) -> int:
         ext_dir = os.environ.get(EXTERNAL_DIR_ENV)
         if not ext_dir:
             print(f"ABORT: {EXTERNAL_DIR_ENV} not set", file=sys.stderr)
-            return 2
+            return EXIT_USAGE
         try:
             counts = reindex_external(db, Path(ext_dir), skip_embed=args.skip_embed)
-        except (FileNotFoundError, ValueError) as exc:
+        except FileNotFoundError as exc:
+            # Typed: ext_dir path doesn't exist on disk.
             print(f"ABORT: {exc}", file=sys.stderr)
-            return 2
-        if args.json:
+            return EXIT_NOT_FOUND
+        except ValueError as exc:
+            # Typed: bad ext_dir contents (parse/validation failure).
+            print(f"ABORT: {exc}", file=sys.stderr)
+            return EXIT_USAGE
+        if should_emit_json(args.json):
             print(json.dumps(counts, indent=2))
         else:
             print(
@@ -3114,15 +3150,15 @@ def main(argv: list[str] | None = None) -> int:
         ext_dir = os.environ.get(EXTERNAL_DIR_ENV)
         if not ext_dir:
             print(f"ABORT: {EXTERNAL_DIR_ENV} not set", file=sys.stderr)
-            return 2
+            return EXIT_USAGE
         try:
             result = sync_atom_kinds(
                 db, Path(ext_dir), apply=not args.dry_run,
             )
         except FileNotFoundError as exc:
             print(f"ABORT: {exc}", file=sys.stderr)
-            return 2
-        if args.json:
+            return EXIT_NOT_FOUND
+        if should_emit_json(args.json):
             print(json.dumps(result, indent=2, default=str))
         else:
             prefix = "[dry-run] " if args.dry_run else ""
@@ -3147,7 +3183,7 @@ def main(argv: list[str] | None = None) -> int:
             node_id=args.node_id,
             batch_size=args.batch_size,
         )
-        if args.json:
+        if should_emit_json(args.json):
             print(json.dumps(counts, indent=2))
         else:
             print(f"Done: {counts['generated']} generated, {counts['skipped']} skipped, {counts['failed']} failed")
@@ -3163,7 +3199,7 @@ def main(argv: list[str] | None = None) -> int:
             count += 1
         db.commit()
         result = {"total": count}
-        if args.json:
+        if should_emit_json(args.json):
             print(json.dumps(result, indent=2))
         else:
             print(f"Extracted entities for {count} nodes")
@@ -3202,7 +3238,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "calibrate-sweep":
         data = [json.loads(l) for l in Path(args.dataset_jsonl).read_text().splitlines() if l.strip()]
         result = calibrate_sweep(db, data)
-        if args.json:
+        if should_emit_json(args.json):
             print(json.dumps(result, indent=2))
         else:
             b = result["best"]
@@ -3240,7 +3276,7 @@ def main(argv: list[str] | None = None) -> int:
             low_threshold=args.low,
             abstain_threshold=args.abstain,
         )
-        if args.json:
+        if should_emit_json(args.json):
             print(json.dumps(report, indent=2))
         else:
             print(f"tier1_coverage={report['tier1_coverage']:.3f}  "
