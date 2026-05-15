@@ -1858,6 +1858,128 @@ class TestAtomKind:
         assert "kind" not in fm
 
 
+class TestSyncAtomKinds:
+    """Tests for `sync_atom_kinds` — DB-to-frontmatter atom_kind reconciliation."""
+
+    @staticmethod
+    def _write_atom(
+        ext_dir: Path, name: str, kind: str | None, *, description: str = "test"
+    ) -> None:
+        """Write an atom file with optional `kind:` in frontmatter."""
+        kind_line = f"kind: {kind}\n" if kind else ""
+        (ext_dir / name).write_text(
+            f"---\n"
+            f"id: id_{name.replace('.md', '')}\n"
+            f"name: {name}\n"
+            f"description: {description}\n"
+            f"{kind_line}"
+            f"type: feedback\n"
+            f"---\n"
+            f"body\n",
+            encoding="utf-8",
+        )
+
+    def test_sync_atom_kinds_fixes_stale_db_value(self, tmp_db, tmp_path):
+        ext = tmp_path / "auto-memory"
+        ext.mkdir()
+        self._write_atom(ext, "atom_a.md", "standard")
+        # DB row reflects pre-promotion state.
+        mt.upsert_node(
+            tmp_db,
+            node_id="id_atom_a",
+            path=f"{mt.EXTERNAL_NAMESPACE}atom_a.md",
+            title="atom_a",
+            description="test",
+            level=0,
+            node_type="atom",
+            embedding=[0.1] * mt.EMBED_DIM,
+            content_hash_val="h_a",
+            atom_kind="knowledge",
+        )
+        result = mt.sync_atom_kinds(tmp_db, ext, apply=True)
+        assert len(result["fixed"]) == 1
+        assert result["fixed"][0] == ("atom_a.md", "knowledge", "standard")
+        # DB now reflects the on-disk frontmatter.
+        row = tmp_db.execute(
+            "SELECT atom_kind FROM nodes WHERE path = ?",
+            (f"{mt.EXTERNAL_NAMESPACE}atom_a.md",),
+        ).fetchone()
+        assert row[0] == "standard"
+
+    def test_sync_atom_kinds_dry_run_does_not_write(self, tmp_db, tmp_path):
+        ext = tmp_path / "auto-memory"
+        ext.mkdir()
+        self._write_atom(ext, "atom_b.md", "standard")
+        mt.upsert_node(
+            tmp_db,
+            node_id="id_atom_b",
+            path=f"{mt.EXTERNAL_NAMESPACE}atom_b.md",
+            title="atom_b",
+            description="test",
+            level=0,
+            node_type="atom",
+            embedding=[0.1] * mt.EMBED_DIM,
+            content_hash_val="h_b",
+            atom_kind="knowledge",
+        )
+        result = mt.sync_atom_kinds(tmp_db, ext, apply=False)
+        # `fixed` still records the would-be change.
+        assert len(result["fixed"]) == 1
+        assert result["fixed"][0] == ("atom_b.md", "knowledge", "standard")
+        # But the DB is unchanged.
+        row = tmp_db.execute(
+            "SELECT atom_kind FROM nodes WHERE path = ?",
+            (f"{mt.EXTERNAL_NAMESPACE}atom_b.md",),
+        ).fetchone()
+        assert row[0] == "knowledge"
+
+    def test_sync_atom_kinds_skips_already_synced(self, tmp_db, tmp_path):
+        ext = tmp_path / "auto-memory"
+        ext.mkdir()
+        self._write_atom(ext, "atom_c.md", "knowledge")
+        mt.upsert_node(
+            tmp_db,
+            node_id="id_atom_c",
+            path=f"{mt.EXTERNAL_NAMESPACE}atom_c.md",
+            title="atom_c",
+            description="test",
+            level=0,
+            node_type="atom",
+            embedding=[0.1] * mt.EMBED_DIM,
+            content_hash_val="h_c",
+            atom_kind="knowledge",
+        )
+        result = mt.sync_atom_kinds(tmp_db, ext, apply=True)
+        assert result["fixed"] == []
+        assert result["unchanged"] == 1
+
+    def test_sync_atom_kinds_skips_files_without_kind_field(self, tmp_db, tmp_path):
+        ext = tmp_path / "auto-memory"
+        ext.mkdir()
+        self._write_atom(ext, "atom_d.md", None)  # no kind: line
+        mt.upsert_node(
+            tmp_db,
+            node_id="id_atom_d",
+            path=f"{mt.EXTERNAL_NAMESPACE}atom_d.md",
+            title="atom_d",
+            description="test",
+            level=0,
+            node_type="atom",
+            embedding=[0.1] * mt.EMBED_DIM,
+            content_hash_val="h_d",
+            atom_kind="knowledge",
+        )
+        result = mt.sync_atom_kinds(tmp_db, ext, apply=True)
+        assert "atom_d.md" in result["no_kind_in_file"]
+        assert result["fixed"] == []
+        # DB unchanged.
+        row = tmp_db.execute(
+            "SELECT atom_kind FROM nodes WHERE path = ?",
+            (f"{mt.EXTERNAL_NAMESPACE}atom_d.md",),
+        ).fetchone()
+        assert row[0] == "knowledge"
+
+
 class TestStandardsPack:
     """Tests for scripts/standards_pack.py."""
 
