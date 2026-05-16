@@ -222,6 +222,78 @@ def test_plan_review_gate_returns_zero_outside_worktree(tmp_path, capsys):
     assert capsys.readouterr().out == ""
 
 
+def test_plan_review_gate_returns_zero_for_outside_worktree_target(tmp_path, capsys):
+    """Regression: cwd-in-worktree + target-outside-worktree must not BLOCK (PR #430 over-fire)."""
+    hooks = load_hooks()
+    repo = git_repo(tmp_path)
+    outside_target = tmp_path / "outside" / "plan.md"
+    outside_target.parent.mkdir(parents=True)
+    outside_target.write_text("# plan\n", encoding="utf-8")
+    # cwd is inside the worktree (`repo`); target is outside it entirely.
+    # No `.plan-reviewed` marker — pre-fix this would BLOCK.
+
+    rc = hooks.run_plan_review_gate(
+        apply_patch_event(repo, str(outside_target)),
+        repo,
+    )
+
+    assert rc == 0
+    assert capsys.readouterr().out == ""
+
+
+def test_plan_review_gate_returns_zero_for_home_plans_target(tmp_path, capsys):
+    """Regression: editing `~/.claude/plans/<plan>.md` from worktree cwd must not BLOCK."""
+    hooks = load_hooks()
+    repo = git_repo(tmp_path)
+    fake_home = tmp_path / "fake_home"
+    plan_target = fake_home / ".claude" / "plans" / "plan-xyz.md"
+    plan_target.parent.mkdir(parents=True)
+    plan_target.write_text("# plan content\n", encoding="utf-8")
+
+    rc = hooks.run_plan_review_gate(
+        apply_patch_event(repo, str(plan_target)),
+        repo,
+    )
+
+    assert rc == 0
+    assert capsys.readouterr().out == ""
+
+
+def test_plan_review_gate_still_blocks_mixed_targets_with_in_worktree_path(
+    tmp_path, capsys,
+):
+    """PR #430 invariant: any in-worktree raw path keeps the gate firing, even when mixed with outside-worktree targets."""
+    hooks = load_hooks()
+    repo = git_repo(tmp_path)
+    (repo / "src").mkdir()
+    (repo / ".gitignore").write_text("*.local.json\n", encoding="utf-8")
+    (repo / "src" / "app.local.json").write_text("{}\n", encoding="utf-8")
+    outside_target = tmp_path / "outside" / "x.md"
+    outside_target.parent.mkdir(parents=True)
+    outside_target.write_text("# x\n", encoding="utf-8")
+    # Build a multi-file apply_patch command — PATCH_FILE_RE extracts
+    # both via the `*** Update File:` regex (codex_warden_hooks.py:234).
+    multi_patch = (
+        "*** Begin Patch\n"
+        f"*** Update File: src/app.local.json\n"
+        "@@\n-{}\n+{\"k\": 1}\n"
+        f"*** Update File: {outside_target}\n"
+        "@@\n-# x\n+# y\n"
+        "*** End Patch\n"
+    )
+    event = tool_event(repo, "apply_patch", {"command": multi_patch})
+
+    rc = hooks.run_plan_review_gate(event, repo)
+
+    assert rc == 0
+    output = json.loads(capsys.readouterr().out)
+    specific = output["hookSpecificOutput"]
+    assert specific["hookEventName"] == "PreToolUse"
+    assert specific["permissionDecision"] == "deny"
+    reason = specific["permissionDecisionReason"]
+    assert "no plan-reviewer approval marker" in reason
+
+
 def test_code_review_gate_blocks_git_commit_without_marker(tmp_path, capsys):
     hooks = load_hooks()
     repo = git_repo(tmp_path)

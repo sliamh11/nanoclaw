@@ -683,12 +683,24 @@ def run_plan_review_gate(event: dict[str, Any], repo_root: Path) -> int:
     # `_managed_paths` returns `(None, [])` outside every worktree;
     # otherwise `(worktree, paths_after_filtering)`. Empty `paths` after
     # filtering must NOT bypass the gate (the pre-fix `not paths` short-
-    # circuit was the ExitPlanMode enforcement gap).
+    # circuit was the ExitPlanMode enforcement gap, PR #430).
     worktree, paths = _managed_paths(event, repo_root)
     if worktree is None:
         return 0
 
-    # BLOCK regardless of `paths` emptiness — filter hit ≠ outside-worktree.
+    # Disambiguate empty-paths: (a) all targets outside worktree → return 0;
+    # (b) in-worktree targets filtered by `_is_excluded`/`_git_ignored` → BLOCK.
+    if not paths:
+        cwd = Path(str(event.get("cwd") or os.getcwd())).resolve(strict=False)
+        any_in_worktree = any(
+            _is_relative_to(p, worktree)
+            for p in _event_paths(event, cwd)
+        )
+        if not any_in_worktree:
+            return 0
+
+    # BLOCK: in-worktree edit without marker. `paths` may still be empty
+    # here when all targets were filtered (PR #430 invariant preserved).
     if paths:
         target_list = "\n".join(f"  - {path}" for path in paths[:5])
     else:
