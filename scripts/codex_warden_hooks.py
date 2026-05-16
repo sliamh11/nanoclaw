@@ -803,9 +803,14 @@ def run_verification_gate(event: dict[str, Any], repo_root: Path) -> int:
 
 
 def run_verification_invalidator(event: dict[str, Any], repo_root: Path) -> int:
-    _, paths = _managed_paths(event, repo_root)
-    if paths:
-        _marker(repo_root, ".verified").unlink(missing_ok=True)
+    # Invariant: any Edit/Write inside a managed worktree invalidates the
+    # marker. Gate on worktree presence — NOT on post-filter path
+    # emptiness — so filtered targets (gitignored, `.claude/worktrees/`,
+    # etc.) still clear stale verification.
+    worktree, _ = _managed_paths(event, repo_root)
+    if worktree is None:
+        return 0
+    _marker(repo_root, ".verified").unlink(missing_ok=True)
     return 0
 
 
@@ -898,9 +903,11 @@ def run_memory_tree_hook(event: dict[str, Any], repo_root: Path) -> int:
 
 
 def run_code_review_invalidator(event: dict[str, Any], repo_root: Path) -> int:
-    _, paths = _managed_paths(event, repo_root)
-    if paths:
-        _marker(repo_root, ".code-reviewed").unlink(missing_ok=True)
+    # Same worktree-presence invariant as `run_verification_invalidator`.
+    worktree, _ = _managed_paths(event, repo_root)
+    if worktree is None:
+        return 0
+    _marker(repo_root, ".code-reviewed").unlink(missing_ok=True)
     return 0
 
 

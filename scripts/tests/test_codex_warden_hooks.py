@@ -459,6 +459,73 @@ def test_code_review_invalidator_clears_marker_after_edit(tmp_path):
     assert not marker.exists()
 
 
+def test_code_review_invalidator_clears_marker_on_gitignored_edit(tmp_path):
+    """Regression mirror of the verification-invalidator gitignored case.
+
+    Both invalidators share the empty-paths fix shape — see
+    `test_verification_invalidator_clears_marker_on_gitignored_edit` for
+    the full rationale.
+    """
+    hooks = load_hooks()
+    repo = git_repo(tmp_path)
+    (repo / "src").mkdir()
+    (repo / ".gitignore").write_text("*.local.json\n", encoding="utf-8")
+    (repo / "src" / "app.local.json").write_text("{}\n", encoding="utf-8")
+    marker = repo / ".claude" / ".code-reviewed"
+    marker.touch()
+
+    rc = hooks.run_code_review_invalidator(
+        apply_patch_event(repo, "src/app.local.json"), repo,
+    )
+
+    assert rc == 0
+    assert not marker.exists()
+
+
+def test_code_review_invalidator_clears_marker_on_worktree_excluded_edit(tmp_path):
+    """Regression mirror — `.claude/worktrees/<sub>/...` edits now invalidate.
+
+    See verification-invalidator counterpart for the full rationale; this
+    is the same fix applied to `.code-reviewed`.
+    """
+    hooks = load_hooks()
+    repo = git_repo(tmp_path)
+    (repo / ".claude" / "worktrees" / "foo" / "src").mkdir(parents=True)
+    (repo / ".claude" / "worktrees" / "foo" / "src" / "file.ts").write_text(
+        "old\n", encoding="utf-8",
+    )
+    marker = repo / ".claude" / ".code-reviewed"
+    marker.touch()
+
+    rc = hooks.run_code_review_invalidator(
+        apply_patch_event(repo, ".claude/worktrees/foo/src/file.ts"), repo,
+    )
+
+    assert rc == 0
+    assert not marker.exists()
+
+
+def test_code_review_invalidator_does_not_clear_marker_outside_worktree(tmp_path):
+    """Event from cwd outside any git worktree → marker survives.
+
+    Mirror of the verification-invalidator outside-worktree pin; pins
+    that vault and non-repo edits do not over-invalidate.
+    """
+    hooks = load_hooks()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / ".claude").mkdir()
+    marker = outside / ".claude" / ".code-reviewed"
+    marker.touch()
+
+    rc = hooks.run_code_review_invalidator(
+        apply_patch_event(outside, "any/path.ts"), outside,
+    )
+
+    assert rc == 0
+    assert marker.exists()
+
+
 def test_threat_model_gate_warns_for_security_paths(tmp_path, capsys):
     hooks = load_hooks()
     repo = git_repo(tmp_path)
@@ -1265,6 +1332,78 @@ def test_verification_invalidator_clears_marker_after_edit(tmp_path):
 
     assert rc == 0
     assert not marker.exists()
+
+
+def test_verification_invalidator_clears_marker_on_gitignored_edit(tmp_path):
+    """Regression: gitignored Edit targets now invalidate `.verified`.
+
+    Pre-fix: `_managed_paths` returned `(worktree, [])` because `.gitignore`
+    filtered every event path, so `if paths:` short-circuited without
+    unlinking — leaving stale verification in place. Post-fix: the
+    worktree-presence check fires invalidation regardless of post-filter
+    path emptiness.
+    """
+    hooks = load_hooks()
+    repo = git_repo(tmp_path)
+    (repo / "src").mkdir()
+    (repo / ".gitignore").write_text("*.local.json\n", encoding="utf-8")
+    (repo / "src" / "app.local.json").write_text("{}\n", encoding="utf-8")
+    marker = repo / ".claude" / ".verified"
+    marker.touch()
+
+    rc = hooks.run_verification_invalidator(
+        apply_patch_event(repo, "src/app.local.json"), repo,
+    )
+
+    assert rc == 0
+    assert not marker.exists()
+
+
+def test_verification_invalidator_clears_marker_on_worktree_excluded_edit(tmp_path):
+    """Regression: edits inside `.claude/worktrees/<sub>/...` now invalidate.
+
+    The actual session-bug scenario — subagent-worktree source edits were
+    filtered by `_is_excluded`, so `_managed_paths` returned
+    `(worktree, [])` and the marker stayed stale. The fix pins this case
+    by checking worktree-presence instead of path-truthiness.
+    """
+    hooks = load_hooks()
+    repo = git_repo(tmp_path)
+    (repo / ".claude" / "worktrees" / "foo" / "src").mkdir(parents=True)
+    (repo / ".claude" / "worktrees" / "foo" / "src" / "file.ts").write_text(
+        "old\n", encoding="utf-8",
+    )
+    marker = repo / ".claude" / ".verified"
+    marker.touch()
+
+    rc = hooks.run_verification_invalidator(
+        apply_patch_event(repo, ".claude/worktrees/foo/src/file.ts"), repo,
+    )
+
+    assert rc == 0
+    assert not marker.exists()
+
+
+def test_verification_invalidator_does_not_clear_marker_outside_worktree(tmp_path):
+    """Event from cwd outside any git worktree → marker survives.
+
+    Pins the non-worktree early-exit. Without this, the empty-paths fix
+    could regress in the other direction (invalidating everywhere — e.g.,
+    every `/compress` write to the vault would clear `.verified`).
+    """
+    hooks = load_hooks()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / ".claude").mkdir()
+    marker = outside / ".claude" / ".verified"
+    marker.touch()
+
+    rc = hooks.run_verification_invalidator(
+        apply_patch_event(outside, "any/path.ts"), outside,
+    )
+
+    assert rc == 0
+    assert marker.exists()
 
 
 def test_session_init_clears_verified_marker(tmp_path):
