@@ -4,6 +4,7 @@ import { fileURLToPath } from 'url';
 
 import { loadRegisteredContextFiles } from './context-registry.js';
 import { fetchMemoryContext } from './memory-retrieval-hook.js';
+import { DoomLoopDetector, normalizeArgs } from './doom-loop-detector.js';
 import {
   createOpenAIMcpToolBridge,
   executeBrokerTool,
@@ -349,6 +350,7 @@ async function runSingleTurn(
   containerInput: ContainerInput,
   previousResponseId: string | undefined,
   log: (message: string) => void,
+  doomDetector: DoomLoopDetector,
 ): Promise<{ responseId: string; result: string | null }> {
   const { cwd, hasProject, systemInstructions } =
     getRuntimeContext(containerInput);
@@ -385,6 +387,7 @@ async function runSingleTurn(
 
       log(`OpenAI requested ${calls.length} tool call(s)`);
       input = [];
+      let doomLoopWarning: string | null = null;
       for (const call of calls) {
         let parsedArgs: Record<string, unknown> = {};
         try {
@@ -410,10 +413,33 @@ async function runSingleTurn(
             };
           }
         }
+        const exitCode: number =
+          typeof toolResult?.exitCode === 'number'
+            ? toolResult.exitCode
+            : toolResult?.ok === false
+              ? 1
+              : 0;
+        const succeeded = toolResult?.ok !== false && exitCode === 0;
+        const detection = doomDetector.record({
+          toolName: call.name,
+          normalizedArgs: normalizeArgs(call.name, parsedArgs),
+          exitCode,
+          succeeded,
+        });
+        if (detection.detected) {
+          doomLoopWarning = detection.message;
+        }
         input.push({
           type: 'function_call_output',
           call_id: call.call_id,
           output: JSON.stringify(toolResult),
+        });
+      }
+      if (doomLoopWarning) {
+        input.push({
+          type: 'message',
+          role: 'user',
+          content: [{ type: 'input_text', text: doomLoopWarning }],
         });
       }
     }
@@ -528,6 +554,8 @@ export async function runOpenAIConversation(ctx: OpenAIContext): Promise<void> {
     prompt += '\n' + pending.join('\n');
   }
 
+  const doomDetector = new DoomLoopDetector();
+
   while (true) {
     if (shouldClose()) break;
 
@@ -540,6 +568,7 @@ export async function runOpenAIConversation(ctx: OpenAIContext): Promise<void> {
       containerInput,
       sessionId,
       log,
+      doomDetector,
     );
     sessionId = turn.responseId;
     writeOutput({

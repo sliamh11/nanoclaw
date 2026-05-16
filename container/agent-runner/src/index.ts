@@ -29,6 +29,7 @@ import { bootstrap } from './bootstrap.js';
 import { loadRegisteredContextFiles } from './context-registry.js';
 import { createMemoryRetrievalHook } from './memory-retrieval-hook.js';
 import { runOpenAIConversation } from './openai-backend.js';
+import { DoomLoopDetector, createDoomLoopHook } from './doom-loop-detector.js';
 import { isAuditedTool, writeAuditEntry } from './tool-audit.js';
 
 type AgentRuntimeId = 'claude' | 'openai';
@@ -721,6 +722,8 @@ async function runQuery(
     );
   }
 
+  const doomDetector = new DoomLoopDetector();
+
   for await (const message of query({
     prompt: stream,
     options: {
@@ -793,13 +796,15 @@ async function runQuery(
         PreCompact: [
           { hooks: [createPreCompactHook(containerInput.assistantName)] },
         ],
+        PostToolUseFailure: [{ hooks: [createDoomLoopHook(doomDetector)] }],
         ...(() => {
           const hooks: HookCallback[] = [];
+          hooks.push(createDoomLoopHook(doomDetector));
           if (process.env.DEUS_TOOL_SIZE_LOG !== '0')
             hooks.push(createToolSizeLogHook());
           if (process.env.DEUS_TOOL_AUDIT_LOG !== '0')
             hooks.push(createToolAuditHook());
-          return hooks.length > 0 ? { PostToolUse: [{ hooks }] } : {};
+          return { PostToolUse: [{ hooks }] };
         })(),
       },
     },
