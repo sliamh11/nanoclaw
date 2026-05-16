@@ -4,8 +4,10 @@ import {
   ASSISTANT_NAME,
   CREDENTIAL_PROXY_PORT,
   MAX_MESSAGE_LENGTH,
+  TOOL_PROXY_PORT,
 } from './config.js';
 import { startCredentialProxy } from './credential-proxy.js';
+import { startToolProxy } from './tool-proxy.js';
 import './channels/index.js';
 import {
   getChannelFactory,
@@ -77,6 +79,12 @@ async function main(): Promise<void> {
     PROXY_BIND_HOST,
   );
 
+  // Start tool proxy (containers call host CLIs through this)
+  const toolProxyServer = await startToolProxy(
+    TOOL_PROXY_PORT,
+    PROXY_BIND_HOST,
+  );
+
   const channels: Channel[] = [];
   const queue = new GroupQueue();
 
@@ -103,6 +111,7 @@ async function main(): Promise<void> {
   const shutdown = async (signal: string) => {
     logger.info({ signal }, 'Shutdown signal received');
     proxyServer.close();
+    toolProxyServer.close();
     await queue.shutdown(10000);
     for (const ch of channels) await ch.disconnect();
     process.exit(0);
