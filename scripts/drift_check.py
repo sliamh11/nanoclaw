@@ -1075,6 +1075,52 @@ def check_contradictions(project_root: Path, pattern_filter: str | None = None) 
     return 1
 
 
+
+def check_agent_native_mcp(project_root: Path) -> int:
+    """Verify new MCP tool registrations include compact/select params.
+
+    Scans packages/mcp-*/src/ for server.tool() calls and checks that
+    each has compact and select in its schema. Informational — warns but
+    does not fail CI (new integrations in progress may not have it yet).
+    """
+    packages_dir = project_root / "packages"
+    if not packages_dir.exists():
+        return 0
+
+    violations: list[str] = []
+    for pkg in sorted(packages_dir.iterdir()):
+        if not pkg.name.startswith("mcp-") or not pkg.is_dir():
+            continue
+        src_dir = pkg / "src"
+        if not src_dir.exists():
+            continue
+        for ts_file in sorted(src_dir.glob("*.ts")):
+            text = ts_file.read_text(errors="replace")
+            lines = text.splitlines()
+            for i, line in enumerate(lines, 1):
+                if "server.tool(" in line:
+                    # Look at the next 5 lines for compact/select
+                    block = "\n".join(lines[i - 1 : i + 8])
+                    if "compact" not in block and "select" not in block:
+                        # Skip action-only tools (return static strings, not data)
+                        action_markers = ("'Message sent.'", "'OK'", "'Connected.'", "'Disconnected.'", "'Email sent.'", "mcpResponse({")
+                        if any(m in block for m in action_markers):
+                            continue
+                        rel = ts_file.relative_to(project_root)
+                        violations.append(f"  {rel}:{i} — server.tool() without compact/select params")
+
+    if violations:
+        print(f"MCP tools missing agent-native params ({len(violations)}):")
+        for v in violations:
+            print(v)
+        print("\nFIX: add compact: z.boolean().optional(), select: z.string().optional() to tool schemas.")
+        print("See docs/decisions/printing-press-adoption.md and patterns/channel-add.md.")
+        return 0  # informational until pre-existing violations are cleaned up
+    else:
+        print(f"All MCP tool registrations include agent-native params.")
+    return 0
+
+
 def check_all(project_root: Path, base_ref: str | None = None) -> int:
     """Run every fast check in sequence and aggregate exit codes.
 
@@ -1102,10 +1148,12 @@ def check_all(project_root: Path, base_ref: str | None = None) -> int:
     bs_rc = check_backend_strategy(project_root)
     print("\n=== platform parity ===")
     pp_rc = check_platform_parity(project_root)
+    print("\n=== agent-native MCP ===")
+    anp_rc = check_agent_native_mcp(project_root)
     print("\n=== coverage (informational) ===")
     cov_rc = check_coverage(project_root)
 
-    worst = max(drift_rc, paths_rc, idx_rc, adr_rc, tt_rc, shadow_rc, bm_rc, bench_rc, bs_rc, pp_rc, cov_rc)
+    worst = max(drift_rc, paths_rc, idx_rc, adr_rc, tt_rc, shadow_rc, bm_rc, bench_rc, bs_rc, pp_rc, anp_rc, cov_rc)
     print()
     if worst == 0:
         print("ALL CHECKS PASSED")

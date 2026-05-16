@@ -91,3 +91,17 @@ These apply regardless of which pattern file was loaded. Every contributor — h
 - Don't force-push to shared branches
 - Each PR must contain a single logical change; squash fixup commits before merging
 - Before pushing, run `npm run drift-check` to catch pattern drift before CI does. The `pre-push` hook enforces this automatically.
+
+## Agent-native protocol (required for new CLIs)
+
+Any new Python CLI in `scripts/` that produces output must follow the agent-native protocol (ADR: `docs/decisions/printing-press-adoption.md`):
+
+- Import `from _exit_codes import SUCCESS, ABSTAIN, USAGE_ERROR, NOT_FOUND, AUTH_ERROR, INTERNAL_ERROR`
+- Import `from _agent_io import is_agent_context, compact_json, select_fields`
+- Return typed exit codes from `main()` (never bare `sys.exit(1)`)
+- Accept `--json` flag for structured output
+- Accept `--compact` flag for token-efficient output (strip nulls, truncate long fields)
+- Accept `--select` for field projection
+- Honor `DEUS_AGENT_NATIVE=1` env var for auto-JSON without explicit `--json`
+
+The helpers exist at `scripts/_exit_codes.py` and `scripts/_agent_io.py` — import and use them, don't reimplement.

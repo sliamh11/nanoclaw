@@ -75,3 +75,19 @@ Channel-specific env vars (e.g., `TELEGRAM_BOT_TOKEN`) are static long-lived sec
 ## Extra doc
 
 Load `docs/CONTRIBUTING-AI.md` §MCP Channel Servers for the full SDK pattern.
+
+## Agent-native protocol (required for all MCP tools)
+
+Every MCP tool registration must use the shared response helpers from `@deus-ai/channel-core` (ADR: `docs/decisions/printing-press-adoption.md`):
+
+```typescript
+import { mcpResponse, mcpError, McpErrorCode } from '@deus-ai/channel-core';
+```
+
+Requirements for every tool:
+- Add `compact: z.boolean().optional()` and `select: z.string().optional()` to the input schema
+- Return responses via `mcpResponse(data, { compact: args.compact, select: args.select })` — never raw `JSON.stringify`
+- Wrap handlers in `try/catch` returning `mcpError(McpErrorCode.API_ERROR, err.message, 'resource')` on failure
+- Error codes: `USAGE=2`, `NOT_FOUND=3`, `AUTH=4`, `API_ERROR=5`, `RATE_LIMIT=7`
+
+This gives agents token-efficient querying (compact strips nulls + truncates, select filters fields) and typed error self-correction.
