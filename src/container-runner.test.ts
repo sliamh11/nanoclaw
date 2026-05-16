@@ -36,6 +36,7 @@ vi.mock('./config.js', () => ({
   HOME_DIR: '/tmp/deus-test-home',
   IDLE_TIMEOUT: 1800000, // 30min
   TIMEZONE: 'America/Los_Angeles',
+  TOOL_PROXY_PORT: 3003,
 }));
 
 vi.mock('./group-tokens.js', () => ({
