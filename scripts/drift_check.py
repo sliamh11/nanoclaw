@@ -1121,6 +1121,76 @@ def check_agent_native_mcp(project_root: Path) -> int:
     return 0
 
 
+def check_mcp_description_hints(project_root: Path) -> int:
+    """Verify MCP tools with compact/select schemas mention hints in descriptions.
+
+    Sibling to check_agent_native_mcp. For every server.tool() block whose
+    schema includes BOTH compact and select (i.e., the tool participates in
+    field projection), the description string should mention 'select',
+    'compact', or 'payload' so the LLM caller learns when to pass them.
+
+    Scope limits (documented to avoid surprise):
+      - AND requirement: half-projection tools (compact-only OR select-only)
+        are skipped — none exist in the codebase today.
+      - Multi-line descriptions (e.g., 'foo ' + 'bar') are not supported;
+        only the first quoted-string line after the tool name is checked.
+
+    Informational — warns but does not fail CI. See
+    docs/decisions/printing-press-adoption.md "Empirical findings".
+    """
+    packages_dir = project_root / "packages"
+    if not packages_dir.exists():
+        return 0
+
+    hint_keywords = ("select", "compact", "payload")
+    violations: list[str] = []
+    for pkg in sorted(packages_dir.iterdir()):
+        if not pkg.name.startswith("mcp-") or not pkg.is_dir():
+            continue
+        src_dir = pkg / "src"
+        if not src_dir.exists():
+            continue
+        for ts_file in sorted(src_dir.glob("*.ts")):
+            text = ts_file.read_text(errors="replace")
+            lines = text.splitlines()
+            for i, line in enumerate(lines, 1):
+                if "server.tool(" not in line:
+                    continue
+                # Look at the next 12 lines for the schema + description.
+                block = "\n".join(lines[i - 1 : i + 12])
+                # Only applies to tools whose schema accepts BOTH compact AND select.
+                if "compact" not in block or "select" not in block:
+                    continue
+                # Description is the second quoted-string line after server.tool(
+                # (the first is the tool name).
+                quoted: list[str] = []
+                for follow in lines[i : i + 6]:
+                    stripped = follow.strip()
+                    if stripped.startswith(("'", '"')):
+                        quoted.append(stripped)
+                if len(quoted) < 2:
+                    continue  # Unparseable; skip rather than false-positive.
+                description = quoted[1].lower()
+                if not any(kw in description for kw in hint_keywords):
+                    rel = ts_file.relative_to(project_root)
+                    violations.append(
+                        f"  {rel}:{i} — server.tool() schema has compact/select but description lacks hint"
+                    )
+
+    if violations:
+        print(f"MCP tools missing description hints ({len(violations)}):")
+        for v in violations:
+            print(v)
+        print(
+            "\nFIX: add a usage hint to the description string. Example: "
+            "'List events. Pass select=\"id,start,summary\" + compact=true to cut payload.'"
+        )
+        print("See docs/decisions/printing-press-adoption.md and patterns/channel-add.md.")
+        return 0  # informational
+    print("All projection-capable MCP tools include description hints.")
+    return 0
+
+
 def check_all(project_root: Path, base_ref: str | None = None) -> int:
     """Run every fast check in sequence and aggregate exit codes.
 
@@ -1150,10 +1220,12 @@ def check_all(project_root: Path, base_ref: str | None = None) -> int:
     pp_rc = check_platform_parity(project_root)
     print("\n=== agent-native MCP ===")
     anp_rc = check_agent_native_mcp(project_root)
+    print("\n=== MCP description hints ===")
+    mhint_rc = check_mcp_description_hints(project_root)
     print("\n=== coverage (informational) ===")
     cov_rc = check_coverage(project_root)
 
-    worst = max(drift_rc, paths_rc, idx_rc, adr_rc, tt_rc, shadow_rc, bm_rc, bench_rc, bs_rc, pp_rc, anp_rc, cov_rc)
+    worst = max(drift_rc, paths_rc, idx_rc, adr_rc, tt_rc, shadow_rc, bm_rc, bench_rc, bs_rc, pp_rc, anp_rc, mhint_rc, cov_rc)
     print()
     if worst == 0:
         print("ALL CHECKS PASSED")
