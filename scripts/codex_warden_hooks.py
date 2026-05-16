@@ -130,6 +130,13 @@ HOOK_SPECS: tuple[HookSpec, ...] = (
         5,
         "Retrieving Deus memory",
     ),
+    HookSpec(
+        "UserPromptSubmit",
+        None,
+        "migration-nudge",
+        3,
+        "Checking pending migrations",
+    ),
 )
 
 PATCH_FILE_RE = re.compile(r"^\*\*\* (?:Add|Update|Delete) File: (.+)$", re.MULTILINE)
@@ -627,6 +634,7 @@ def run_session_init(repo_root: Path) -> int:
         ".threat-modeled",
         ".verified",
         ".admin-merge-approved",
+        ".migration-nudged",
     ):
         _marker(repo_root, name).unlink(missing_ok=True)
     _sync_atom_kinds_on_init(repo_root)
@@ -1376,6 +1384,33 @@ def run_verdict_tracker(event: dict[str, Any], repo_root: Path) -> int:
     return 0
 
 
+def run_migration_nudge(event: dict[str, Any], repo_root: Path) -> int:
+    """Once per session, check for pending migrations and emit a nudge."""
+    marker = _marker(repo_root, ".migration-nudged")
+    if marker.exists():
+        return 0
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.touch()
+
+    migrations_dir = repo_root / "migrations"
+    if not migrations_dir.exists():
+        return 0
+    state_file = repo_root / ".deus" / "migration-state.json"
+    try:
+        state = json.loads(state_file.read_text()) if state_file.exists() else {}
+    except (json.JSONDecodeError, OSError):
+        state = {}
+    applied = set(state.get("applied", []))
+    files = [f for f in os.listdir(migrations_dir) if re.match(r"^\d{4}-.+\.mjs$", f)]
+    pending = [f.split("-")[0] for f in files if f.split("-")[0] not in applied]
+    if not pending:
+        return 0
+    _additional_context(
+        f"[deus] {len(pending)} pending migration(s). Run: npm run migrate"
+    )
+    return 0
+
+
 RUNNERS = {
     "session-init": lambda event, repo: run_session_init(repo),
     "plan-review-gate": run_plan_review_gate,
@@ -1391,6 +1426,7 @@ RUNNERS = {
     "path-leak-detector": run_path_leak_detector,
     "catchup-freshness": run_catchup_freshness,
     "memory-retrieval": run_memory_retrieval,
+    "migration-nudge": run_migration_nudge,
     "orchestrator-preflight": run_orchestrator_preflight,
     "warden-verdict-tracker": run_verdict_tracker,
 }
