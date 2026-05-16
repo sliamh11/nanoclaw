@@ -30,7 +30,7 @@ Return a single markdown report. No preamble.
 1-line reason.
 
 ## Blocking Issues
-(severity=blocking violations. Format: `` `<rule-id>` at `path/to/file.ts:L42` — <one-line observation>``. Empty = "None.")
+(severity=blocking violations. Format: `` `<rule-id>` at `path/to/file.ts:L42` — <one-line observation>. **Fix:** <remediation from the rule>``  Empty = "None.")
 
 ## Warnings
 (severity=warning violations. Same format.)
@@ -47,7 +47,7 @@ Return a single markdown report. No preamble.
 
 ## Rules of engagement
 
-- **Cite rule ids + diff locations.** Every finding ties to a specific rule. Format: `` `<rule-id>` at `path:line` — <observation>``. No generic advice.
+- **Cite rule ids + diff locations.** Every finding ties to a specific rule. Format: `` `<rule-id>` at `path:line` — <observation>. **Fix:** <remediation from the rule>``  No generic advice.
 - **Don't rewrite the code.** Point out the problem; leave the fix to the author.
 - **Skip rules with no match.** If `Applies when` doesn't match any hunk in the diff, don't mention the rule.
 - **Off-rule findings go to Recommendations.** If you spot something worth flagging that no rule covers, put it in Recommendations (not Blocking/Warnings). Keep it rare.
