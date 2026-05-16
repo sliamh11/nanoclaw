@@ -924,11 +924,24 @@ def run_threat_model_gate(event: dict[str, Any], repo_root: Path) -> int:
     if not _warden_enabled(config, "threat-modeler"):
         return 0
 
-    _, paths = _managed_paths(event, repo_root)
-    if not paths or _marker(repo_root, ".threat-modeled").exists():
+    # Marker first — cheapest exit before any path resolution.
+    if _marker(repo_root, ".threat-modeled").exists():
         return 0
 
-    matched = [path for path in paths if SECURITY_PATH_RE.search(path.as_posix())]
+    cwd = Path(str(event.get("cwd") or os.getcwd())).resolve(strict=False)
+    worktree = _worktree_for_cwd(cwd, repo_root)
+    if worktree is None:
+        return 0  # cwd outside any Deus worktree — gate doesn't apply.
+
+    # Run SECURITY_PATH_RE against raw event paths within the worktree,
+    # bypassing `_managed_paths` — its `_is_excluded`/`.gitignore` filters
+    # strip the very subagent-worktree and gitignored security paths we
+    # want to warn about.
+    matched = [
+        path for path in _event_paths(event, cwd)
+        if _is_relative_to(path, worktree)
+        and SECURITY_PATH_RE.search(path.as_posix())
+    ]
     if not matched:
         return 0
 
