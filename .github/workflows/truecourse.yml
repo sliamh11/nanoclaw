@@ -33,6 +33,12 @@ jobs:
     name: TrueCourse --diff vs main
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # Both `truecourse analyze` invocations (baseline + diff) parse a large
+    # AST graph and routinely hit the default 4 GB V8 heap limit on repos
+    # with 170+ files. ubuntu-latest has 16 GB RAM; 8 GB is well within
+    # budget and matches the conventional "next step up" value.
+    env:
+      NODE_OPTIONS: --max-old-space-size=8192
     steps:
       - name: Check out PR head with full history
         uses: actions/checkout@v6
