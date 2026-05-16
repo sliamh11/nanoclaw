@@ -6,6 +6,7 @@ import { loadRegisteredContextFiles } from './context-registry.js';
 import { fetchMemoryContext } from './memory-retrieval-hook.js';
 import { DoomLoopDetector, normalizeArgs } from './doom-loop-detector.js';
 import {
+  type AgentRuntimeId,
   createOpenAIMcpToolBridge,
   executeBrokerTool,
   getOpenAIToolDefinitions,
@@ -22,7 +23,7 @@ export {
 } from './tool-broker.js';
 
 export interface RuntimeSession {
-  backend: 'claude' | 'openai';
+  backend: AgentRuntimeId;
   session_id: string;
   resume_cursor?: string;
   metadata_json?: string;
@@ -30,7 +31,7 @@ export interface RuntimeSession {
 
 export interface ContainerInput {
   prompt: string;
-  backend?: 'claude' | 'openai';
+  backend?: AgentRuntimeId;
   sessionId?: string;
   sessionRef?: RuntimeSession;
   groupFolder: string;

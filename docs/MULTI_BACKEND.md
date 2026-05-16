@@ -64,13 +64,16 @@ Regardless of backend, Deus preserves:
 
 ## What Differs
 
-| Feature | Claude | OpenAI |
-|---------|--------|--------|
-| Tool streaming | Yes (live output) | No (batch response) |
-| Session protocol | Claude Code SDK | OpenAI Responses API |
-| Model default | Claude (via SDK) | gpt-4o (configurable via `DEUS_OPENAI_MODEL`) |
-| Handoffs | Not yet | Not yet |
-| MCP tools | Native | Bridged via tool-broker |
+| Feature | Claude | OpenAI | llama.cpp |
+|---------|--------|--------|-----------|
+| Tool streaming | Yes (live output) | No (batch response) | No (batch response) |
+| Session protocol | Claude Code SDK | OpenAI Responses API | OpenAI chat-completions (in-memory history) |
+| Model default | Claude (via SDK) | gpt-4o (configurable via `DEUS_OPENAI_MODEL`) | configured via `LLAMA_CPP_MODEL` (default Gemma-3-1B GGUF from the `/add-llama-cpp` skill) |
+| Handoffs | Not yet | Not yet | Not yet |
+| MCP tools | Native | Bridged via tool-broker | Bridged via tool-broker (same path as OpenAI) |
+| Multimodal | Yes | Yes (gpt-4o) | No (default GGUF is text-only) |
+| `/compact` | Native | LLM-summary via Responses | Truncation (system + last N turns); summary-based is a follow-up |
+| Credential routing | Through credential proxy | Through credential proxy (`/openai` route) | No proxy — direct call to local `llama-server` (no auth) |
 
 ## Known Parity Gaps
 
@@ -80,6 +83,7 @@ Key gaps as of this writing:
 - OpenAI backend has not been verified end-to-end in production containers
 - Dynamic skill parity depends on skills exposing MCP-style tools
 - Agents SDK handoffs/tracing not yet implemented for OpenAI
+- llama.cpp backend: no `deus llama` foreground CLI shorthand yet (use `deus backend set llama-cpp` and channel messages or scheduled tasks); `/compact` is history truncation only; multimodal default is off; tool-call reliability varies by GGUF model
 
 ## CLI Usage
 
@@ -173,26 +177,47 @@ The backend is resolved in this order (first non-empty wins):
 
 `deus backend set` writes to both config.json and `.env` so both the CLI and background service pick up the change.
 
+## llama.cpp local backend
+
+llama.cpp is a third backend that runs as a local `llama-server` HTTP service on the host. The container talks to it via the OpenAI-compatible `/v1/chat/completions` endpoint — no API key, no credential proxy hop, no per-turn cost.
+
+### Setup
+
+1. Run the `/add-llama-cpp` skill on the host to install `llama-server` and configure the LaunchAgent (macOS) or run it manually (Linux/Windows). See [`.claude/skills/add-llama-cpp/SKILL.md`](../.claude/skills/add-llama-cpp/SKILL.md).
+2. Confirm the local endpoint: `curl -fsS http://127.0.0.1:8080/v1/models`.
+3. **Rebuild the agent container** if upgrading from a pre-llama-cpp Deus build: `./container/build.sh`. Without this, the container won't have the new `llama-cpp-backend.js` module.
+4. Switch backend: `deus backend set llama-cpp`.
+5. Trigger a session: send a channel message, schedule a task, or set `agent_backend: 'llama-cpp'` on a specific group/task.
+6. For an interactive REPL (`deus`), use Claude or Codex — `deus` foreground TUI for llama-cpp is a follow-up (PR #6).
+
+**Scope of this integration:** chat-backend only. Eval-side providers (text generation for the evolution harness, the local judge, and embedding) are tracked as follow-ups per ADR `docs/decisions/llama-cpp-optional-integration.md`. The embedding swap in particular is gated on a full re-embed + threshold recalibration + benchmark snapshot.
+
+### `LLAMA_CPP_PORT` precedence
+
+`process.env.LLAMA_CPP_PORT > .env file > '8080' default`. Keep this aligned with `~/.config/deus/llama-cpp.env` (which the skill writes). Default in both: `8080`.
+
 ## Environment Variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `DEUS_AGENT_BACKEND` | `claude` | Global default: `claude` or `openai` |
+| `DEUS_AGENT_BACKEND` | `claude` | Global default: `claude`, `openai`, or `llama-cpp` |
 | `DEUS_OPENAI_MODEL` | `gpt-4o` | Model for the OpenAI backend |
 | `OPENAI_API_KEY` | -- | Required unless Codex OAuth is available (`~/.codex/auth.json` from `codex login`) |
 | `DEUS_CODEX_MODEL` | `DEUS_OPENAI_MODEL` | Optional model override for `deus codex` |
+| `LLAMA_CPP_BASE_URL` | -- | Optional explicit host-side llama-server URL (advanced) |
+| `LLAMA_CPP_PORT` | `8080` | Port that `llama-server` listens on the host |
+| `LLAMA_CPP_MODEL` | -- | GGUF model alias to send in `chat/completions` requests |
 
 ## Supported Backend Boundary
 
-Claude and OpenAI/Codex are the two implemented agent backends. The `ollama` entry in the `AgentRuntimeId` type union is a forward reservation with no runtime implementation — Ollama is used for eval judging and embeddings, not as a container agent backend.
-
-The architecture supports adding new backends, but the current product scope is deliberately limited to two adapters. This boundary is a conscious scope decision, not a technical limitation.
+Three implemented agent backends: Claude (default), OpenAI/Codex (opt-in via API key or Codex OAuth), and llama.cpp (opt-in via the `/add-llama-cpp` skill). The `ollama` entry in the `AgentRuntimeId`-style CLI display alias is a forward reservation with no runtime implementation — Ollama is used for eval judging and embeddings, not as a container agent backend.
 
 ## Adding a New Backend (for contributors)
 
-1. Create a factory function in `src/agent-runtimes/` (see `claude-backend.ts` as template)
+1. Create a factory function in `src/agent-runtimes/` (see `claude-backend.ts` or `llama-cpp-backend.ts` as templates)
 2. Define capabilities in a `RuntimeCapabilities` constant
 3. Register it in `src/index.ts` via `registry.register(createYourRuntime(deps))`
 4. Add container-side dispatch in `container/agent-runner/src/index.ts`
-5. Add the backend name to `AgentRuntimeId` union in `src/agent-runtimes/types.ts`
-6. Update `parseAgentBackend()` in `src/ipc.ts` and `DEFAULT_AGENT_RUNTIME` in `src/config.ts`
+5. Add the backend name to `AgentRuntimeId` union in `src/agent-runtimes/types.ts` AND to `VALID_BACKENDS` in `container/agent-runner/src/tool-broker.ts` (container-side single source of truth)
+6. Update `parseAgentBackend()` in `src/agent-runtimes/types.ts` (host SoT) — used by `src/config.ts` `DEFAULT_AGENT_RUNTIME` and `src/db.ts` `rowToSessionRef`
+7. If the new backend bypasses the credential proxy (like llama.cpp), restructure the parity test suite in `src/container-runner.test.ts` into shared-env / remote-proxy / local-bypass tiers
