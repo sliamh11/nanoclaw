@@ -539,6 +539,103 @@ def test_threat_model_gate_warns_for_security_paths(tmp_path, capsys):
     assert "threat-modeler" in output["systemMessage"]
 
 
+def test_threat_model_gate_warns_on_worktree_excluded_security_path(tmp_path, capsys):
+    """Regression: subagent worktree edits on security paths now warn.
+
+    Pre-fix: `_managed_paths` filtered `.claude/worktrees/<sub>/...` via
+    `_is_excluded`, so `paths` was empty and the gate short-circuited at
+    `if not paths`. Result: NO `[threat-model-gate]` warning fired even
+    though the user just edited `auth.ts` in a subagent worktree.
+    Post-fix: SECURITY_PATH_RE runs against raw `_event_paths` within the
+    worktree, bypassing `_managed_paths`.
+    """
+    hooks = load_hooks()
+    repo = git_repo(tmp_path)
+    (repo / ".claude" / "worktrees" / "foo" / "src").mkdir(parents=True)
+    (repo / ".claude" / "worktrees" / "foo" / "src" / "auth.ts").write_text(
+        "old\n", encoding="utf-8",
+    )
+
+    rc = hooks.run_threat_model_gate(
+        apply_patch_event(repo, ".claude/worktrees/foo/src/auth.ts"), repo,
+    )
+
+    assert rc == 0
+    output = json.loads(capsys.readouterr().out)
+    msg = output["systemMessage"]
+    assert "[threat-model-gate]" in msg
+    assert "auth.ts" in msg
+
+
+def test_threat_model_gate_warns_on_gitignored_security_path(tmp_path, capsys):
+    """Regression: gitignored security file edits now warn.
+
+    Mirror of the worktree-excluded case for the `.gitignore` filter
+    branch — gitignored auth/oauth/credential files (e.g., local
+    dev-only OAuth state) should still trigger the threat-modeler
+    warning.
+    """
+    hooks = load_hooks()
+    repo = git_repo(tmp_path)
+    (repo / "src").mkdir()
+    (repo / ".gitignore").write_text("*.auth.json\n", encoding="utf-8")
+    (repo / "src" / "oauth.auth.json").write_text("{}\n", encoding="utf-8")
+
+    rc = hooks.run_threat_model_gate(
+        apply_patch_event(repo, "src/oauth.auth.json"), repo,
+    )
+
+    assert rc == 0
+    output = json.loads(capsys.readouterr().out)
+    msg = output["systemMessage"]
+    assert "[threat-model-gate]" in msg
+    assert "oauth.auth.json" in msg
+
+
+def test_threat_model_gate_silent_for_non_security_in_filtered_location(tmp_path, capsys):
+    """Regression guard against over-warning.
+
+    A filtered-path edit that does NOT match SECURITY_PATH_RE must NOT
+    fire the warning. Without this test, the empty-paths fix could
+    regress in the other direction by warning on every filtered-path
+    edit regardless of content. README.md doesn't match the regex
+    (no auth/session/credential/token/etc. token).
+    """
+    hooks = load_hooks()
+    repo = git_repo(tmp_path)
+    (repo / ".claude" / "worktrees" / "foo" / "src").mkdir(parents=True)
+    (repo / ".claude" / "worktrees" / "foo" / "src" / "README.md").write_text(
+        "docs\n", encoding="utf-8",
+    )
+
+    rc = hooks.run_threat_model_gate(
+        apply_patch_event(repo, ".claude/worktrees/foo/src/README.md"), repo,
+    )
+
+    assert rc == 0
+    assert capsys.readouterr().out == ""
+
+
+def test_threat_model_gate_silent_outside_worktree(tmp_path, capsys):
+    """Event from cwd outside any git worktree → no warning.
+
+    Pins the non-worktree early-exit even when the path name matches
+    SECURITY_PATH_RE — the gate should not fire on edits to non-Deus
+    projects.
+    """
+    hooks = load_hooks()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    # NOT a git repo. `_worktree_for_cwd` returns None.
+
+    rc = hooks.run_threat_model_gate(
+        apply_patch_event(outside, "src/auth.ts"), outside,
+    )
+
+    assert rc == 0
+    assert capsys.readouterr().out == ""
+
+
 def test_path_leak_detector_warns_for_home_path(tmp_path, capsys):
     hooks = load_hooks()
     repo = git_repo(tmp_path)
