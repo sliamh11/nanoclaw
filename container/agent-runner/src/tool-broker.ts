@@ -1,4 +1,5 @@
 import { spawn } from 'child_process';
+import { summarizeToolResult } from './tool-summarize.js';
 import dns from 'dns/promises';
 import fs from 'fs';
 import { request as httpRequest } from 'http';
@@ -97,11 +98,7 @@ async function runCommand(
       stderr += chunk.toString();
     });
     proc.on('close', (code) => {
-      resolve({
-        stdout: stdout.slice(0, 60_000),
-        stderr: stderr.slice(0, 20_000),
-        exitCode: code ?? 0,
-      });
+      resolve(summarizeToolResult({ command, stdout, stderr, exitCode: code ?? 0 }));
     });
   });
 }
@@ -132,11 +129,7 @@ async function runProgram(
       });
     });
     proc.on('close', (code) => {
-      resolve({
-        stdout: stdout.slice(0, 60_000),
-        stderr: stderr.slice(0, 20_000),
-        exitCode: code ?? 0,
-      });
+      resolve(summarizeToolResult({ program: command, args, stdout, stderr, exitCode: code ?? 0 }));
     });
   });
 }
