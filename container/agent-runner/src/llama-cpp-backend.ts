@@ -19,6 +19,7 @@
  * summary-based compaction is tracked as a follow-up.
  */
 
+import { randomBytes } from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -424,11 +425,10 @@ export async function runLlamaCppConversation(
   const messages: ChatMessage[] = [
     { role: 'system', content: systemInstructions },
   ];
-  // Synthetic session id so the host can correlate; not tied to a server
-  // response id (llama.cpp has no server-side response state).
-  const sessionId = `llama-cpp-${Date.now()}-${Math.random()
-    .toString(36)
-    .slice(2, 8)}`;
+  // Synthetic correlation id (not a security token). Use crypto.randomBytes
+  // — Math.random() triggered a CodeQL insecure-randomness warning here and
+  // is inexpensive to resolve.
+  const sessionId = `llama-cpp-${Date.now()}-${randomBytes(4).toString('hex')}`;
 
   let prompt = containerInput.prompt;
 
