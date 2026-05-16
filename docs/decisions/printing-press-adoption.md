@@ -105,4 +105,4 @@ MCP responses MUST be JSON per protocol. Wide structured records (calendar event
 
 ### Drift enforcement
 
-A sibling check `check_mcp_description_hints` in `scripts/drift_check.py` warns (informational) when any `server.tool()` whose schema accepts BOTH `compact` and `select` lacks a hint in its description. The existing `check_agent_native_mcp` continues to enforce schema-level adoption.
+Both `check_agent_native_mcp` and `check_mcp_description_hints` in `scripts/drift_check.py` are blocking: any `server.tool()` registration that lacks `compact`/`select` schema params (without a recognized action-marker) — or that has the schema params but no `select`/`compact`/`payload` hint in its description — fails CI. Both gates started informational and were activated after PR #448 cleared the baseline across mcp-channel-core, mcp-gcal, mcp-gmail, mcp-x, and mcp-whatsapp. See `git log --follow scripts/drift_check.py` for the activation commit.

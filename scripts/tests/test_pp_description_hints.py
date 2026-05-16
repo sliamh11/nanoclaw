@@ -84,13 +84,13 @@ class TestCheckMcpDescriptionHints:
         assert "missing description hints" not in buf.getvalue()
         assert "All projection-capable MCP tools" in buf.getvalue()
 
-    def test_warns_when_hint_missing(self, tmp_path: Path) -> None:
+    def test_hint_missing_is_blocked(self, tmp_path: Path) -> None:
         _make_pkg(tmp_path, "mcp-unhinted", _UNHINTED_TOOL)
         buf = io.StringIO()
         with redirect_stdout(buf):
             rc = drift_check.check_mcp_description_hints(tmp_path)
-        # Informational only — always returns 0.
-        assert rc == 0
+        # Blocking — non-zero on any violation.
+        assert rc == 1
         out = buf.getvalue()
         assert "missing description hints (1)" in out
         assert "mcp-unhinted/src/index.ts" in out

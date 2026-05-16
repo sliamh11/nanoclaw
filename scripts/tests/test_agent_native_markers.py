@@ -198,14 +198,14 @@ class TestActionMarkerScanWindow:
         assert rc == 0
         assert "missing agent-native params" not in buf.getvalue()
 
-    def test_unmigrated_tool_warns(self, tmp_path: Path) -> None:
-        """Data-returning tool without compact/select or action marker is flagged."""
+    def test_unmigrated_tool_is_blocked(self, tmp_path: Path) -> None:
+        """Data-returning tool without compact/select or action marker is flagged AND blocks."""
         _make_pkg(tmp_path, "mcp-unmig", _UNMIGRATED_TOOL)
         buf = io.StringIO()
         with redirect_stdout(buf):
             rc = drift_check.check_agent_native_mcp(tmp_path)
-        # Informational — always returns 0.
-        assert rc == 0
+        # Blocking — non-zero on any violation.
+        assert rc == 1
         out = buf.getvalue()
         assert "missing agent-native params (1)" in out
         assert "mcp-unmig/src/index.ts" in out
@@ -270,7 +270,7 @@ server.tool(
         buf = io.StringIO()
         with redirect_stdout(buf):
             rc = drift_check.check_agent_native_mcp(tmp_path)
-        assert rc == 0  # informational
+        assert rc == 1  # blocking — gate active
         out = buf.getvalue()
         # With the tightened `compact:` / `select:` match, this is now flagged.
         assert "missing agent-native params (1)" in out

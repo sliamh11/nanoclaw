@@ -1080,8 +1080,9 @@ def check_agent_native_mcp(project_root: Path) -> int:
     """Verify new MCP tool registrations include compact/select params.
 
     Scans packages/mcp-*/src/ for server.tool() calls and checks that
-    each has compact and select in its schema. Informational — warns but
-    does not fail CI (new integrations in progress may not have it yet).
+    each has compact and select in its schema. Blocking — fails CI on
+    any violation. Baseline was cleared by PR #448 before this gate
+    was activated; see git history for the activation commit.
     """
     packages_dir = project_root / "packages"
     if not packages_dir.exists():
@@ -1139,7 +1140,7 @@ def check_agent_native_mcp(project_root: Path) -> int:
             print(v)
         print("\nFIX: add compact: z.boolean().optional(), select: z.string().optional() to tool schemas.")
         print("See docs/decisions/printing-press-adoption.md and patterns/channel-add.md.")
-        return 0  # informational until pre-existing violations are cleaned up
+        return 1  # blocking — fails CI on any new violation
     else:
         print(f"All MCP tool registrations include agent-native params.")
     return 0
@@ -1159,8 +1160,10 @@ def check_mcp_description_hints(project_root: Path) -> int:
       - Multi-line descriptions (e.g., 'foo ' + 'bar') are not supported;
         only the first quoted-string line after the tool name is checked.
 
-    Informational — warns but does not fail CI. See
-    docs/decisions/printing-press-adoption.md "Empirical findings".
+    Blocking — fails CI on any violation. Baseline was cleared by PR
+    #448 before this gate was activated alongside its agent-native
+    sibling; see git history for the activation commit.
+    See docs/decisions/printing-press-adoption.md "Empirical findings".
     """
     packages_dir = project_root / "packages"
     if not packages_dir.exists():
@@ -1210,7 +1213,7 @@ def check_mcp_description_hints(project_root: Path) -> int:
             "'List events. Pass select=\"id,start,summary\" + compact=true to cut payload.'"
         )
         print("See docs/decisions/printing-press-adoption.md and patterns/channel-add.md.")
-        return 0  # informational
+        return 1  # blocking — fails CI on any new violation
     print("All projection-capable MCP tools include description hints.")
     return 0
 
