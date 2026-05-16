@@ -173,15 +173,13 @@ After saving the session log:
    ```
 
    Read `session_window` from `~/deus/.claude/wardens/retrospective-schema.md` (default: 20).
-   If `NEW_COUNT >= session_window`, dispatch the retrospective agent in the background:
+   If `NEW_COUNT >= session_window`, dispatch the retrospective via an in-session Agent subagent (background):
 
-   ```bash
-   command -v claude >/dev/null 2>&1 && \
-     claude -p "Use the session-retrospective subagent. SESSION_LOG_ROOT=\"$VAULT\"" \
-     > /dev/null 2>&1 &
-   ```
+   Use the Agent tool with `subagent_type: "session-retrospective"`, `run_in_background: true`, and prompt:
+   `"Run a session retrospective. SESSION_LOG_ROOT=$VAULT"` (substitute the resolved `$VAULT` variable).
 
-   If `claude` CLI is not available (e.g. Codex backend), skip silently.
+   This avoids `claude -p` which draws from the Agent SDK credit on subscription plans.
+   If the Agent tool is unavailable (e.g. non-Claude backend), skip silently.
    If any check fails, skip silently — the retrospective can always be triggered manually.
 
 Confirm with the filename saved, number of pending tasks carried forward, redaction result (standard mode only), indexing result, atom extraction result, and whether a session retrospective was triggered (home mode only — report "retrospective triggered (background)" or "retrospective skipped: <reason>").
