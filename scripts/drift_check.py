@@ -1099,12 +1099,36 @@ def check_agent_native_mcp(project_root: Path) -> int:
             lines = text.splitlines()
             for i, line in enumerate(lines, 1):
                 if "server.tool(" in line:
-                    # Look at the next 5 lines for compact/select
-                    block = "\n".join(lines[i - 1 : i + 8])
-                    if "compact" not in block and "select" not in block:
-                        # Skip action-only tools (return static strings, not data)
-                        action_markers = ("'Message sent.'", "'OK'", "'Connected.'", "'Disconnected.'", "'Email sent.'", "mcpResponse({")
-                        if any(m in block for m in action_markers):
+                    # Schema check (15-line window): zod schema literals sit in
+                    # the call's third positional arg. 15 lines is wide enough
+                    # for the largest schemas in this codebase (e.g. mcp-gcal
+                    # `create_event` has 6 typed fields plus compact/select)
+                    # while still being narrower than the action-marker scan
+                    # below, so we don't accidentally match handler-body usage.
+                    # Match against `compact:` / `select:` with trailing colon
+                    # (zod schema syntax) so descriptions that mention
+                    # `compact=true` as a usage hint don't cause false-negatives.
+                    block = "\n".join(lines[i - 1 : i + 15])
+                    if "compact:" not in block and "select:" not in block:
+                        # Action-marker scan uses a wider window (30 lines)
+                        # because confirmation strings can appear deep in the
+                        # handler body — e.g., server-base.ts `connect` returns
+                        # 'Connected.' 10 lines below the server.tool() decl;
+                        # `disconnect` returns 'Disconnected.' 14 lines below.
+                        action_block = "\n".join(lines[i - 1 : i + 30])
+                        action_markers = (
+                            "'Message sent.'",
+                            "'OK'",
+                            "'Connected.'",
+                            "'Disconnected.'",
+                            "'Email sent.'",
+                            "'Liked.'",
+                            "'Like removed.'",
+                            "'Retweeted.'",
+                            "'Retweet removed.'",
+                            "mcpResponse({",
+                        )
+                        if any(m in action_block for m in action_markers):
                             continue
                         rel = ts_file.relative_to(project_root)
                         violations.append(f"  {rel}:{i} — server.tool() without compact/select params")
