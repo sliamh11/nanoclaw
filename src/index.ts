@@ -42,6 +42,7 @@ import {
 } from './sender-allowlist.js';
 import { runStartupChecks, printStartupReport } from './startup-gate.js';
 import { startSchedulerLoop } from './task-scheduler.js';
+import { seedDocGardener } from './doc-gardener-seed.js';
 import { getAllTasks } from './db.js';
 import { writeGroupsSnapshot, writeTasksSnapshot } from './container-runner.js';
 import { Channel, NewMessage, NewReaction } from './types.js';
@@ -73,6 +74,13 @@ async function main(): Promise<void> {
   const state = new RouterState();
   state.load();
   restoreRemoteControl();
+
+  const controlGroup = Object.entries(state.registeredGroups).find(
+    ([, g]) => g.isControlGroup === true,
+  );
+  if (controlGroup) {
+    seedDocGardener(controlGroup[0], controlGroup[1].folder);
+  }
 
   // Start credential proxy (containers route API calls through this)
   const proxyServer = await startCredentialProxy(
