@@ -29,10 +29,10 @@ import { bootstrap } from './bootstrap.js';
 import { loadRegisteredContextFiles } from './context-registry.js';
 import { createMemoryRetrievalHook } from './memory-retrieval-hook.js';
 import { runOpenAIConversation } from './openai-backend.js';
+import { runLlamaCppConversation } from './llama-cpp-backend.js';
 import { DoomLoopDetector, createDoomLoopHook } from './doom-loop-detector.js';
 import { isAuditedTool, writeAuditEntry } from './tool-audit.js';
-
-type AgentRuntimeId = 'claude' | 'openai';
+import type { AgentRuntimeId } from './tool-broker.js';
 
 interface RuntimeSession {
   backend: AgentRuntimeId;
@@ -917,6 +917,24 @@ async function main(): Promise<void> {
 
   if (backend === 'openai') {
     await runOpenAIConversation({
+      containerInput: {
+        ...containerInput,
+        backend,
+      },
+      log,
+      writeOutput,
+      drainIpcInput,
+      waitForIpcMessage,
+      shouldClose,
+    });
+    return;
+  }
+
+  if (backend === 'llama-cpp') {
+    // Dispatch to the chat/completions driver. llama-server speaks the
+    // OpenAI chat-completions wire protocol but NOT the Responses API, so
+    // we cannot reuse runOpenAIConversation (it calls /v1/responses).
+    await runLlamaCppConversation({
       containerInput: {
         ...containerInput,
         backend,

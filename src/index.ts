@@ -53,6 +53,7 @@ import { logger } from './logger.js';
 import { initRuntimeRegistry } from './agent-runtimes/registry.js';
 import { createClaudeRuntime } from './agent-runtimes/claude-backend.js';
 import { createOpenAIRuntime } from './agent-runtimes/openai-backend.js';
+import { createLlamaCppRuntime } from './agent-runtimes/llama-cpp-backend.js';
 import { startGcalSync, stopGcalSync } from './cache/gcal-sync.js';
 
 export { getAvailableGroups } from './router-state.js';
@@ -117,6 +118,7 @@ async function main(): Promise<void> {
   };
   registry.register(createClaudeRuntime(backendDeps));
   registry.register(createOpenAIRuntime(backendDeps));
+  registry.register(createLlamaCppRuntime(backendDeps));
   logger.info({ backends: registry.list() }, 'Backend registry initialized');
 
   // Graceful shutdown handlers

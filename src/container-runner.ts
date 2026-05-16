@@ -21,6 +21,8 @@ import {
   DEUS_CONTEXT_FILE_MAX_CHARS,
   DEUS_OPENAI_MODEL,
   IDLE_TIMEOUT,
+  LLAMA_CPP_MODEL,
+  LLAMA_CPP_PORT,
   TIMEZONE,
   TOOL_PROXY_PORT,
 } from './config.js';
@@ -118,6 +120,20 @@ function buildContainerArgs(
     args.push('-e', 'OPENAI_API_KEY=placeholder');
     if (DEUS_OPENAI_MODEL) {
       args.push('-e', `DEUS_OPENAI_MODEL=${DEUS_OPENAI_MODEL}`);
+    }
+  } else if (backend === 'llama-cpp') {
+    // llama-server runs on the host and has no auth — no credential-proxy
+    // hop needed. The container talks to the host gateway directly. We
+    // deliberately use LLAMA_CPP_* env names (NOT OPENAI_*) so config does
+    // not co-mingle if the user has both backends configured. The container
+    // driver reads LLAMA_CPP_BASE_URL etc. directly.
+    args.push(
+      '-e',
+      `LLAMA_CPP_BASE_URL=http://${CONTAINER_HOST_GATEWAY}:${LLAMA_CPP_PORT}/v1`,
+    );
+    args.push('-e', 'LLAMA_CPP_API_KEY=placeholder');
+    if (LLAMA_CPP_MODEL) {
+      args.push('-e', `LLAMA_CPP_MODEL=${LLAMA_CPP_MODEL}`);
     }
   } else {
     // Route API traffic through the credential proxy (containers never see real secrets)
