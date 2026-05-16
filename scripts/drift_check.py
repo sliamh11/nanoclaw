@@ -1076,6 +1076,49 @@ def check_contradictions(project_root: Path, pattern_filter: str | None = None) 
 
 
 
+def _tool_block_lines(lines: list[str], start_idx: int) -> list[str]:
+    """Return the slice of `lines` spanning one server.tool(...) call.
+
+    Scans forward from start_idx tracking parenthesis depth, ignoring parens
+    inside string literals (single, double, backtick) with backslash-escape
+    awareness. Returns through the line where depth returns to zero. Falls
+    back to an 80-line cap on unbalanced source.
+
+    Cap rationale: measured longest real block is 65 lines
+    (`packages/mcp-whatsapp/src/index.ts:59`, `start_auth`); 80 gives ~23%
+    headroom. Re-measure with the in-test loop in `TestToolBlockLines`
+    when adding very large new tools.
+    """
+    max_lines = 80
+    end_idx = min(len(lines) - 1, start_idx + max_lines - 1)
+    depth = 0
+    in_string: str | None = None
+    escape = False
+    started = False
+    for line_no in range(start_idx, end_idx + 1):
+        for ch in lines[line_no]:
+            if escape:
+                escape = False
+                continue
+            if in_string is not None:
+                if ch == "\\":
+                    escape = True
+                elif ch == in_string:
+                    in_string = None
+                continue
+            if ch in ("'", '"', "`"):
+                in_string = ch
+                continue
+            if ch == "(":
+                depth += 1
+                started = True
+            elif ch == ")":
+                depth -= 1
+                if started and depth == 0:
+                    return lines[start_idx : line_no + 1]
+    return lines[start_idx : end_idx + 1]
+
+
 def check_agent_native_mcp(project_root: Path) -> int:
     """Verify new MCP tool registrations include compact/select params.
 
@@ -1099,8 +1142,7 @@ def check_agent_native_mcp(project_root: Path) -> int:
             lines = text.splitlines()
             for i, line in enumerate(lines, 1):
                 if "server.tool(" in line:
-                    # Look at the next 5 lines for compact/select
-                    block = "\n".join(lines[i - 1 : i + 8])
+                    block = "\n".join(_tool_block_lines(lines, i - 1))
                     if "compact" not in block and "select" not in block:
                         # Skip action-only tools (return static strings, not data)
                         action_markers = ("'Message sent.'", "'OK'", "'Connected.'", "'Disconnected.'", "'Email sent.'", "mcpResponse({")
@@ -1156,8 +1198,7 @@ def check_mcp_description_hints(project_root: Path) -> int:
             for i, line in enumerate(lines, 1):
                 if "server.tool(" not in line:
                     continue
-                # Look at the next 12 lines for the schema + description.
-                block = "\n".join(lines[i - 1 : i + 12])
+                block = "\n".join(_tool_block_lines(lines, i - 1))
                 # Only applies to tools whose schema accepts BOTH compact AND select.
                 if "compact" not in block or "select" not in block:
                     continue

@@ -1040,3 +1040,288 @@ class TestCheckBenchLabels:
             pytest.skip("benchmark fixture not in repo")
         rc = drift_check.check_bench_labels(repo_root)
         assert rc == 0, "Benchmark labels have drifted from vault — run drift_check.py --bench-labels"
+
+
+def _write_mcp_tool_file(tmp_path: Path, pkg: str, content: str) -> Path:
+    """Build a minimal packages/mcp-<pkg>/src/index.ts under tmp_path."""
+    src = tmp_path / "packages" / f"mcp-{pkg}" / "src"
+    src.mkdir(parents=True)
+    path = src / "index.ts"
+    path.write_text(content)
+    return path
+
+
+class TestToolBlockLines:
+    """Direct tests for the paren-balanced helper."""
+
+    def test_returns_single_line_for_inline_tool(self):
+        lines = ["server.tool('foo', 'bar', {}, async () => ({}));"]
+        assert drift_check._tool_block_lines(lines, 0) == lines
+
+    def test_returns_through_closing_paren(self):
+        lines = [
+            "server.tool(",
+            "  'foo',",
+            "  'bar',",
+            "  {},",
+            "  async () => ({}),",
+            ");",
+            "// next thing",
+        ]
+        result = drift_check._tool_block_lines(lines, 0)
+        assert result == lines[0:6]
+
+    def test_skips_string_parens(self):
+        """Parens inside single/double-quoted strings are not depth-counted."""
+        lines = [
+            "server.tool(",
+            "  'foo',",
+            "  'description with (parens) and (more)',",
+            "  { text: z.string() },",
+            "  async () => ({}),",
+            ");",
+        ]
+        result = drift_check._tool_block_lines(lines, 0)
+        assert result == lines
+
+    def test_skips_backtick_template_parens(self):
+        """Parens inside a template literal are not depth-counted.
+
+        The simple state machine pauses depth tracking on backtick entry;
+        `${...}` interpolation parens are intentionally ignored — they
+        cannot end the tool-block.
+        """
+        lines = [
+            "server.tool(",
+            "  'foo',",
+            "  `description ${x(y)} with parens`,",
+            "  {},",
+            "  async () => ({}),",
+            ");",
+        ]
+        result = drift_check._tool_block_lines(lines, 0)
+        assert result == lines
+
+    def test_multiline_template_literal(self):
+        """String state persists across line boundaries.
+
+        A backtick template spans 3 lines with `(parens)` in the middle —
+        the in-string flag must survive newlines, otherwise the middle
+        parens would corrupt the depth count.
+        """
+        lines = [
+            "server.tool(",
+            "  'foo',",
+            "  `multi-line",
+            "   ${x(y)} continues",
+            "   across lines`,",
+            "  {},",
+            "  async () => ({}),",
+            ");",
+        ]
+        result = drift_check._tool_block_lines(lines, 0)
+        assert result == lines
+
+    def test_escape_sequence_in_string(self):
+        lines = [
+            "server.tool(",
+            r"  'foo \' with escaped quote (' ,",
+            "  {},",
+            "  async () => ({}),",
+            ");",
+        ]
+        # Should not exit string at the escaped quote; closing ) on line 4 ends block.
+        result = drift_check._tool_block_lines(lines, 0)
+        assert result == lines
+
+    def test_unbalanced_source_falls_back_to_cap(self):
+        # 100-line source with no closing paren — should cap at 80.
+        lines = ["server.tool("] + ["  // pad"] * 99
+        result = drift_check._tool_block_lines(lines, 0)
+        assert len(result) == 80
+
+
+class TestCheckAgentNativeMcp:
+    """Regression guards for the false-positive fix on long tool blocks."""
+
+    def test_no_violations_for_long_schema_with_compact_select(self, tmp_path, capsys):
+        """Tool with a 15-line schema where compact/select are at the bottom passes."""
+        long_schema_tool = (
+            "import { z } from 'zod';\n"
+            "server.tool(\n"
+            "  'long_schema_tool',\n"
+            "  'A tool with many schema fields',\n"
+            "  {\n"
+            "    field_a: z.string(),\n"
+            "    field_b: z.string(),\n"
+            "    field_c: z.string(),\n"
+            "    field_d: z.string(),\n"
+            "    field_e: z.string(),\n"
+            "    field_f: z.string(),\n"
+            "    field_g: z.string(),\n"
+            "    field_h: z.string(),\n"
+            "    compact: z.boolean().optional(),\n"
+            "    select: z.string().optional(),\n"
+            "  },\n"
+            "  async (args) => ({ content: [{ type: 'text', text: 'ok' }] }),\n"
+            ");\n"
+        )
+        _write_mcp_tool_file(tmp_path, "foo", long_schema_tool)
+        assert drift_check.check_agent_native_mcp(tmp_path) == 0
+        assert "missing agent-native params" not in capsys.readouterr().out
+
+    def test_no_violations_for_long_action_tool_with_marker(self, tmp_path, capsys):
+        """Tool with a 15-line body where 'Message sent.' is past line 8 passes."""
+        long_action_tool = (
+            "import { z } from 'zod';\n"
+            "server.tool(\n"
+            "  'send_message',\n"
+            "  'Send a message',\n"
+            "  { chat_id: z.string(), text: z.string() },\n"
+            "  async (args) => {\n"
+            "    if (!provider.isConnected()) {\n"
+            "      await Promise.race([\n"
+            "        provider.waitForReady(),\n"
+            "        new Promise((resolve) => setTimeout(resolve, 15_000)),\n"
+            "      ]);\n"
+            "    }\n"
+            "    await provider.sendMessage(args.chat_id, args.text);\n"
+            "    return { content: [{ type: 'text', text: 'Message sent.' }] };\n"
+            "  },\n"
+            ");\n"
+        )
+        _write_mcp_tool_file(tmp_path, "foo", long_action_tool)
+        assert drift_check.check_agent_native_mcp(tmp_path) == 0
+        assert "missing agent-native params" not in capsys.readouterr().out
+
+    def test_violation_for_tool_missing_compact_select(self, tmp_path, capsys):
+        """Tool without compact/select and without action marker IS flagged."""
+        bad_tool = (
+            "import { z } from 'zod';\n"
+            "server.tool(\n"
+            "  'returns_data',\n"
+            "  'Returns data without projection',\n"
+            "  { query: z.string() },\n"
+            "  async (args) => {\n"
+            "    const result = await fetchData(args.query);\n"
+            "    return { content: [{ type: 'text', text: JSON.stringify(result) }] };\n"
+            "  },\n"
+            ");\n"
+        )
+        _write_mcp_tool_file(tmp_path, "foo", bad_tool)
+        drift_check.check_agent_native_mcp(tmp_path)
+        out = capsys.readouterr().out
+        assert "missing agent-native params (1)" in out
+        assert "mcp-foo/src/index.ts:2" in out
+
+    def test_no_violations_when_packages_dir_missing(self, tmp_path):
+        """Returns 0 silently when packages/ doesn't exist."""
+        assert drift_check.check_agent_native_mcp(tmp_path) == 0
+
+    def test_multiple_tools_per_file(self, tmp_path, capsys):
+        """First long+compliant tool ignored; second short+non-compliant flagged."""
+        multi_tool = (
+            "import { z } from 'zod';\n"
+            "server.tool(\n"
+            "  'compliant_long',\n"
+            "  'A compliant tool',\n"
+            "  {\n"
+            "    field_a: z.string(),\n"
+            "    field_b: z.string(),\n"
+            "    field_c: z.string(),\n"
+            "    field_d: z.string(),\n"
+            "    field_e: z.string(),\n"
+            "    field_f: z.string(),\n"
+            "    compact: z.boolean().optional(),\n"
+            "    select: z.string().optional(),\n"
+            "  },\n"
+            "  async (args) => ({ content: [{ type: 'text', text: 'ok' }] }),\n"
+            ");\n"
+            "\n"
+            "server.tool(\n"
+            "  'noncompliant_short',\n"
+            "  'Returns data without projection',\n"
+            "  { q: z.string() },\n"
+            "  async (args) => ({ content: [{ type: 'text', text: JSON.stringify({}) }] }),\n"
+            ");\n"
+        )
+        _write_mcp_tool_file(tmp_path, "foo", multi_tool)
+        drift_check.check_agent_native_mcp(tmp_path)
+        out = capsys.readouterr().out
+        # Only the second tool (line 18 in fixture) should be flagged.
+        assert "missing agent-native params (1)" in out
+        assert "mcp-foo/src/index.ts:18" in out
+        assert "mcp-foo/src/index.ts:2" not in out
+
+
+class TestCheckMcpDescriptionHints:
+    """Sibling-coverage symmetry: same window-vs-block fix applies."""
+
+    def test_no_violation_for_long_block_with_hint_in_description(self, tmp_path, capsys):
+        """Compliant description WITH hint is silent.
+
+        Fixture has compact/select at idx 14/15 — past the old 12-line
+        window `lines[1:14]` (covered idx 1..13). Confirms the block scan
+        sees the trigger that the old window missed.
+        """
+        long_with_hint = (
+            "import { z } from 'zod';\n"
+            "server.tool(\n"
+            "  'list_things',\n"
+            "  'List things. Pass select=\"id,name\" + compact=true to cut payload.',\n"
+            "  {\n"
+            "    days: z.number().optional(),\n"
+            "    field_a: z.string().optional(),\n"
+            "    field_b: z.string().optional(),\n"
+            "    field_c: z.string().optional(),\n"
+            "    field_d: z.string().optional(),\n"
+            "    field_e: z.string().optional(),\n"
+            "    field_f: z.string().optional(),\n"
+            "    field_g: z.string().optional(),\n"
+            "    field_h: z.string().optional(),\n"
+            "    compact: z.boolean().optional(),\n"
+            "    select: z.string().optional(),\n"
+            "  },\n"
+            "  async (args) => ({ content: [{ type: 'text', text: 'ok' }] }),\n"
+            ");\n"
+        )
+        _write_mcp_tool_file(tmp_path, "foo", long_with_hint)
+        drift_check.check_mcp_description_hints(tmp_path)
+        assert "missing description hints" not in capsys.readouterr().out
+
+    def test_violation_for_long_block_without_hint(self, tmp_path, capsys):
+        """Compact/select past old 12-line window AND description lacks hint → flagged.
+
+        Pre-fix this was a silent false negative: the 12-line window
+        `lines[1:14]` (idx 1..13) missed compact/select at idx 14/15, so
+        the check skipped the tool entirely. Post-fix the block scan
+        reaches them and the description (lacking 'select'/'compact'/
+        'payload') triggers the warning. Revert the helper call → this
+        test fails.
+        """
+        long_without_hint = (
+            "import { z } from 'zod';\n"
+            "server.tool(\n"
+            "  'list_things',\n"
+            "  'List things and return data',\n"
+            "  {\n"
+            "    days: z.number().optional(),\n"
+            "    field_a: z.string().optional(),\n"
+            "    field_b: z.string().optional(),\n"
+            "    field_c: z.string().optional(),\n"
+            "    field_d: z.string().optional(),\n"
+            "    field_e: z.string().optional(),\n"
+            "    field_f: z.string().optional(),\n"
+            "    field_g: z.string().optional(),\n"
+            "    field_h: z.string().optional(),\n"
+            "    compact: z.boolean().optional(),\n"
+            "    select: z.string().optional(),\n"
+            "  },\n"
+            "  async (args) => ({ content: [{ type: 'text', text: 'ok' }] }),\n"
+            ");\n"
+        )
+        _write_mcp_tool_file(tmp_path, "foo", long_without_hint)
+        drift_check.check_mcp_description_hints(tmp_path)
+        out = capsys.readouterr().out
+        assert "missing description hints (1)" in out
+        assert "mcp-foo/src/index.ts:2" in out
