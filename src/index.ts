@@ -27,6 +27,7 @@ import {
 import { GroupQueue } from './group-queue.js';
 import { startIpcWatcher } from './ipc.js';
 import { loadSkillIpcHandlers } from './skills/index.js';
+import { createHookDispatcher } from './hooks/index.js';
 import { createMessageOrchestrator } from './message-orchestrator.js';
 import { findChannel, formatOutbound } from './router.js';
 import {
@@ -321,11 +322,14 @@ async function main(): Promise<void> {
     );
   }
 
+  const hookDispatcher = createHookDispatcher();
+
   const orchestrator = createMessageOrchestrator({
     state,
     queue,
     registry,
     channels,
+    hooks: hookDispatcher,
   });
 
   // Start subsystems (independently of connection handler)

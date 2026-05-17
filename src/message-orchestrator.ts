@@ -55,6 +55,11 @@ import {
   isSessionCommandAllowed,
 } from './session-commands.js';
 import { Channel, NewMessage, RegisteredGroup } from './types.js';
+import type {
+  EnforcementHookResult,
+  HookContext,
+  HookPipeline,
+} from './hooks/index.js';
 
 export interface OrchestratorDeps {
   state: RouterState;
@@ -63,10 +68,15 @@ export interface OrchestratorDeps {
   /** Mutable array — channels are pushed into it during startup before the
    *  orchestrator starts processing, so this reference stays valid. */
   channels: Channel[];
+  hooks?: HookPipeline;
+}
+
+function injectHookContext(prompt: string, context: string): string {
+  return `<hook-context>\n${context}\n</hook-context>\n\n${prompt}`;
 }
 
 export function createMessageOrchestrator(deps: OrchestratorDeps) {
-  const { state, queue, registry, channels } = deps;
+  const { state, queue, registry, channels, hooks } = deps;
   let messageLoopRunning = false;
 
   async function runAgent(
@@ -134,7 +144,7 @@ export function createMessageOrchestrator(deps: OrchestratorDeps) {
       new Set(Object.keys(state.registeredGroups)),
     );
 
-    const runContext: RunContext = {
+    let runContext: RunContext = {
       prompt,
       groupFolder: group.folder,
       chatJid,
@@ -143,6 +153,39 @@ export function createMessageOrchestrator(deps: OrchestratorDeps) {
     };
 
     const currentSessionRef = sessionRef ?? defaultSession('', backend);
+
+    // ── Enforcement Layer: SessionStart ─────────────────────────────────
+    const isNewSession = !sessionRef || sessionRef.session_id === '';
+    if (isNewSession && hooks) {
+      const hookCtx: HookContext = {
+        groupFolder: group.folder,
+        chatJid,
+        backend,
+        sessionId: currentSessionRef.session_id || undefined,
+      };
+      let sessionStartResult: EnforcementHookResult | undefined;
+      try {
+        sessionStartResult = await hooks.enforce('SessionStart', hookCtx, {});
+      } catch (err) {
+        logger.error({ err }, 'SessionStart hook error — failing open');
+      }
+      if (sessionStartResult && !sessionStartResult.continue) {
+        logger.warn(
+          { group: group.name, reason: sessionStartResult.stopReason },
+          'SessionStart hook blocked — aborting agent run',
+        );
+        return 'success';
+      }
+      if (sessionStartResult?.additionalContext) {
+        runContext = {
+          ...runContext,
+          prompt: injectHookContext(
+            runContext.prompt,
+            sessionStartResult.additionalContext,
+          ),
+        };
+      }
+    }
 
     const eventSink: RuntimeEventSink = async (event) => {
       if (event.type === 'session') {
@@ -201,12 +244,61 @@ export function createMessageOrchestrator(deps: OrchestratorDeps) {
       );
     }
 
+    // ── Enforcement Layer: UserPromptSubmit ──────────────────────────────
+    if (hooks) {
+      const hookCtx: HookContext = {
+        groupFolder: group.folder,
+        chatJid,
+        backend,
+        prompt: runContext.prompt,
+        sessionId: currentSessionRef.session_id || undefined,
+      };
+      let promptResult: EnforcementHookResult | undefined;
+      try {
+        promptResult = await hooks.enforce('UserPromptSubmit', hookCtx, {});
+      } catch (err) {
+        logger.error({ err }, 'UserPromptSubmit hook error — failing open');
+      }
+      if (promptResult && !promptResult.continue) {
+        logger.warn(
+          { group: group.name, reason: promptResult.stopReason },
+          'UserPromptSubmit hook blocked — message will not reach the agent',
+        );
+        return 'success';
+      }
+      if (promptResult?.additionalContext) {
+        runContext = {
+          ...runContext,
+          prompt: injectHookContext(
+            runContext.prompt,
+            promptResult.additionalContext,
+          ),
+        };
+      }
+    }
+
     try {
       const runResult = await resolvedBackend.runTurn(
         runContext,
         currentSessionRef,
         eventSink,
       );
+
+      // ── Enforcement Layer: Stop ─────────────────────────────────────
+      if (hooks) {
+        const hookCtx: HookContext = {
+          groupFolder: group.folder,
+          chatJid,
+          backend,
+          sessionId:
+            (runResult.sessionRef ?? currentSessionRef).session_id || undefined,
+        };
+        try {
+          await hooks.enforce('Stop', hookCtx, {});
+        } catch (err) {
+          logger.error({ err }, 'Stop hook error — failing open');
+        }
+      }
 
       if (runResult.sessionRef) {
         state.setSession(group.folder, runResult.sessionRef);
