@@ -35,6 +35,7 @@ vi.mock('./config.js', () => ({
   GROUPS_DIR: '/tmp/deus-test-groups',
   HOME_DIR: '/tmp/deus-test-home',
   IDLE_TIMEOUT: 1800000, // 30min
+  LLAMA_CPP_AGENT_MODEL: 'llama-test-model',
   LLAMA_CPP_MODEL: 'llama-test-model',
   LLAMA_CPP_PORT: '8765',
   TIMEZONE: 'America/Los_Angeles',
