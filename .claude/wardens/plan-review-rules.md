@@ -105,6 +105,7 @@
 - "unused dep" → `grep -r '<pkg>' src/ scripts/ container/ packages/` returns no imports.
 - "orphan file" → `grep -r '<filename>' .` returns no callers across `.ts`, `.sh`, `.json`, `.py`, launchd plists, `package.json` scripts.
 - "drift between two paths" → grep for code that writes to the derived path (`cpSync`, `shutil.copytree`, `fs.mkdirSync` + write). If a writer exists, the divergence is a cache, not a bug — plan must address why the cache is wrong, not treat it as rot.
+- "quantified baseline" / counts / byte sizes (e.g. "N violations", "X tests fail", "Y unused files") → re-run the same command the plan implicitly relies on (`drift_check.py`, `pytest -q`, `grep -c`, etc.) and confirm the numbers match within ±1. If they don't, REVISE with the live numbers — stale baselines block downstream design decisions.
 **Cite:** Slice A postmortem (2026-04-20 — the agent-runner-src cache was wrongly flagged as tracked drift); system-prompt "Trust but verify."
 **Remediation:** Run the verification command(s) listed above for each unverified premise and paste the output into the plan. If a premise turns out false, remove or correct that step before resubmitting.
 
