@@ -20,6 +20,15 @@ _ENV_SEARCH_PATHS: list[Path] = [CONFIG_ENV, USER_CONFIG_ENV]
 OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "gemma4:e4b")
 
+# ── llama.cpp ────────────────────────────────────────────────────────────────
+
+# Base URL for the local llama-server (OpenAI-compatible /v1 prefix).
+# Default localhost so it works OOTB if the /add-llama-cpp skill is installed.
+# Empty LLAMA_CPP_MODEL is intentional: llama-server loads exactly one model at
+# startup and uses whatever's loaded when the "model" field is omitted/empty.
+LLAMA_CPP_BASE_URL = os.environ.get("LLAMA_CPP_BASE_URL", "http://localhost:8080/v1")
+LLAMA_CPP_MODEL = os.environ.get("LLAMA_CPP_MODEL", "")
+
 # ── Gemini ────────────────────────────────────────────────────────────────────
 
 EMBED_DIM = 768

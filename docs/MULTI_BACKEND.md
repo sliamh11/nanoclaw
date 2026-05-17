@@ -190,7 +190,26 @@ llama.cpp is a third backend that runs as a local `llama-server` HTTP service on
 5. Trigger a session: send a channel message, schedule a task, or set `agent_backend: 'llama-cpp'` on a specific group/task.
 6. For an interactive REPL (`deus`), use Claude or Codex — `deus` foreground TUI for llama-cpp is a follow-up (PR #6).
 
-**Scope of this integration:** chat-backend only. Eval-side providers (text generation for the evolution harness, the local judge, and embedding) are tracked as follow-ups per ADR `docs/decisions/llama-cpp-optional-integration.md`. The embedding swap in particular is gated on a full re-embed + threshold recalibration + benchmark snapshot.
+**Scope of this integration:** chat-backend (this section) and the evolution-loop generative + judge providers (next subsection). The **embedding** swap remains gated on a full re-embed + threshold recalibration + benchmark snapshot per ADR `docs/decisions/llama-cpp-optional-integration.md`.
+
+### Eval-side providers (Evolution loop)
+
+The Deus Evolution loop has its own provider trifecta: **generation** (used by Reflexion + DSPy + principle extraction), **judging** (scoring production interactions), and **embedding** (memory + retrieval). llama-cpp is wired into the first two surfaces as opt-in alternatives to Ollama:
+
+| Surface | Class | Priority (lower = preferred) | Ollama priority |
+|---------|-------|------------------------------|-----------------|
+| Generative | `evolution.generative.providers.llama_cpp.LlamaCppGenerativeProvider` | 25 | 20 |
+| Judge      | `evolution.judge.providers.llama_cpp.LlamaCppProvider` | 15 | 10 |
+
+Both providers POST to `{LLAMA_CPP_BASE_URL}/chat/completions` and wrap the prompt as a single user message. The judge runtime class (`evolution.judge.llama_cpp_judge.LlamaCppRuntimeJudge`) uses stdlib `urllib` (no new dep, matches `ollama_judge.py`); the generative provider uses `httpx` (matches `ollama.py` sibling). `LLAMA_CPP_MODEL` is sent only when non-empty — empty lets llama-server use whatever model it loaded.
+
+Activation:
+
+- **Auto-detect (recommended):** with `llama-server` running and Ollama also up, the resolver prefers Ollama (lower priority number). If Ollama is down, the resolver moves to gemini → llama-cpp depending on what's available.
+- **Explicit override:** `EVOLUTION_GEN_PROVIDER=llama-cpp` or `EVOLUTION_JUDGE_PROVIDER=llama-cpp` to force selection. If the server is unreachable, the resolver raises `NoGenerativeProviderError` / `NoProviderAvailableError` (no silent fallback).
+- **Health check:** `is_available()` GETs `{LLAMA_CPP_BASE_URL}/models` with a 2s timeout, so a misconfigured BASE_URL fails fast rather than hanging registry resolution.
+
+The embedding provider is **not** wired here — it remains ADR-gated. See the ADR for the required benchmark snapshot (recall/MRR/OOD-abstain/wrong-confident/latency) before any default promotion. There is no auto-fallback path; embedding-provider changes require explicit re-embedding and recalibration.
 
 ### `LLAMA_CPP_PORT` precedence
 
