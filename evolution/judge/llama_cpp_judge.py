@@ -70,7 +70,7 @@ def _call_llama_cpp(prompt: str, model: str = LLAMA_CPP_MODEL) -> str:
 
 async def _call_llama_cpp_async(prompt: str, model: str = LLAMA_CPP_MODEL) -> str:
     """Async llama-server call — runs sync in thread pool to avoid blocking the event loop."""
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     return await loop.run_in_executor(None, lambda: _call_llama_cpp(prompt, model))
 
 

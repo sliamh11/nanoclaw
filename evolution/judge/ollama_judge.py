@@ -76,7 +76,7 @@ def _call_ollama(prompt: str, model: str = OLLAMA_MODEL) -> str:
 
 async def _call_ollama_async(prompt: str, model: str = OLLAMA_MODEL) -> str:
     """Async Ollama call — runs sync in thread pool to avoid blocking."""
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     return await loop.run_in_executor(None, lambda: _call_ollama(prompt, model))
 
 
