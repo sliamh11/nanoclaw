@@ -150,7 +150,7 @@ python3 scripts/codex_warden_hooks.py check
 | **Learning** | Adapts at the personality level - tone, judgment, suggestions | No | No | Auto-creates & refines skills | No |
 | **Channels** | 5 (WhatsApp, Telegram, Slack, Discord, Gmail) | 10+ | Via OpenClaw | 15+ (WhatsApp, Telegram, Signal, Matrix...) | None |
 | **Isolation** | Container per conversation | Opt-in Docker | Landlock + seccomp | Per-session | None |
-| **LLM support** | Claude default, OpenAI opt-in | Any provider | Any (via OpenClaw) | Any (10+ providers) | Claude only |
+| **LLM support** | Claude default, OpenAI/llama.cpp opt-in | Any provider | Any (via OpenClaw) | Any (10+ providers) | Claude only |
 | **Setup** | ~5 min | ~15 min | ~20 min | ~10 min | N/A |
 | **Repo size** | ~13 MB | ~592 MB | ~22 MB | ~147 MB | N/A |
 
