@@ -5,7 +5,7 @@ governs:
   - src/startup-gate.ts
   - src/checks.ts
   - setup/
-last_verified: "2026-05-17T19:00:00" # auto-bump (llama-cpp router mode)
+last_verified: "2026-05-18T00:45:00" # auto-bump (judge-LoRA step 2 training driver)
 test_tasks:
   - "Refactor src/router.ts into smaller modules"
   - "Add a new utility function for parsing timestamps"
