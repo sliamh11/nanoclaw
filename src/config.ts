@@ -20,6 +20,10 @@ const envConfig = readEnvFile([
   'LLAMA_CPP_BASE_URL',
   'LLAMA_CPP_PORT',
   'LLAMA_CPP_MODEL',
+  'LLAMA_CPP_AGENT_MODEL',
+  'LLAMA_CPP_GEN_MODEL',
+  'LLAMA_CPP_JUDGE_MODEL',
+  'LLAMA_CPP_EMBED_MODEL',
 ]);
 
 export const ASSISTANT_NAME =
@@ -121,6 +125,27 @@ export const LLAMA_CPP_PORT =
   process.env.LLAMA_CPP_PORT || envConfig.LLAMA_CPP_PORT || '8080';
 export const LLAMA_CPP_MODEL =
   process.env.LLAMA_CPP_MODEL || envConfig.LLAMA_CPP_MODEL || '';
+
+// Per-surface model overrides. Each falls back to LLAMA_CPP_MODEL (catch-all),
+// then to empty string (router-mode auto-pick from --models-dir).
+// Per Phase 3 (PR-after-#461): supports `llama-server --models-dir ... --models-max 4`
+// where each surface POSTs with its own "model" field and the server hot-loads.
+export const LLAMA_CPP_AGENT_MODEL =
+  process.env.LLAMA_CPP_AGENT_MODEL ||
+  envConfig.LLAMA_CPP_AGENT_MODEL ||
+  LLAMA_CPP_MODEL;
+export const LLAMA_CPP_GEN_MODEL =
+  process.env.LLAMA_CPP_GEN_MODEL ||
+  envConfig.LLAMA_CPP_GEN_MODEL ||
+  LLAMA_CPP_MODEL;
+export const LLAMA_CPP_JUDGE_MODEL =
+  process.env.LLAMA_CPP_JUDGE_MODEL ||
+  envConfig.LLAMA_CPP_JUDGE_MODEL ||
+  LLAMA_CPP_MODEL;
+export const LLAMA_CPP_EMBED_MODEL =
+  process.env.LLAMA_CPP_EMBED_MODEL ||
+  envConfig.LLAMA_CPP_EMBED_MODEL ||
+  LLAMA_CPP_MODEL;
 
 export const DEUS_CONTEXT_FILE_MAX_CHARS =
   process.env.DEUS_CONTEXT_FILE_MAX_CHARS ||

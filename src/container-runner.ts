@@ -21,6 +21,7 @@ import {
   DEUS_CONTEXT_FILE_MAX_CHARS,
   DEUS_OPENAI_MODEL,
   IDLE_TIMEOUT,
+  LLAMA_CPP_AGENT_MODEL,
   LLAMA_CPP_MODEL,
   LLAMA_CPP_PORT,
   TIMEZONE,
@@ -132,6 +133,13 @@ function buildContainerArgs(
       `LLAMA_CPP_BASE_URL=http://${CONTAINER_HOST_GATEWAY}:${LLAMA_CPP_PORT}/v1`,
     );
     args.push('-e', 'LLAMA_CPP_API_KEY=placeholder');
+    // Phase 3 (post-PR #461): inject both LLAMA_CPP_AGENT_MODEL (per-surface)
+    // and LLAMA_CPP_MODEL (catch-all). Approach A — the container backend
+    // reads LLAMA_CPP_AGENT_MODEL with fallback to LLAMA_CPP_MODEL, then to
+    // empty (router-mode auto-pick). Both injected for back-compat safety.
+    if (LLAMA_CPP_AGENT_MODEL) {
+      args.push('-e', `LLAMA_CPP_AGENT_MODEL=${LLAMA_CPP_AGENT_MODEL}`);
+    }
     if (LLAMA_CPP_MODEL) {
       args.push('-e', `LLAMA_CPP_MODEL=${LLAMA_CPP_MODEL}`);
     }

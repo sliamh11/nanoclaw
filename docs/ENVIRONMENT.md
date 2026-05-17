@@ -70,7 +70,11 @@ All variables are set in `.env` at the project root. Copy `.env.example` to get 
 | `OLLAMA_MODEL` | `gemma4:e4b` | Ollama judge model |
 | `OLLAMA_EMBED_MODEL` | `embeddinggemma` | Ollama embedding model |
 | `LLAMA_CPP_BASE_URL` | `http://localhost:8080/v1` | llama.cpp HTTP base URL (OpenAI-compatible `/v1` prefix); consumed by evolution-loop providers |
-| `LLAMA_CPP_MODEL` | (empty — server default) | Optional model override for the llama-cpp eval-side providers. Empty = use whatever llama-server has loaded |
+| `LLAMA_CPP_MODEL` | (empty — server default) | Catch-all model override. Empty = use whatever llama-server has loaded (single-model) OR auto-pick (router mode) |
+| `LLAMA_CPP_AGENT_MODEL` | (falls back to `LLAMA_CPP_MODEL`) | Per-surface override for the agent runtime (chat surface). Used in router mode with multiple GGUFs |
+| `LLAMA_CPP_GEN_MODEL` | (falls back to `LLAMA_CPP_MODEL`) | Per-surface override for the evolution-loop generative provider (Reflexion, principle extraction) |
+| `LLAMA_CPP_JUDGE_MODEL` | (falls back to `LLAMA_CPP_MODEL`) | Per-surface override for the evolution-loop judge provider |
+| `LLAMA_CPP_EMBED_MODEL` | (falls back to `LLAMA_CPP_MODEL`) | Per-surface override for embeddings (reserved; embedding swap is ADR-gated per Phase 4) |
 | `EMBEDDING_PROVIDER` | `auto` | Embedding backend: `auto`, `gemini`, or `ollama` |
 
 ## Evolution / Eval

@@ -22,8 +22,9 @@ class LlamaCppProvider(JudgeProvider):
 
     @property
     def default_model(self) -> str:
-        from ...config import LLAMA_CPP_MODEL
-        return LLAMA_CPP_MODEL
+        # Phase 3: LLAMA_CPP_JUDGE_MODEL falls back to LLAMA_CPP_MODEL when unset
+        from ...config import LLAMA_CPP_JUDGE_MODEL
+        return LLAMA_CPP_JUDGE_MODEL
 
     def is_available(self) -> bool:
         from ..llama_cpp_judge import is_llama_cpp_available

@@ -211,6 +211,30 @@ Activation:
 
 The embedding provider is **not** wired here — it remains ADR-gated. See the ADR for the required benchmark snapshot (recall/MRR/OOD-abstain/wrong-confident/latency) before any default promotion. There is no auto-fallback path; embedding-provider changes require explicit re-embedding and recalibration.
 
+### Per-surface model picks (router mode)
+
+Phase 3 (post-PR #461) introduces per-surface model env vars that fall back to `LLAMA_CPP_MODEL`:
+
+| Env var | Surface | Falls back to |
+|---|---|---|
+| `LLAMA_CPP_AGENT_MODEL` | Agent runtime (chat) | `LLAMA_CPP_MODEL` |
+| `LLAMA_CPP_GEN_MODEL` | Evolution gen provider (Reflexion, principle extraction) | `LLAMA_CPP_MODEL` |
+| `LLAMA_CPP_JUDGE_MODEL` | Evolution judge provider | `LLAMA_CPP_MODEL` |
+| `LLAMA_CPP_EMBED_MODEL` | Embeddings (reserved; Phase 4 ADR-gated) | `LLAMA_CPP_MODEL` |
+
+**Back-compat is preserved**: existing PR #452/#453 deployments that only set `LLAMA_CPP_MODEL` continue working unchanged — each per-surface var transparently inherits.
+
+**Router-mode setup** (recommended for multi-surface use):
+```bash
+# Single llama-server with multi-model auto-discovery:
+llama-server --models-dir ~/.cache/huggingface --models-max 4 --port 8080
+```
+Each surface POSTs with its own `model` field; llama-server auto-loads from the directory and uses LRU eviction.
+
+**LRU caveat**: when multiple surfaces (e.g., concurrent gen + judge calls) request different models with `--models-max < surface_count`, LRU eviction can cause cold-load mid-eval. Recommend `--models-max 4` to keep all four surfaces warm if running them concurrently.
+
+**Cross-platform note**: `~/.cache/huggingface` is the HuggingFace convention and works on macOS + Linux. Users with custom `HF_HOME` should substitute that path.
+
 ### `LLAMA_CPP_PORT` precedence
 
 `process.env.LLAMA_CPP_PORT > .env file > '8080' default`. Keep this aligned with `~/.config/deus/llama-cpp.env` (which the skill writes). Default in both: `8080`.

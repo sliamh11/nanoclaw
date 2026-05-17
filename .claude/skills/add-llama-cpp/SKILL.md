@@ -92,14 +92,34 @@ fi
 : "${LLAMA_CPP_MODEL:=ggml-org/gemma-3-1b-it-GGUF:Q4_K_M}"
 : "${LLAMA_CPP_ALIAS:=$LLAMA_CPP_MODEL}"
 : "${LLAMA_CPP_CTX_SIZE:=8192}"
+# Optional router mode — auto-discover GGUFs from HF cache. Opt-in via
+# LLAMA_CPP_ROUTER_MODE=1 in ~/.config/deus/llama-cpp.env. In router mode,
+# each surface requests its model by name; llama-server loads on demand.
+: "${LLAMA_CPP_ROUTER_MODE:=0}"
+: "${LLAMA_CPP_MODELS_DIR:=$HOME/.cache/huggingface}"
+: "${LLAMA_CPP_MODELS_MAX:=4}"
+: "${LLAMA_CPP_ROUTER_CTX_SIZE:=4096}"
 
-exec llama-server \
-  --host "$LLAMA_CPP_BIND_HOST" \
-  --port "$LLAMA_CPP_PORT" \
-  -hf "$LLAMA_CPP_MODEL" \
-  --alias "$LLAMA_CPP_ALIAS" \
-  -c "$LLAMA_CPP_CTX_SIZE" \
-  --jinja
+if [ "$LLAMA_CPP_ROUTER_MODE" = "1" ]; then
+  # Router mode: smaller per-slot ctx (4096) is the safe default given
+  # `--models-max 4` keeps multiple KV caches resident concurrently.
+  exec llama-server \
+    --host "$LLAMA_CPP_BIND_HOST" \
+    --port "$LLAMA_CPP_PORT" \
+    --models-dir "$LLAMA_CPP_MODELS_DIR" \
+    --models-max "$LLAMA_CPP_MODELS_MAX" \
+    -c "$LLAMA_CPP_ROUTER_CTX_SIZE" \
+    --jinja
+else
+  # Single-model mode (unchanged from PR #452): full 8192 context.
+  exec llama-server \
+    --host "$LLAMA_CPP_BIND_HOST" \
+    --port "$LLAMA_CPP_PORT" \
+    -hf "$LLAMA_CPP_MODEL" \
+    --alias "$LLAMA_CPP_ALIAS" \
+    -c "$LLAMA_CPP_CTX_SIZE" \
+    --jinja
+fi
 EOF
 chmod +x "$HOME/.config/deus/scripts/start-llama-cpp.sh"
 ```

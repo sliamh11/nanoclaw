@@ -21,7 +21,7 @@ from typing import Optional
 
 from .base import BaseJudge, JudgeResult
 from .criteria import RUBRIC, compose_score
-from ..config import LLAMA_CPP_BASE_URL, LLAMA_CPP_MODEL
+from ..config import LLAMA_CPP_BASE_URL, LLAMA_CPP_JUDGE_MODEL
 
 
 def _llama_cpp_url(path: str) -> str:
@@ -40,7 +40,7 @@ def is_llama_cpp_available() -> bool:
         return False
 
 
-def _call_llama_cpp(prompt: str, model: str = LLAMA_CPP_MODEL) -> str:
+def _call_llama_cpp(prompt: str, model: str = LLAMA_CPP_JUDGE_MODEL) -> str:
     """Synchronous llama-server chat-completion call."""
     body_dict: dict = {
         "messages": [{"role": "user", "content": prompt}],
@@ -68,7 +68,7 @@ def _call_llama_cpp(prompt: str, model: str = LLAMA_CPP_MODEL) -> str:
     return (choices[0].get("message", {}).get("content") or "")
 
 
-async def _call_llama_cpp_async(prompt: str, model: str = LLAMA_CPP_MODEL) -> str:
+async def _call_llama_cpp_async(prompt: str, model: str = LLAMA_CPP_JUDGE_MODEL) -> str:
     """Async llama-server call — runs sync in thread pool to avoid blocking the event loop."""
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(None, lambda: _call_llama_cpp(prompt, model))
@@ -82,7 +82,7 @@ class LlamaCppRuntimeJudge(BaseJudge):
     Returns a JudgeResult with per-dimension scores and a composite score.
     """
 
-    def __init__(self, model: str = LLAMA_CPP_MODEL):
+    def __init__(self, model: str = LLAMA_CPP_JUDGE_MODEL):
         self.model = model
         # No pre-flight model-pulled check: llama-server only loads one model.
         # If the server is unreachable or misconfigured, evaluate() will raise
@@ -160,6 +160,6 @@ def _parse_result(raw: str) -> JudgeResult:
         )
 
 
-def make_runtime_judge(model: str = LLAMA_CPP_MODEL) -> LlamaCppRuntimeJudge:
+def make_runtime_judge(model: str = LLAMA_CPP_JUDGE_MODEL) -> LlamaCppRuntimeJudge:
     """Return a LlamaCppRuntimeJudge for scoring production interactions."""
     return LlamaCppRuntimeJudge(model=model)

@@ -26,8 +26,9 @@ class LlamaCppGenerativeProvider(GenerativeProvider):
 
     @property
     def default_model(self) -> str:
-        from ...config import LLAMA_CPP_MODEL
-        return LLAMA_CPP_MODEL
+        # Phase 3: LLAMA_CPP_GEN_MODEL falls back to LLAMA_CPP_MODEL when unset
+        from ...config import LLAMA_CPP_GEN_MODEL
+        return LLAMA_CPP_GEN_MODEL
 
     def is_available(self) -> bool:
         try:

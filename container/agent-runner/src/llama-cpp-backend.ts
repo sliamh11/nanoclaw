@@ -303,8 +303,14 @@ async function runSingleTurn(
 
   try {
     while (true) {
+      // Per-surface model resolution (Phase 3): LLAMA_CPP_AGENT_MODEL > LLAMA_CPP_MODEL > ''
+      // Empty string is correct for llama-server router mode (auto-pick loaded model).
+      // The 'gpt-3.5-turbo' default was removed — it would 404 in router mode.
       const response = await createChatCompletion({
-        model: process.env.LLAMA_CPP_MODEL || 'gpt-3.5-turbo',
+        model:
+          process.env.LLAMA_CPP_AGENT_MODEL ||
+          process.env.LLAMA_CPP_MODEL ||
+          '',
         messages,
         tools: getOpenAIToolDefinitions(mcpBridge.definitions).map((def) => ({
           type: 'function',

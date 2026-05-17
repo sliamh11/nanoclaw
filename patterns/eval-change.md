@@ -3,7 +3,7 @@ governs:
   - evolution/
   - eval/
   - scripts/memory_indexer.py
-last_verified: "2026-05-17T16:30:00" # auto-bump (asyncio cleanup)
+last_verified: "2026-05-17T19:00:00" # auto-bump (llama-cpp router mode)
 test_tasks:
   - "Add a new DeepEval metric under eval/ for the core_qa test suite"
   - "Add a new judge backend to evolution/judge/ using the provider registry"
