@@ -5,7 +5,7 @@ governs:
   - src/startup-gate.ts
   - src/checks.ts
   - setup/
-last_verified: "2026-05-17" # auto-bump
+last_verified: "2026-05-17T07:25:00" # auto-bump (llama-cpp eval providers)
 test_tasks:
   - "Refactor src/router.ts into smaller modules"
   - "Add a new utility function for parsing timestamps"
