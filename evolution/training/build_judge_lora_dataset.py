@@ -28,10 +28,8 @@ not a reflection marker, response is non-empty).
 """
 from __future__ import annotations
 import argparse
-import hashlib
 import json
 import random
-import subprocess
 import sys
 from collections import defaultdict
 from datetime import datetime, timezone
@@ -42,6 +40,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from evolution.judge.criteria import RUBRIC, COMPOSITE_WEIGHTS, compose_score
 from evolution.storage import get_storage
+from evolution.training._provenance import git_sha, git_dirty, sha256_file
 
 DIM_KEYS = ("quality", "safety", "tool_use", "personalization")
 
@@ -209,46 +208,6 @@ def write_jsonl(path: Path, recs: list[dict]) -> None:
     with open(path, "w", encoding="utf-8") as f:
         for r in recs:
             f.write(json.dumps(r, ensure_ascii=False) + "\n")
-
-
-def git_sha() -> str | None:
-    """Current HEAD SHA, or None if not in a git repo."""
-    try:
-        out = subprocess.check_output(
-            ["git", "rev-parse", "HEAD"],
-            cwd=PROJECT_ROOT,
-            stderr=subprocess.DEVNULL,
-        )
-        return out.decode().strip()
-    except Exception:
-        return None
-
-
-def git_dirty() -> bool | None:
-    """Whether the working tree has uncommitted changes. None if not in a git repo.
-
-    Pair this flag with git_sha when consuming the manifest — a dirty tree means
-    the recorded SHA does not point at the exact code that produced the dataset,
-    which silently breaks manifest reproducibility downstream.
-    """
-    try:
-        out = subprocess.check_output(
-            ["git", "status", "--porcelain"],
-            cwd=PROJECT_ROOT,
-            stderr=subprocess.DEVNULL,
-        )
-        return len(out.strip()) > 0
-    except Exception:
-        return None
-
-
-def sha256_file(path: Path) -> str:
-    """SHA-256 hex digest of a file (for manifest content fingerprint)."""
-    h = hashlib.sha256()
-    with open(path, "rb") as f:
-        for chunk in iter(lambda: f.read(65536), b""):
-            h.update(chunk)
-    return h.hexdigest()
 
 
 def write_manifest(path: Path, payload: dict) -> None:
