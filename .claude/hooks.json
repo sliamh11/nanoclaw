@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "events": {
+    "SessionStart": [
+      { "behavior": "session-init", "timeout": 5 },
+      { "script": "scripts/vault_context_hook.py", "timeout": 10 },
+      { "script": "scripts/standards_pack.py", "timeout": 10 }
+    ],
+    "UserPromptSubmit": [
+      { "behavior": "plan-mode-invalidator", "timeout": 5 },
+      { "behavior": "catchup-freshness", "timeout": 8 },
+      { "behavior": "orchestrator-preflight", "timeout": 5 },
+      { "behavior": "migration-nudge", "timeout": 5 }
+    ],
+    "Stop": [
+      { "behavior": "stop-checkpoint", "timeout": 10 }
+    ]
+  }
+}

@@ -141,3 +141,9 @@ export const INJECTION_SCANNER_CONFIG: InjectionScannerConfig = {
   threshold: parseFloat(process.env.DEUS_INJECTION_SCANNER_THRESHOLD || '0.7'),
   logOnly: process.env.DEUS_INJECTION_SCANNER_LOG_ONLY !== '0', // true unless explicitly set to 0
 };
+
+// ── Hook dispatch (Phase 1: Enforcement Layer) ─────────────────────────────
+// Path to hooks.json config. No file = zero hooks fire (default-off).
+export const HOOKS_CONFIG_PATH =
+  process.env.HOOKS_CONFIG_PATH ??
+  path.join(PROJECT_ROOT, '.claude', 'hooks.json');
