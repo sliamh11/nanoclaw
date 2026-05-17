@@ -531,13 +531,8 @@ def test_code_review_invalidator_clears_marker_after_edit(tmp_path):
     assert not marker.exists()
 
 
-def test_code_review_invalidator_clears_marker_on_gitignored_edit(tmp_path):
-    """Regression mirror of the verification-invalidator gitignored case.
-
-    Both invalidators share the empty-paths fix shape — see
-    `test_verification_invalidator_clears_marker_on_gitignored_edit` for
-    the full rationale.
-    """
+def test_code_review_invalidator_preserves_marker_on_gitignored_edit(tmp_path):
+    """Gitignored edits return empty paths → marker must survive."""
     hooks = load_hooks()
     repo = git_repo(tmp_path)
     (repo / "src").mkdir()
@@ -551,15 +546,11 @@ def test_code_review_invalidator_clears_marker_on_gitignored_edit(tmp_path):
     )
 
     assert rc == 0
-    assert not marker.exists()
+    assert marker.exists()
 
 
-def test_code_review_invalidator_clears_marker_on_worktree_excluded_edit(tmp_path):
-    """Regression mirror — `.claude/worktrees/<sub>/...` edits now invalidate.
-
-    See verification-invalidator counterpart for the full rationale; this
-    is the same fix applied to `.code-reviewed`.
-    """
+def test_code_review_invalidator_preserves_marker_on_worktree_excluded_edit(tmp_path):
+    """Edits inside `.claude/worktrees/<sub>/...` are filtered → marker must survive."""
     hooks = load_hooks()
     repo = git_repo(tmp_path)
     (repo / ".claude" / "worktrees" / "foo" / "src").mkdir(parents=True)
@@ -574,7 +565,7 @@ def test_code_review_invalidator_clears_marker_on_worktree_excluded_edit(tmp_pat
     )
 
     assert rc == 0
-    assert not marker.exists()
+    assert marker.exists()
 
 
 def test_code_review_invalidator_does_not_clear_marker_outside_worktree(tmp_path):
@@ -1503,15 +1494,8 @@ def test_verification_invalidator_clears_marker_after_edit(tmp_path):
     assert not marker.exists()
 
 
-def test_verification_invalidator_clears_marker_on_gitignored_edit(tmp_path):
-    """Regression: gitignored Edit targets now invalidate `.verified`.
-
-    Pre-fix: `_managed_paths` returned `(worktree, [])` because `.gitignore`
-    filtered every event path, so `if paths:` short-circuited without
-    unlinking — leaving stale verification in place. Post-fix: the
-    worktree-presence check fires invalidation regardless of post-filter
-    path emptiness.
-    """
+def test_verification_invalidator_preserves_marker_on_gitignored_edit(tmp_path):
+    """Gitignored edits return empty paths → `.verified` must survive."""
     hooks = load_hooks()
     repo = git_repo(tmp_path)
     (repo / "src").mkdir()
@@ -1525,17 +1509,11 @@ def test_verification_invalidator_clears_marker_on_gitignored_edit(tmp_path):
     )
 
     assert rc == 0
-    assert not marker.exists()
+    assert marker.exists()
 
 
-def test_verification_invalidator_clears_marker_on_worktree_excluded_edit(tmp_path):
-    """Regression: edits inside `.claude/worktrees/<sub>/...` now invalidate.
-
-    The actual session-bug scenario — subagent-worktree source edits were
-    filtered by `_is_excluded`, so `_managed_paths` returned
-    `(worktree, [])` and the marker stayed stale. The fix pins this case
-    by checking worktree-presence instead of path-truthiness.
-    """
+def test_verification_invalidator_preserves_marker_on_worktree_excluded_edit(tmp_path):
+    """Edits inside `.claude/worktrees/<sub>/...` are filtered → `.verified` must survive."""
     hooks = load_hooks()
     repo = git_repo(tmp_path)
     (repo / ".claude" / "worktrees" / "foo" / "src").mkdir(parents=True)
@@ -1550,7 +1528,7 @@ def test_verification_invalidator_clears_marker_on_worktree_excluded_edit(tmp_pa
     )
 
     assert rc == 0
-    assert not marker.exists()
+    assert marker.exists()
 
 
 def test_verification_invalidator_does_not_clear_marker_outside_worktree(tmp_path):
