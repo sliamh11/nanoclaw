@@ -1,7 +1,7 @@
 ---
 governs:
   - .claude/skills
-last_verified: "2026-05-17" # auto-bump
+last_verified: "2026-05-17T14:30:00" # bumped after add-llama-cpp skill gap fixes
 test_tasks:
   - "Create a new skill under .claude/skills/ that fetches recent Gmail threads"
   - "Add a new skill SKILL.md that documents log rotation steps"
