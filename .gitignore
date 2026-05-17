@@ -115,6 +115,7 @@ scripts/bench/rule_following_judge_cache.json
 finetune/data/
 finetune/adapters/
 finetune/gemma4-tool-fused/
+finetune/judge-lora-gemma3n/
 
 # Private features — local-only code that must never be committed
 # Personal integrations, trading logic, account-specific tools, etc.
