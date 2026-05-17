@@ -1,7 +1,7 @@
 ---
 governs:
   - docs/
-last_verified: "2026-05-17T19:00:00" # auto-bump (llama-cpp router mode)
+last_verified: "2026-05-17T20:15:00" # auto-bump (phase 4 close-out)
 test_tasks:
   - "Add a new ADR to docs/decisions/ explaining an architectural change"
   - "Update ARCHITECTURE.md after a major refactor"

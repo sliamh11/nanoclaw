@@ -97,3 +97,32 @@ Following PR #452 (agent runtime), PR #453 (eval-side providers), and a Stage 1/
 - Phase 4 (embedding migration to bge-m3 or similar) — DEMOTED to LOW priority per Stage 1/2 findings; multilingual reranker (PR #459) already captures most of the gain
 - `deus llama` foreground CLI shorthand (PR #6 from earlier roadmap)
 - Per-dimension Prometheus architecture (interesting but not warranted at current scale)
+
+## Phase 4 close-out — 2026-05-17: Embedding migration parked indefinitely
+
+**Decision**: Do **NOT** migrate from `embeddinggemma` (Ollama) to `bge-m3` (or any other bi-encoder candidate). Measured zero benefit in the realistic production pipeline.
+
+**Measurement** (`Research/judge-bench-phase4-2026-05-17.json`):
+
+Head-to-head on the 50-query bilingual fixture (40 English + 20 Hebrew, 1709 atoms, full production pipeline = bi-encoder@20 → bge-reranker-v2-m3 → top-5):
+
+| Bi-encoder | Bi-recall@5 | Bi-recall@20 | Pipeline recall@5 | Hebrew | English |
+|---|---|---|---|---|---|
+| embeddinggemma (baseline) | 90.0% | 98.0% | **49/50 (98.0%)** | 19/20 | 30/30 |
+| bge-m3 raw | 92.0% | 100.0% | 49/50 (98.0%) | 19/20 | 30/30 |
+| bge-m3 +prefix | 90.0% | 100.0% | 49/50 (98.0%) | 19/20 | 30/30 |
+
+**The multilingual reranker (PR #459) absorbs all bi-encoder differences.** While bge-m3 produces better candidate pools (100% vs 98% bi-encoder recall@20), the reranker is the deciding stage and the single remaining miss trips it the same way regardless.
+
+**The single remaining pipeline miss** is `'איך לטפל ב-RTL במסמכים של פייתון'` (Hebrew "how to handle RTL in python-docx documents"). Failure mode differs by embedder:
+- embeddinggemma: "outside-top-20" (bi-encoder couldn't surface target 1371)
+- bge-m3 variants: "rerank-failed" (target IS in top-20 but reranker picks 1373 / 2240 / 1777 instead)
+
+**Cost-benefit**: zero pipeline gain vs ~5-10K re-embeds + 768d→1024d schema migration + threshold recalibration + benchmark snapshot + irreversible-without-backup. Decisively negative.
+
+**If we ever want to recover that one miss**, the lever is **not** the embedder:
+1. Query rewriting: transliterate Hebrew `"פייתון"` → English `"python"` before retrieval
+2. Expand reranker candidate pool: `DEUS_RERANKER_CANDIDATES=30` (currently 20)
+3. Try a stronger multilingual cross-encoder if one emerges
+
+**This decision supersedes the "Idea #2C" line in the 2026-05-16 brainstorm and the corresponding pending item.** Phase 4 is closed unless future measurements on different data overturn this finding.
