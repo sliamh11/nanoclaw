@@ -1,7 +1,7 @@
 ---
 governs:
   - docs/
-last_verified: "2026-05-17T11:15:00" # auto-bump (multilingual reranker)
+last_verified: "2026-05-17T11:15:00" # auto-bump (multilingual reranker + arch alignment)
 test_tasks:
   - "Add a new ADR to docs/decisions/ explaining an architectural change"
   - "Update ARCHITECTURE.md after a major refactor"
