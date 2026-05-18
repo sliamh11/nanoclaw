@@ -5,7 +5,7 @@ governs:
   - src/startup-gate.ts
   - src/checks.ts
   - setup/
-last_verified: "2026-05-18T09:00:00" # auto-bump (judge-LoRA step-2.1 smoke-test gate + working defaults)
+last_verified: "2026-05-18T13:00:00" # auto-bump (judge-LoRA step-3 bench)
 test_tasks:
   - "Refactor src/router.ts into smaller modules"
   - "Add a new utility function for parsing timestamps"
