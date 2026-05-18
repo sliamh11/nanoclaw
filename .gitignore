@@ -110,6 +110,8 @@ eval/.report.json
 eval/.quality_bench_results*.json
 scripts/bench/results/
 scripts/bench/rule_following_judge_cache.json
+scripts/bench/attention_dilution_pairwise_cache.json
+scripts/bench/attention_dilution_recall_cache.json
 
 # Fine-tune artifacts
 finetune/data/
