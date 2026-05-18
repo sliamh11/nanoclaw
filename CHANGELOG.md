@@ -4,6 +4,57 @@ All notable changes to Deus will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.15.0](https://github.com/sliamh11/Deus/compare/v1.14.0...v1.15.0) (2026-05-18)
+
+
+### Features
+
+* agent-native protocol for Python CLIs and MCP servers ([#421](https://github.com/sliamh11/Deus/issues/421)) ([7de0b67](https://github.com/sliamh11/Deus/commit/7de0b67b8d4ca5a5a45e32782921f9a0f76bbfd5))
+* **agent-runner:** doom-loop detection for container agents ([#442](https://github.com/sliamh11/Deus/issues/442)) ([33458e7](https://github.com/sliamh11/Deus/commit/33458e7ea00bafa74754b05675ef1382c981e770))
+* **agent-runner:** smart tool result summarization ([#441](https://github.com/sliamh11/Deus/issues/441)) ([c38bc37](https://github.com/sliamh11/Deus/commit/c38bc37a4e078860529cfb6f36f8159312aa81f1))
+* **agents:** add scope decomposition + self-audit to brainstormer ([#455](https://github.com/sliamh11/Deus/issues/455)) ([68d6998](https://github.com/sliamh11/Deus/commit/68d6998c755632adbda771b4144e9c3fcc13b356))
+* **backends:** add llama.cpp as third agent backend ([#452](https://github.com/sliamh11/Deus/issues/452)) ([aeb10f0](https://github.com/sliamh11/Deus/commit/aeb10f082c00ee538e00a6ebeb0e3bc966c7448d))
+* **bench:** batched Gemini judging for TREC benchmark ([#411](https://github.com/sliamh11/Deus/issues/411)) ([a6215ff](https://github.com/sliamh11/Deus/commit/a6215ff83e1a002a74926c01629605fce573531a))
+* **bench:** format sweep — measure tier1_coverage by (format, budget) ([#415](https://github.com/sliamh11/Deus/issues/415)) ([308d3ad](https://github.com/sliamh11/Deus/commit/308d3add28c6b6ad965da993bc2527ce8b3db606))
+* **bench:** m1b rule-following judge benchmark infrastructure ([#420](https://github.com/sliamh11/Deus/issues/420)) ([e85cdd4](https://github.com/sliamh11/Deus/commit/e85cdd4d5ff2b1414b4c6556a481baa4f32f363b))
+* **bench:** methodology recall sweep for m4-prereq ([#417](https://github.com/sliamh11/Deus/issues/417)) ([e84bd94](https://github.com/sliamh11/Deus/commit/e84bd9496a5dc1c2a089d4b659eb10e4d366b595))
+* **cache:** sqlite-fts5 cache layer with gcal pilot ([#432](https://github.com/sliamh11/Deus/issues/432)) ([7b4457f](https://github.com/sliamh11/Deus/commit/7b4457f6131d598b5b85e06df3a1f1233783d150))
+* **drift:** flip agent-native + description-hints checks to blocking ([#450](https://github.com/sliamh11/Deus/issues/450)) ([bad25eb](https://github.com/sliamh11/Deus/commit/bad25ebbb7258d7e4753111801ccf00b1f6d6ec9))
+* **eval:** judge-LoRA pipeline steps 1+2 (dataset + training driver) ([#466](https://github.com/sliamh11/Deus/issues/466)) ([4d0d9f0](https://github.com/sliamh11/Deus/commit/4d0d9f0e09bc8f9456c6dfc5d5753bb2bf1c8a30))
+* **eval:** judge-LoRA step-2.1 smoke-test gate + working defaults ([#469](https://github.com/sliamh11/Deus/issues/469)) ([edcf11f](https://github.com/sliamh11/Deus/commit/edcf11fdb2e2a7c8f312e7a01ea44a5fd0feccbb))
+* **eval:** judge-LoRA step-3 post-LoRA bench (Adapter vs Base) ([#470](https://github.com/sliamh11/Deus/issues/470)) ([03f7061](https://github.com/sliamh11/Deus/commit/03f7061e1e52d1adf5fe0fba40dbc3416ea60443))
+* **eval:** llama.cpp as eval-side generative + judge provider (Ideas [#2](https://github.com/sliamh11/Deus/issues/2)A + [#2](https://github.com/sliamh11/Deus/issues/2)B) ([#453](https://github.com/sliamh11/Deus/issues/453)) ([2f6b37a](https://github.com/sliamh11/Deus/commit/2f6b37a3f1608851108d40ed244f4438092a25be))
+* **hooks:** cold-memory injection + structural checks + placement guard ([#446](https://github.com/sliamh11/Deus/issues/446)) ([7a91c76](https://github.com/sliamh11/Deus/commit/7a91c76f9f11a42cafab9933df85dcd3ea0b3712))
+* **hooks:** priority frontmatter field for kind=standard atoms ([#416](https://github.com/sliamh11/Deus/issues/416)) ([979ecd8](https://github.com/sliamh11/Deus/commit/979ecd8ad9ba694948d4f1a1a1370451a7a7684d))
+* **hooks:** vault context injection for non-CLI sessions ([#389](https://github.com/sliamh11/Deus/issues/389)) ([b36dc16](https://github.com/sliamh11/Deus/commit/b36dc160ed89978a3d49adcd880a39df3c44a73a))
+* **llama-cpp:** per-surface model env vars + router mode skill support ([#463](https://github.com/sliamh11/Deus/issues/463)) ([e07930e](https://github.com/sliamh11/Deus/commit/e07930edfb261b2c86e6c424dfb962335b9e0d56))
+* **memory:** sync-atom-kinds CLI for lightweight kind reconciliation ([#419](https://github.com/sliamh11/Deus/issues/419)) ([470f1b6](https://github.com/sliamh11/Deus/commit/470f1b673d18164c91b28c4fb4ff5ebb2544d7e8))
+* **migrations:** post-pull upgrade/migration system ([#436](https://github.com/sliamh11/Deus/issues/436)) ([eebfea0](https://github.com/sliamh11/Deus/commit/eebfea0066bf932a332c6e5b2aee08d6df7331dd))
+* **patterns:** enforce agent-native protocol for new CLIs and MCPs ([#434](https://github.com/sliamh11/Deus/issues/434)) ([1d850f0](https://github.com/sliamh11/Deus/commit/1d850f0d10f4099af657511932bebaafd59c37a0))
+* **pp:** activate --select on MCP wire + drift_check sibling ([#438](https://github.com/sliamh11/Deus/issues/438)) ([ca45387](https://github.com/sliamh11/Deus/commit/ca45387541d2877de9ba4bfcf1a4ca3bc6c53e0e))
+* **pp:** agent-native protocol for mcp-x + mcp-whatsapp + drift_check upgrade ([#448](https://github.com/sliamh11/Deus/issues/448)) ([4b41b06](https://github.com/sliamh11/Deus/commit/4b41b06d3b891b90b04131f025524616920c808f))
+* **pp:** description hints for 4 channel-core common tools ([#445](https://github.com/sliamh11/Deus/issues/445)) ([c01606b](https://github.com/sliamh11/Deus/commit/c01606b7672ee8ee9db6672fe04370e3c5b4dd4e))
+* **proxy:** host-side tool proxy for CLI binary execution ([#431](https://github.com/sliamh11/Deus/issues/431)) ([7de278a](https://github.com/sliamh11/Deus/commit/7de278ac5e63746651f46fe29414fc1db6feae04))
+* **resilience:** retry backoff for container runtime + Docker auto-start ([#468](https://github.com/sliamh11/Deus/issues/468)) ([77c271f](https://github.com/sliamh11/Deus/commit/77c271fac74f01408625327cfda27b88476f32fb))
+* **retrieval:** swap reranker to multilingual bge-reranker-v2-m3 ([#459](https://github.com/sliamh11/Deus/issues/459)) ([d604287](https://github.com/sliamh11/Deus/commit/d6042870ab1f420d442d3b63b03d0573f5c921d7))
+* **scheduler:** add doc-gardener weekly cron agent ([#447](https://github.com/sliamh11/Deus/issues/447)) ([2f96d57](https://github.com/sliamh11/Deus/commit/2f96d57fc7a77505fa8995cddde23b9ed2746829))
+* **settings:** rewrite_settings() for safe path substitutions (#RETRO-05) ([#427](https://github.com/sliamh11/Deus/issues/427)) ([a93f8b8](https://github.com/sliamh11/Deus/commit/a93f8b89998d9972411328e8c032056834405617))
+
+
+### Bug Fixes
+
+* **ci:** increase TrueCourse heap to 8GB (OOM on baseline scan) ([#437](https://github.com/sliamh11/Deus/issues/437)) ([1f22752](https://github.com/sliamh11/Deus/commit/1f22752db1538037bdb6097c46929a840d893183))
+* **hooks:** hard-block admin-merge when CI is red (#RETRO-06) ([#429](https://github.com/sliamh11/Deus/issues/429)) ([3d32871](https://github.com/sliamh11/Deus/commit/3d3287151c2d8337403d066eedfbdc9b50ea3c4c))
+* **hooks:** standards_pack cache invalidates on atom content edits ([#414](https://github.com/sliamh11/Deus/issues/414)) ([9336865](https://github.com/sliamh11/Deus/commit/9336865e8e20b8e96031ca56fcdd6ac8a18e4343))
+* **hooks:** standards_pack silently dropping non-negotiable atoms ([#413](https://github.com/sliamh11/Deus/issues/413)) ([6d52b3f](https://github.com/sliamh11/Deus/commit/6d52b3fe974ea7c3b3f12340d4446af4bdeb1572))
+* **memory:** auto-sync atom-kinds at SessionStart ([#423](https://github.com/sliamh11/Deus/issues/423)) ([6583656](https://github.com/sliamh11/Deus/commit/65836564343d8bba30c735fa2c2353bf77393c94))
+* **memory:** exclude_kinds honored in graph-expansion neighbors ([#418](https://github.com/sliamh11/Deus/issues/418)) ([8f1622f](https://github.com/sliamh11/Deus/commit/8f1622f1605d0e01847e4d68f7e6aec0a55ab934))
+* **skills:** replace claude -p with in-session Agent in compress retrospective ([#451](https://github.com/sliamh11/Deus/issues/451)) ([83bc571](https://github.com/sliamh11/Deus/commit/83bc571ead5cd4471d988da1ab024b4f77abbf08))
+* **wardens:** empty-paths handling in code-review + verification invalidators ([#433](https://github.com/sliamh11/Deus/issues/433)) ([7b5591c](https://github.com/sliamh11/Deus/commit/7b5591c0ca48fc5e2c4a67f36c3973d47f6d500b))
+* **wardens:** plan-review gate fires on empty-paths edits in worktrees ([#430](https://github.com/sliamh11/Deus/issues/430)) ([c57c136](https://github.com/sliamh11/Deus/commit/c57c136260b07ee17c5db8c626e20342b8deffa2))
+* **wardens:** plan-review-gate stops over-firing on outside-worktree targets ([#439](https://github.com/sliamh11/Deus/issues/439)) ([b481b31](https://github.com/sliamh11/Deus/commit/b481b3144299ffa5368e9a29bbd19233a7a1a118))
+* **wardens:** restore worktree-edit exclusion for marker invalidators ([#458](https://github.com/sliamh11/Deus/issues/458)) ([78c69f8](https://github.com/sliamh11/Deus/commit/78c69f852a6b3823ff62b0ab5ba7722ce1fc037f))
+
 ## [1.14.0](https://github.com/sliamh11/Deus/compare/v1.13.0...v1.14.0) (2026-05-15)
 
 
