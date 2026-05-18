@@ -21,6 +21,9 @@ from evolution.training import train_judge_lora as M
 
 @pytest.fixture
 def base_spec() -> M.RunSpec:
+    # Baseline mirrors the script's CLI defaults (post-2026-05-18 fixups).
+    # grad_checkpoint=True is now the default; individual tests override via
+    # dataclasses.replace(...) when they need the off behavior.
     return M.RunSpec(
         model=M.DEFAULT_MODEL,
         lora_rank=16,
@@ -39,10 +42,12 @@ def base_spec() -> M.RunSpec:
         steps_per_report=10,
         steps_per_eval=50,
         val_batches=41,
-        grad_checkpoint=False,
+        grad_checkpoint=True,
         yes=False,
         dry_run=False,
         pre_flight_only=False,
+        skip_smoke_test=False,
+        smoke_test_only=False,
     )
 
 
@@ -79,6 +84,17 @@ def test_yaml_emission_has_required_keys(base_spec):
     assert "name: cosine_decay" in yaml_text
     assert "warmup: 10" in yaml_text
     assert "arguments:" in yaml_text
+    # Sourced from LORA_KEYS_GEMMA3N — see _smoke.py module docstring for why.
+    from evolution.training._smoke import LORA_KEYS_GEMMA3N
+    assert "  keys:" in yaml_text
+    for k in LORA_KEYS_GEMMA3N:
+        assert f"    - {k}" in yaml_text, f"missing required LoRA key: {k}"
+    # And none of the forbidden specials should be in the emitted keys list.
+    for forbidden in ("altup", "laurel", "per_layer"):
+        # Match only on `    - <key>` lines, not the explanatory comment lines.
+        for line in yaml_text.splitlines():
+            if line.startswith("    - "):
+                assert forbidden not in line, f"emitted key contains forbidden substring {forbidden!r}: {line!r}"
 
 
 def test_yaml_warmup_arguments_shape(base_spec):
@@ -112,13 +128,14 @@ def test_command_assembly_omits_mask_prompt_when_false(base_spec, tmp_path):
 
 
 def test_command_assembly_grad_checkpoint(base_spec, tmp_path):
-    spec_off = base_spec
+    # Step-2.1 fixup: base_spec now has grad_checkpoint=True (the new default).
+    # Verify both directions: default-on emits the flag, explicit-off omits it.
+    cmd_on = M.assemble_command(base_spec, tmp_path, tmp_path, tmp_path / "c", 1)
+    assert "--grad-checkpoint" in cmd_on
+
+    spec_off = replace(base_spec, grad_checkpoint=False)
     cmd_off = M.assemble_command(spec_off, tmp_path, tmp_path, tmp_path / "c", 1)
     assert "--grad-checkpoint" not in cmd_off
-
-    spec_on = replace(base_spec, grad_checkpoint=True)
-    cmd_on = M.assemble_command(spec_on, tmp_path, tmp_path, tmp_path / "c", 1)
-    assert "--grad-checkpoint" in cmd_on
 
 
 def test_run_id_format():
@@ -181,3 +198,94 @@ def test_preflight_aborts_on_missing_venv(tmp_path, monkeypatch, base_spec):
     monkeypatch.setattr(M, "VENV", tmp_path / "definitely-does-not-exist")
     with pytest.raises(SystemExit, match="venv binary missing"):
         M.preflight(base_spec, tmp_path)
+
+
+# -----------------------------------------------------------------------------
+# Step-2.1 fixup tests: argparse defaults + smoke-gate wiring.
+# -----------------------------------------------------------------------------
+
+
+def test_grad_checkpoint_default_on():
+    """--grad-checkpoint is now default-on; see argparse comment in parse_args for rationale."""
+    spec = M.parse_args([])
+    assert spec.grad_checkpoint is True
+
+
+def test_no_grad_checkpoint_flag():
+    """The --no-grad-checkpoint escape hatch flips the default off."""
+    spec = M.parse_args(["--no-grad-checkpoint"])
+    assert spec.grad_checkpoint is False
+
+
+def test_skip_smoke_test_flag_default_off():
+    """--skip-smoke-test defaults False (smoke runs by default)."""
+    spec = M.parse_args([])
+    assert spec.skip_smoke_test is False
+    spec2 = M.parse_args(["--skip-smoke-test"])
+    assert spec2.skip_smoke_test is True
+
+
+def test_smoke_test_only_flag_default_off():
+    """--smoke-test-only mirrors --pre-flight-only semantics."""
+    spec = M.parse_args([])
+    assert spec.smoke_test_only is False
+    spec2 = M.parse_args(["--smoke-test-only"])
+    assert spec2.smoke_test_only is True
+
+
+def test_run_preflight_smoke_propagates_failure(monkeypatch, tmp_path, base_spec):
+    """When the smoke subprocess returns ok=False, run_preflight_smoke raises
+    SystemExit with the reason embedded — caller must NOT proceed to training."""
+    fake_result = type("CompletedProcess", (), {})()
+    fake_result.stdout = '{"ok": false, "reason": "model_load", "diagnostic": {"model": "test", "error": "KeyError: model"}}\n'
+    fake_result.stderr = "fake stderr tail"
+    fake_result.returncode = 1
+
+    def fake_run(cmd, **kwargs):
+        return fake_result
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    with pytest.raises(SystemExit, match="model_load"):
+        M.run_preflight_smoke(base_spec, tmp_path)
+
+
+def test_run_preflight_smoke_returns_payload_on_success(monkeypatch, tmp_path, base_spec):
+    """When the smoke subprocess returns ok=True, run_preflight_smoke returns
+    the parsed JSON payload so the caller can include it in the manifest."""
+    fake_result = type("CompletedProcess", (), {})()
+    fake_result.stdout = (
+        '[smoke] running...\n'  # diagnostic noise on earlier lines
+        '{"ok": true, "loss": 23.05, "step_ms": 8318, "peak_memory_gb": 8.87, '
+        '"wrapped_modules": 56, "mode": "representative", "effective_seq_length": 481}\n'
+    )
+    fake_result.stderr = ""
+    fake_result.returncode = 0
+
+    def fake_run(cmd, **kwargs):
+        return fake_result
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    payload = M.run_preflight_smoke(base_spec, tmp_path)
+    assert payload["ok"] is True
+    assert payload["wrapped_modules"] == 56
+    assert payload["mode"] == "representative"
+
+
+def test_run_preflight_smoke_aborts_on_malformed_json(monkeypatch, tmp_path, base_spec):
+    """If the subprocess produces non-JSON stdout (e.g. crashes before the
+    JSON line), run_preflight_smoke SystemExits with a debug-friendly message
+    rather than crashing silently."""
+    fake_result = type("CompletedProcess", (), {})()
+    fake_result.stdout = "[smoke] Some progress noise\nTraceback (most recent call last):\n  ..."
+    fake_result.stderr = "ImportError: no module named foo"
+    fake_result.returncode = 1
+
+    def fake_run(cmd, **kwargs):
+        return fake_result
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    with pytest.raises(SystemExit, match="could not parse JSON"):
+        M.run_preflight_smoke(base_spec, tmp_path)
