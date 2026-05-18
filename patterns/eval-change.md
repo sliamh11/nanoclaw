@@ -3,7 +3,7 @@ governs:
   - evolution/
   - eval/
   - scripts/memory_indexer.py
-last_verified: "2026-05-18T00:45:00" # auto-bump (judge-LoRA step 2 training driver)
+last_verified: "2026-05-18T09:00:00" # auto-bump (judge-LoRA step-2.1 smoke-test gate + working defaults)
 test_tasks:
   - "Add a new DeepEval metric under eval/ for the core_qa test suite"
   - "Add a new judge backend to evolution/judge/ using the provider registry"
