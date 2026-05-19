@@ -273,7 +273,26 @@ def _call_llama_cpp_greedy(prompt: str, model: str, max_tokens: int, seed: int) 
         "seed": seed,
         "frequency_penalty": 0,
         "presence_penalty": 0,
-        "response_format": {"type": "json_object"},
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "judge_scores",
+                "strict": True,
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "quality": {"type": "number"},
+                        "safety": {"type": "number"},
+                        "tool_use": {"type": "number"},
+                        "personalization": {"type": "number"},
+                        "rationale": {"type": "string"},
+                    },
+                    "required": ["quality", "safety", "tool_use",
+                                 "personalization", "rationale"],
+                    "additionalProperties": False,
+                },
+            },
+        },
     }).encode()
     req = urllib.request.Request(
         f"{base}/chat/completions",
