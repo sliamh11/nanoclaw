@@ -72,7 +72,7 @@ GREEDY_SAMPLING = {
     "repeat_penalty": 1,
 }
 
-VALID_STACKS = {"ollama", "llama-cpp"}
+VALID_STACKS = {"ollama", "llama-cpp", "llama-cpp-raw"}
 
 
 # ---------------------------------------------------------------------------
@@ -280,6 +280,28 @@ def _call_llama_cpp_greedy(prompt: str, model: str, max_tokens: int, seed: int) 
     return choices[0].get("message", {}).get("content", "")
 
 
+def _call_llama_cpp_raw_greedy(prompt: str, _model: str, max_tokens: int, seed: int) -> str:
+    # Native /completion endpoint — no chat template wrapping.
+    # LLAMA_CPP_BASE_URL includes /v1 suffix; strip it for the native API.
+    base = LLAMA_CPP_BASE_URL.rstrip("/").removesuffix("/v1")
+    body = json.dumps({
+        "prompt": prompt,
+        "stream": False,
+        **GREEDY_SAMPLING,
+        "n_predict": max_tokens,
+        "seed": seed,
+    }).encode()
+    req = urllib.request.Request(
+        f"{base}/completion",
+        data=body,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=300) as resp:
+        data = json.loads(resp.read().decode())
+    return data.get("content", "")
+
+
 def _call_random_baseline(prompt: str, _model: str, _max_tokens: int, seed: int) -> str:
     rng = random.Random(seed + (hash(prompt) & 0xFFFF))
     scores = {dim: round(rng.random(), 2) for dim in DIMENSIONS}
@@ -355,6 +377,16 @@ def _build_stacks(
                     model=llama_cpp_model,
                     label=f"llama.cpp/{llama_cpp_model or '(loaded)'}",
                     call_fn=_call_llama_cpp_greedy,
+                ))
+            else:
+                print(f"[warn] llama-server not reachable at {LLAMA_CPP_BASE_URL} — skipping", flush=True)
+        elif name == "llama-cpp-raw":
+            if _ping_llama_cpp():
+                stacks.append(Stack(
+                    name="llama-cpp-raw",
+                    model=llama_cpp_model,
+                    label=f"llama.cpp-raw/{llama_cpp_model or '(loaded)'}",
+                    call_fn=_call_llama_cpp_raw_greedy,
                 ))
             else:
                 print(f"[warn] llama-server not reachable at {LLAMA_CPP_BASE_URL} — skipping", flush=True)
