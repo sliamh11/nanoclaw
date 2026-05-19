@@ -21,6 +21,7 @@ import argparse
 import functools
 import json
 import random
+import re
 import statistics
 import sys
 import time
@@ -62,7 +63,7 @@ assert set(DIMENSIONS) == set(COMPOSITE_WEIGHTS.keys()), (
 
 DEFAULT_LIMIT = 99
 DEFAULT_SEED = 20260519
-DEFAULT_MAX_TOKENS = 256
+DEFAULT_MAX_TOKENS = 512
 DEFAULT_BOOTSTRAP_N = 1000
 
 GREEDY_SAMPLING = {
@@ -70,9 +71,10 @@ GREEDY_SAMPLING = {
     "top_p": 1,
     "top_k": 0,
     "repeat_penalty": 1,
+    "min_p": 0,
 }
 
-VALID_STACKS = {"ollama", "llama-cpp", "llama-cpp-raw"}
+VALID_STACKS = {"ollama", "llama-cpp"}
 
 
 # ---------------------------------------------------------------------------
@@ -253,23 +255,30 @@ def _call_ollama_greedy(prompt: str, model: str, max_tokens: int, seed: int) -> 
 
 
 def _call_llama_cpp_greedy(prompt: str, model: str, max_tokens: int, seed: int) -> str:
-    body_dict: dict[str, Any] = {
+    # Chat completions endpoint applies the server's chat template (set via
+    # --chat-template-file), which wraps the prompt in role markers. Without
+    # these markers, instruction-tuned models generate prose instead of JSON.
+    # Only temperature/top_p are OAI-compat; top_k/repeat_penalty/min_p are
+    # native /completion params not supported by /v1/chat/completions.
+    base = LLAMA_CPP_BASE_URL.rstrip("/")
+    if not base.endswith("/v1"):
+        base += "/v1"
+    body = json.dumps({
+        "model": model or "loaded",
         "messages": [{"role": "user", "content": prompt}],
         "stream": False,
-        **GREEDY_SAMPLING,
+        "temperature": GREEDY_SAMPLING["temperature"],
+        "top_p": GREEDY_SAMPLING["top_p"],
         "max_tokens": max_tokens,
         "seed": seed,
-    }
-    if model:
-        body_dict["model"] = model
-    body = json.dumps(body_dict).encode()
+        "frequency_penalty": 0,
+        "presence_penalty": 0,
+        "response_format": {"type": "json_object"},
+    }).encode()
     req = urllib.request.Request(
-        f"{LLAMA_CPP_BASE_URL.rstrip('/')}/chat/completions",
+        f"{base}/chat/completions",
         data=body,
-        headers={
-            "Content-Type": "application/json",
-            "Authorization": "Bearer placeholder",
-        },
+        headers={"Content-Type": "application/json"},
         method="POST",
     )
     with urllib.request.urlopen(req, timeout=300) as resp:
@@ -277,29 +286,12 @@ def _call_llama_cpp_greedy(prompt: str, model: str, max_tokens: int, seed: int) 
     choices = data.get("choices") or []
     if not choices:
         return ""
-    return choices[0].get("message", {}).get("content", "")
-
-
-def _call_llama_cpp_raw_greedy(prompt: str, _model: str, max_tokens: int, seed: int) -> str:
-    # Native /completion endpoint — no chat template wrapping.
-    # LLAMA_CPP_BASE_URL includes /v1 suffix; strip it for the native API.
-    base = LLAMA_CPP_BASE_URL.rstrip("/").removesuffix("/v1")
-    body = json.dumps({
-        "prompt": prompt,
-        "stream": False,
-        **GREEDY_SAMPLING,
-        "n_predict": max_tokens,
-        "seed": seed,
-    }).encode()
-    req = urllib.request.Request(
-        f"{base}/completion",
-        data=body,
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-    with urllib.request.urlopen(req, timeout=300) as resp:
-        data = json.loads(resp.read().decode())
-    return data.get("content", "")
+    raw = choices[0].get("message", {}).get("content", "")
+    # Gemma 4 custom chat template sometimes emits role-marker continuations
+    raw = re.sub(r"^_?response\s*", "", raw)
+    raw = re.sub(r"^</start_of_turn>\s*", "", raw)
+    raw = re.sub(r"^<end_of_turn>\s*", "", raw)
+    return raw.strip()
 
 
 def _call_random_baseline(prompt: str, _model: str, _max_tokens: int, seed: int) -> str:
@@ -377,16 +369,6 @@ def _build_stacks(
                     model=llama_cpp_model,
                     label=f"llama.cpp/{llama_cpp_model or '(loaded)'}",
                     call_fn=_call_llama_cpp_greedy,
-                ))
-            else:
-                print(f"[warn] llama-server not reachable at {LLAMA_CPP_BASE_URL} — skipping", flush=True)
-        elif name == "llama-cpp-raw":
-            if _ping_llama_cpp():
-                stacks.append(Stack(
-                    name="llama-cpp-raw",
-                    model=llama_cpp_model,
-                    label=f"llama.cpp-raw/{llama_cpp_model or '(loaded)'}",
-                    call_fn=_call_llama_cpp_raw_greedy,
                 ))
             else:
                 print(f"[warn] llama-server not reachable at {LLAMA_CPP_BASE_URL} — skipping", flush=True)
