@@ -20,6 +20,7 @@
 
 ## Verification & Honesty
 - Never speculate. Only state verified facts. If unsure, say so.
+- Before any cross-runtime comparison (Ollama vs llama.cpp vs MLX), verify GGUF metadata (general.architecture, tensor count, file size) on both sides. Model names across ecosystems are not reliable identifiers — check the bytes.
 - Delegated review findings must include grep evidence, not just conclusions.
 - Check production logs before optimizing synthetic benchmarks.
 - Predict outcome before running expensive operations. Skip if predictable.
@@ -36,5 +37,6 @@
 - Chat responses always in English. Hebrew only inside artifacts.
 
 ## Memory & Context
+- Before producing anything new, check what already exists — vault memory, cached results, prior runs, existing data. This applies to all work: research, benchmarks, code, analysis. Generating fresh output when valid prior output exists is waste.
 - Before implementing a feature, search memory (`memory_tree.py query "<topic>"`) for prior decisions and research. Cite the retrieved path.
 - Never duplicate content across files. When a rule or config applies in multiple places, write it once and reference it. Duplication is drift waiting to happen.
